@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="wasilGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00A884" />
+      <stop offset="100%" stop-color="#007A63" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#wasilGrad)" />
+  <path
+    d="M256 106c-82.8 0-150 64.5-150 144 0 28.4 8.6 55.6 24.7 78.9L114 396l71.8-18.8c21.5 11.1 45.7 16.8 70.2 16.8 82.8 0 150-64.5 150-144s-67.2-144-150-144z"
+    fill="#FFFFFF"
+  />
+  <path
+    d="M208 214h96c6.6 0 12 5.4 12 12v48c0 6.6-5.4 12-12 12h-96c-6.6 0-12-5.4-12-12v-48c0-6.6 5.4-12 12-12zm18-16v-12c0-16.6 13.4-30 30-30s30 13.4 30 30v12"
+    fill="none"
+    stroke="#008069"
+    stroke-width="20"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="256" cy="250" r="10" fill="#008069" />
+</svg>

@@ -1,0 +1,6 @@
+{
+  "name": "تواصل - Wasil Messenger",
+  "description": "تطبيق تواصل اجتماعي متكامل مستوحى من واتساب مع تشفير تام بين الطرفين ومكالمات صوتية ومرئية ومزامنة فورية عبر Firebase.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,218 @@
+{
+  "entities": {
+    "PublicProfile": {
+      "title": "PublicProfile",
+      "description": "Non-PII public messaging profile and E2EE identity key.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "about": { "type": "string", "minLength": 0, "maxLength": 200 },
+        "avatarUrl": { "type": "string", "minLength": 0, "maxLength": 65536 },
+        "publicKeyJwk": { "type": "string", "minLength": 10, "maxLength": 1024 },
+        "safetyCode": { "type": "string", "minLength": 10, "maxLength": 120 },
+        "isOnline": { "type": "boolean" },
+        "lastSeen": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "about", "avatarUrl", "publicKeyJwk", "safetyCode", "isOnline", "lastSeen", "updatedAt"]
+    },
+    "PrivateInfo": {
+      "title": "PrivateInfo",
+      "description": "Owner-only PII and privacy settings.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "phone": { "type": "string", "minLength": 0, "maxLength": 32 },
+        "theme": { "type": "string", "enum": ["light", "dark"] },
+        "readReceipts": { "type": "boolean" },
+        "lastSeenVisible": { "type": "boolean" },
+        "lastSeenMode": { "type": "string", "enum": ["everyone", "contacts", "nobody"] },
+        "profilePhotoVisibility": { "type": "string", "enum": ["everyone", "contacts", "nobody"] },
+        "bioVisibility": { "type": "string", "enum": ["everyone", "contacts", "nobody"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "theme", "readReceipts", "lastSeenVisible", "createdAt", "updatedAt"]
+    },
+    "ChatPref": {
+      "title": "ChatPref",
+      "description": "Owner-specific chat preferences (pin, archive, mute, favorite, disappearing timer).",
+      "type": "object",
+      "properties": {
+        "chatId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "pinned": { "type": "boolean" },
+        "archived": { "type": "boolean" },
+        "muted": { "type": "boolean" },
+        "favorite": { "type": "boolean" },
+        "unreadCount": { "type": "integer" },
+        "disappearingSeconds": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["chatId", "uid", "pinned", "archived", "muted", "favorite", "unreadCount", "disappearingSeconds", "updatedAt"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "Conversation room (direct, group, or community).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["direct", "group", "community"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "description": { "type": "string", "minLength": 0, "maxLength": 300 },
+        "avatarUrl": { "type": "string", "minLength": 0, "maxLength": 65536 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "memberIds": { "type": "array" },
+        "lastMessageCiphertext": { "type": "string", "minLength": 0, "maxLength": 2048 },
+        "lastMessageIv": { "type": "string", "minLength": 0, "maxLength": 64 },
+        "lastMessageSenderId": { "type": "string", "minLength": 0, "maxLength": 128 },
+        "lastMessageType": { "type": "string", "enum": ["text", "image", "voice", "file", "poll", "system"] },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "type", "title", "createdBy", "lastMessageAt", "createdAt", "updatedAt"]
+    },
+    "ChatMember": {
+      "title": "ChatMember",
+      "description": "Membership record inside a chat subcollection.",
+      "type": "object",
+      "properties": {
+        "chatId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "role": { "type": "string", "enum": ["admin", "member"] },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "avatarUrl": { "type": "string", "minLength": 0, "maxLength": 65536 },
+        "publicKeyJwk": { "type": "string", "minLength": 10, "maxLength": 1024 },
+        "joinedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["chatId", "uid", "role", "displayName", "avatarUrl", "publicKeyJwk", "joinedAt", "updatedAt"]
+    },
+    "EncryptedMessage": {
+      "title": "EncryptedMessage",
+      "description": "AES-GCM-256 encrypted chat message payload.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "chatId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "type": { "type": "string", "enum": ["text", "image", "voice", "file", "poll", "system"] },
+        "ciphertext": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "iv": { "type": "string", "minLength": 8, "maxLength": 64 },
+        "algorithm": { "type": "string", "enum": ["AES-GCM-256"] },
+        "viewerIds": { "type": "array" },
+        "replyToId": { "type": "string", "minLength": 0, "maxLength": 128 },
+        "reactionsCount": { "type": "integer" },
+        "isDeleted": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "chatId", "senderId", "senderName", "type", "ciphertext", "iv", "algorithm", "viewerIds", "reactionsCount", "isDeleted", "createdAt", "updatedAt"]
+    },
+    "StatusUpdate": {
+      "title": "StatusUpdate",
+      "description": "24-hour ephemeral status story (text or image) shared with contacts.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "authorAvatar": { "type": "string", "minLength": 0, "maxLength": 65536 },
+        "type": { "type": "string", "enum": ["text", "image"] },
+        "content": { "type": "string", "minLength": 0, "maxLength": 500 },
+        "backgroundColor": { "type": "string", "minLength": 4, "maxLength": 32 },
+        "fontStyle": { "type": "string", "enum": ["display", "sans", "mono"] },
+        "mediaUrl": { "type": "string", "minLength": 0, "maxLength": 262144 },
+        "viewerIds": { "type": "array" },
+        "viewedByIds": { "type": "array" },
+        "viewCount": { "type": "integer" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "authorId", "authorName", "authorAvatar", "type", "content", "backgroundColor", "viewerIds", "viewedByIds", "viewCount", "expiresAt", "createdAt", "updatedAt"]
+    },
+    "CallSession": {
+      "title": "CallSession",
+      "description": "WebRTC encrypted audio/video call signaling and log record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "callerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "callerName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "callerAvatar": { "type": "string", "minLength": 0, "maxLength": 500 },
+        "calleeId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "calleeName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "calleeAvatar": { "type": "string", "minLength": 0, "maxLength": 500 },
+        "callType": { "type": "string", "enum": ["audio", "video"] },
+        "status": { "type": "string", "enum": ["ringing", "connected", "ended", "declined", "missed"] },
+        "offerSdp": { "type": "string", "minLength": 0, "maxLength": 32768 },
+        "answerSdp": { "type": "string", "minLength": 0, "maxLength": 32768 },
+        "durationSeconds": { "type": "integer" },
+        "encryptionFingerprint": { "type": "string", "minLength": 6, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "callerId", "callerName", "calleeId", "calleeName", "callType", "status", "durationSeconds", "encryptionFingerprint", "createdAt", "updatedAt"]
+    },
+    "IceCandidate": {
+      "title": "IceCandidate",
+      "description": "WebRTC ICE signaling candidate for an active call.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "callId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "callerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "calleeId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "candidate": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "sdpMid": { "type": "string", "minLength": 0, "maxLength": 64 },
+        "sdpMLineIndex": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "callId", "senderId", "callerId", "calleeId", "candidate", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/public/profile": {
+      "schema": { "$ref": "#/entities/PublicProfile" },
+      "description": "Public profile and ECDH public key for E2EE messaging."
+    },
+    "/users/{userId}/private/info": {
+      "schema": { "$ref": "#/entities/PrivateInfo" },
+      "description": "Private PII (email, phone) and user settings restricted to the owner."
+    },
+    "/users/{userId}/chatPrefs/{chatId}": {
+      "schema": { "$ref": "#/entities/ChatPref" },
+      "description": "Per-user chat preferences (pinned, archived, muted, favorite, unread count)."
+    },
+    "/chats/{chatId}": {
+      "schema": { "$ref": "#/entities/Chat" },
+      "description": "Chat room metadata for direct, group, and community conversations."
+    },
+    "/chats/{chatId}/members/{memberId}": {
+      "schema": { "$ref": "#/entities/ChatMember" },
+      "description": "Chat participant membership and roles."
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/EncryptedMessage" },
+      "description": "End-to-end encrypted message payloads using AES-GCM-256."
+    },
+    "/statuses/{statusId}": {
+      "schema": { "$ref": "#/entities/StatusUpdate" },
+      "description": "Ephemeral 24-hour status stories visible only to authorized viewerIds."
+    },
+    "/calls/{callId}": {
+      "schema": { "$ref": "#/entities/CallSession" },
+      "description": "Encrypted WebRTC audio/video call signaling and call history."
+    },
+    "/calls/{callId}/candidates/{candidateId}": {
+      "schema": { "$ref": "#/entities/IceCandidate" },
+      "description": "WebRTC ICE candidates for active calls."
+    }
+  }
+}

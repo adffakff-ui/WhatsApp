@@ -1,0 +1,90 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --wa-app-bg: #EAE6DF;
+    --wa-panel-bg: #FFFFFF;
+    --wa-sidebar-rail: #F0F2F5;
+    --wa-header-bg: #F0F2F5;
+    --wa-chat-bg: #EFEAE2;
+    --wa-incoming-bg: #FFFFFF;
+    --wa-outgoing-bg: #D9FDD3;
+    --wa-border: #E9EDEF;
+    --wa-hover: #F5F6F6;
+    --wa-active: #F0F2F5;
+    --wa-text-primary: #111B21;
+    --wa-text-secondary: #54656F;
+    --wa-accent: #00A884;
+    --wa-accent-strong: #008069;
+    --wa-tick-read: #53BDEB;
+  }
+
+  .dark {
+    --wa-app-bg: #0C1317;
+    --wa-panel-bg: #111B21;
+    --wa-sidebar-rail: #202C33;
+    --wa-header-bg: #202C33;
+    --wa-chat-bg: #0B141A;
+    --wa-incoming-bg: #202C33;
+    --wa-outgoing-bg: #005C4B;
+    --wa-border: #222D34;
+    --wa-hover: #202C33;
+    --wa-active: #2A3942;
+    --wa-text-primary: #E9EDEF;
+    --wa-text-secondary: #8696A0;
+    --wa-accent: #00A884;
+    --wa-accent-strong: #06CF9C;
+    --wa-tick-read: #53BDEB;
+  }
+
+  html, body, #root {
+    height: 100%;
+    font-family: 'IBM Plex Sans Arabic', system-ui, -apple-system, sans-serif;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: 'Cairo', 'IBM Plex Sans Arabic', sans-serif;
+  }
+
+  .font-mono-code {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Authentic subtle WhatsApp doodle pattern using pure CSS radial/linear geometry */
+.wa-chat-pattern {
+  background-color: var(--wa-chat-bg);
+  background-image:
+    radial-gradient(circle at 24px 24px, rgba(134, 150, 160, 0.08) 1.5px, transparent 0),
+    radial-gradient(circle at 60px 60px, rgba(134, 150, 160, 0.06) 1.2px, transparent 0);
+  background-size: 72px 72px;
+}
+
+.dark .wa-chat-pattern {
+  background-color: var(--wa-chat-bg);
+  background-image:
+    radial-gradient(circle at 24px 24px, rgba(233, 237, 239, 0.035) 1.5px, transparent 0),
+    radial-gradient(circle at 60px 60px, rgba(233, 237, 239, 0.025) 1.2px, transparent 0);
+  background-size: 72px 72px;
+}
+
+/* Custom sleek scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(134, 150, 160, 0.35);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(134, 150, 160, 0.55);
+}
