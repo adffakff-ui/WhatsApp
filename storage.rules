@@ -1,0 +1,28 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isMember(chatId) {
+      return signedIn() && firestore.exists(
+        /databases/ai-studio-65ec534e-cb07-4dd8-aa10-e8647b3e21fe/documents/chats/$(chatId)/members/$(request.auth.uid)
+      );
+    }
+
+    // Only opaque ciphertext is stored. The client encrypts/decrypts media
+    // before/after Storage operations; never grant public access to this path.
+    match /chats/{chatId}/media/{mediaId} {
+      allow read: if isMember(chatId);
+      allow create: if isMember(chatId)
+        && request.resource.size > 16
+        && request.resource.size <= 15 * 1024 * 1024 + 16
+        && request.resource.contentType == 'application/octet-stream'
+        && request.resource.metadata.ownerUid == request.auth.uid
+        && request.resource.metadata.mediaId == mediaId
+        && request.resource.metadata.version == '1';
+      allow update, delete: if false;
+    }
+  }
+}
