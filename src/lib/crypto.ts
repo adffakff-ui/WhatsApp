@@ -1,3 +1,6 @@
+import { doc, getDoc } from 'firebase/firestore';
+import { auth, db } from './firebase';
+
 const subtle = globalThis.crypto.subtle;
 
 function toBase64(bytes: Uint8Array): string {
@@ -89,7 +92,88 @@ export async function deriveSharedSecretKey(
   );
 }
 
+/** Derive a chat-specific AES key from both users' ECDH identity keys. */
+export async function derivePairwiseChatKey(
+  myPrivateKeyJwk: string,
+  peerPublicKeyJwk: string,
+  chatId: string
+): Promise<CryptoKey> {
+  const privateKey = await subtle.importKey(
+    'jwk',
+    JSON.parse(myPrivateKeyJwk),
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    ['deriveBits']
+  );
+  const publicKey = await subtle.importKey(
+    'jwk',
+    JSON.parse(peerPublicKeyJwk),
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    []
+  );
+  const sharedBits = await subtle.deriveBits(
+    { name: 'ECDH', public: publicKey },
+    privateKey,
+    256
+  );
+  const hkdfKey = await subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
+
+  return subtle.deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: new TextEncoder().encode('wasil-e2ee-v1'),
+      info: new TextEncoder().encode(`direct-chat:${chatId}`)
+    },
+    hkdfKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+/**
+ * For an authenticated Firestore direct chat, derive the key only from the
+ * local private key and the other member's public key. Never fall back to the
+ * public chat ID when a direct-chat peer/key is missing. The deterministic
+ * seed key remains solely for local demo data and legacy group chats.
+ */
 export async function deriveRoomKeyFromSeed(roomSeed: string): Promise<CryptoKey> {
+  const user = auth.currentUser;
+  if (user) {
+    const chatSnapshot = await getDoc(doc(db, 'chats', roomSeed));
+    if (chatSnapshot.exists() && chatSnapshot.data().type === 'direct') {
+      const chatData = chatSnapshot.data();
+      const memberIds = Array.isArray(chatData.memberIds) ? (chatData.memberIds as string[]) : [];
+      const peerUid = memberIds.find((uid) => uid !== user.uid);
+      if (!peerUid || memberIds.length !== 2) {
+        throw new Error('لا يمكن تشفير الدردشة: عضوية الطرفين غير مكتملة.');
+      }
+
+      const storedKeys = localStorage.getItem('wasil_identity_keys_v1');
+      const privateKeyJwk = storedKeys
+        ? (JSON.parse(storedKeys) as Partial<IdentityKeys>).privateKeyJwk
+        : undefined;
+      if (!privateKeyJwk) {
+        throw new Error('مفتاحك الخاص غير موجود على هذا الجهاز؛ أعد تسجيل الدخول أو استعادة المفتاح.');
+      }
+
+      const peerSnapshot = await getDoc(doc(db, 'chats', roomSeed, 'members', peerUid));
+      const peerPublicKeyJwk = peerSnapshot.data()?.publicKeyJwk;
+      if (typeof peerPublicKeyJwk !== 'string' || peerPublicKeyJwk.length < 20) {
+        throw new Error('لا يمكن تشفير الدردشة: لم يُسجّل الطرف الآخر مفتاحه العام بعد.');
+      }
+
+      try {
+        return await derivePairwiseChatKey(privateKeyJwk, peerPublicKeyJwk, roomSeed);
+      } catch {
+        throw new Error('مفتاح الطرف الآخر غير صالح؛ أوقفنا الإرسال لحماية الرسالة.');
+      }
+    }
+  }
+
+  // Local preview/demo conversations only; this key is not secure for cloud chats.
   const raw = new TextEncoder().encode(`wasil-e2ee-v1:${roomSeed}`);
   const digest = await subtle.digest('SHA-256', raw);
   return subtle.importKey(
