@@ -41,6 +41,14 @@ function toMillis(val: unknown): number {
   return Date.now();
 }
 
+function sanitizePublicKeyJwk(value?: string | null): string {
+  const cleaned = typeof value === 'string' ? value.trim() : '';
+  if (cleaned.length >= 20 && cleaned.includes('"kty"')) {
+    return cleaned.slice(0, 1024);
+  }
+  return '';
+}
+
 export interface HydratedUserAccount {
   displayName: string;
   about: string;
@@ -74,6 +82,11 @@ export async function syncUserProfileToFirestore(
       typeof existingPub?.avatarUrl === 'string' ? existingPub.avatarUrl : user.photoURL || ''
     ).slice(0, 65536);
 
+    const safePublicKey = sanitizePublicKeyJwk(publicKeyJwk);
+    if (!safePublicKey) {
+      throw new Error('Missing publicKeyJwk for authenticated user.');
+    }
+
     await setDoc(
       pubRef,
       {
@@ -81,8 +94,8 @@ export async function syncUserProfileToFirestore(
         displayName,
         about: resolvedAbout,
         avatarUrl,
-        publicKeyJwk,
-        safetyCode,
+        publicKeyJwk: safePublicKey,
+        safetyCode: safetyCode.slice(0, 120),
         isOnline: true,
         lastSeen: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -146,12 +159,17 @@ export async function updateProfileInFirestore(
 ): Promise<void> {
   const pubRef = doc(db, 'users', uid, 'public', 'profile');
   try {
+    const safePublicKey = sanitizePublicKeyJwk(currentProfile.publicKeyJwk);
+    if (!safePublicKey) {
+      throw new Error('Missing publicKeyJwk for updating user profile.');
+    }
+
     await updateDoc(pubRef, {
       displayName: updates.displayName.slice(0, 80),
       about: updates.about.slice(0, 200),
       avatarUrl: updates.avatarUrl.slice(0, 65536),
-      publicKeyJwk: currentProfile.publicKeyJwk,
-      safetyCode: currentProfile.safetyCode,
+      publicKeyJwk: safePublicKey,
+      safetyCode: currentProfile.safetyCode.slice(0, 120),
       isOnline: true,
       lastSeen: serverTimestamp(),
       updatedAt: serverTimestamp()
@@ -230,6 +248,11 @@ export async function createChatInFirestore(
   const msgId = `msg_${Date.now()}`;
   const msgRef = doc(db, 'chats', chatId, 'messages', msgId);
 
+  const creatorPublicKey = sanitizePublicKeyJwk(creator.publicKeyJwk);
+  if (!creatorPublicKey) {
+    throw new Error('لا يمكن إنشاء محادثة: المفتاح العام للمستخدم غير موجود.' );
+  }
+
   const memberIds = Array.from(
     new Set([creator.uid, ...invitedContacts.map((c) => c.uid)])
   ).slice(0, 50);
@@ -261,13 +284,15 @@ export async function createChatInFirestore(
     role: 'admin',
     displayName: creator.displayName.slice(0, 80),
     avatarUrl: creator.avatarUrl.slice(0, 65536),
-    publicKeyJwk: (creator.publicKeyJwk || '{"kty":"EC","crv":"P-256"}').slice(0, 1024),
+    publicKeyJwk: creatorPublicKey,
     joinedAt: serverTimestamp(),
     updatedAt: serverTimestamp()
   });
 
   for (const contact of invitedContacts.slice(0, 49)) {
     if (!contact.uid || contact.uid === creator.uid) continue;
+    const contactPublicKey = sanitizePublicKeyJwk(contact.publicKeyJwk);
+    if (!contactPublicKey) continue;
     const contactMemberRef = doc(db, 'chats', chatId, 'members', contact.uid);
     batch.set(contactMemberRef, {
       chatId,
@@ -275,7 +300,7 @@ export async function createChatInFirestore(
       role: 'member',
       displayName: contact.displayName.slice(0, 80),
       avatarUrl: (contact.avatarUrl || '').slice(0, 65536),
-      publicKeyJwk: (contact.publicKeyJwk || '{"kty":"EC","crv":"P-256"}').slice(0, 1024),
+      publicKeyJwk: contactPublicKey,
       joinedAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
@@ -344,13 +369,18 @@ export async function inviteMemberToGroupInFirestore(
   const memberRef = doc(db, 'chats', chatId, 'members', contact.uid);
   const chatRef = doc(db, 'chats', chatId);
 
+  const publicKeyJwk = sanitizePublicKeyJwk(contact.publicKeyJwk);
+  if (!publicKeyJwk) {
+    throw new Error('لا يمكن دعوة عضو جديد: المفتاح العام غير موجود.');
+  }
+
   batch.set(memberRef, {
     chatId,
     uid: contact.uid,
     role: 'member',
     displayName: contact.displayName.slice(0, 80),
     avatarUrl: (contact.avatarUrl || '').slice(0, 65536),
-    publicKeyJwk: (contact.publicKeyJwk || '{"kty":"EC","crv":"P-256"}').slice(0, 1024),
+    publicKeyJwk,
     joinedAt: serverTimestamp(),
     updatedAt: serverTimestamp()
   });
@@ -655,7 +685,6 @@ export function subscribeStatusesFromFirestore(
         };
 
         if (isStatusExpired(item, nowMs)) {
-          // Prune expired statuses authored by the current user to keep storage clean
           if (item.authorId === uid) {
             void deleteDoc(doc(db, 'statuses', item.id)).catch(() => {});
           }
