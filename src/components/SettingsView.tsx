@@ -10,7 +10,10 @@ import {
   Camera,
   Trash2,
   Eye,
-  UserCheck
+  UserCheck,
+  Download,
+  Palette,
+  ChevronLeft
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { PWAInstallButton } from './PWAInstallButton';
@@ -26,7 +29,8 @@ interface SettingsViewProps {
   onSaveProfile: (displayName: string, about: string, avatarUrl: string) => Promise<void>;
   onUpdatePrivacy: (nextPrivacy: PrivacySettings) => Promise<void>;
   onSignOut: () => void;
-  onGoogleSignIn: () => Promise<void>;
+  onGoogleSignIn: () => Promise<void | boolean>;
+  onOpenOmarAddons?: () => void;
 }
 
 const PRESET_AVATARS = [
@@ -74,7 +78,8 @@ export function SettingsView({
   onSaveProfile,
   onUpdatePrivacy,
   onSignOut,
-  onGoogleSignIn
+  onGoogleSignIn,
+  onOpenOmarAddons
 }: SettingsViewProps) {
   const [displayName, setDisplayName] = useState(currentUser.displayName);
   const [about, setAbout] = useState(currentUser.about);
@@ -152,18 +157,42 @@ export function SettingsView({
   ];
 
   return (
-    <div className="flex-1 flex flex-col md:flex-row h-full bg-white dark:bg-[#111B21]">
-      <div className="w-full md:w-[460px] border-l border-[#E9EDEF] dark:border-[#222D34] flex flex-col h-full">
-        <header className="h-16 px-4 flex items-center justify-between border-b border-[#F0F2F5] dark:border-[#222D34]">
-          <h1 className="font-display text-xl font-bold text-[#111B21] dark:text-[#E9EDEF]">
+    <div className="flex-1 min-w-0 w-full max-w-full overflow-hidden flex flex-col md:flex-row h-full bg-white dark:bg-[#111B21]">
+      <div className="w-full max-w-full min-w-0 md:w-[460px] md:shrink-0 border-l border-[#E9EDEF] dark:border-[#222D34] flex flex-col h-full overflow-hidden">
+        <header className="h-16 px-3 sm:px-4 flex items-center justify-between gap-2 border-b border-[#F0F2F5] dark:border-[#222D34] shrink-0 min-w-0">
+          <h1 className="font-display text-base sm:text-xl font-bold text-[#111B21] dark:text-[#E9EDEF] min-w-0 truncate">
             الملف الشخصي والخصوصية
           </h1>
-          <span className="text-xs text-[#00A884] font-medium">
+          <span className="text-[11px] sm:text-xs text-[var(--wa-accent)] font-medium whitespace-nowrap shrink-0">
             {isCloudSynced ? 'مزامنة Firebase نشطة' : 'حفظ محلي فوري'}
           </span>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-5 space-y-6 pb-20 md:pb-6">
+        <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden p-3.5 sm:p-5 space-y-5 sm:space-y-6 pb-24 md:pb-6">
+          {/* Omar Add-ons Shortcut Card */}
+          {onOpenOmarAddons && (
+            <button
+              type="button"
+              onClick={onOpenOmarAddons}
+              className="w-full p-4 rounded-2xl bg-[var(--wa-accent-soft)]/70 dark:bg-[#202C33] border border-[var(--wa-accent)]/30 flex items-center justify-between gap-3 text-right hover:brightness-95 transition-all cursor-pointer"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-[var(--wa-accent)] text-white flex items-center justify-center shrink-0">
+                  <Palette className="w-5 h-5" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
+                    ثيمات وإضافات عمر المتقدمة
+                  </p>
+                  <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate">
+                    الثيم العنابي، منع حذف الرسائل، قفل الدردشات، والرد التلقائي
+                  </p>
+                </div>
+              </div>
+              <ChevronLeft className="w-5 h-5 text-[var(--wa-accent-strong)] shrink-0" aria-hidden="true" />
+            </button>
+          )}
+
           {/* Profile Editor & Avatar Upload */}
           <form onSubmit={(e) => void handleSave(e)} className="space-y-4 pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">
             <div className="flex items-center gap-4">
@@ -173,7 +202,7 @@ export function SettingsView({
                   type="button"
                   aria-label="رفع صورة شخصية جديدة"
                   onClick={() => fileInputRef.current?.click()}
-                  className="absolute bottom-0 left-0 w-8 h-8 rounded-full bg-[#00A884] text-white flex items-center justify-center shadow-md hover:bg-[#008069] transition-colors cursor-pointer"
+                  className="absolute bottom-0 left-0 w-8 h-8 rounded-full bg-[var(--wa-accent)] text-white flex items-center justify-center shadow-md hover:brightness-95 transition-all cursor-pointer"
                 >
                   <Camera className="w-4 h-4" aria-hidden="true" />
                 </button>
@@ -198,7 +227,7 @@ export function SettingsView({
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="px-2.5 py-1 rounded-md bg-[#F0F2F5] dark:bg-[#202C33] text-[11px] font-medium text-[#008069] dark:text-[#06CF9C] hover:brightness-95 cursor-pointer"
+                    className="px-2.5 py-1 rounded-md bg-[#F0F2F5] dark:bg-[#202C33] text-[11px] font-medium text-[var(--wa-accent-strong)] hover:brightness-95 cursor-pointer"
                   >
                     رفع صورة
                   </button>
@@ -220,7 +249,7 @@ export function SettingsView({
                       setCopiedUid(true);
                       window.setTimeout(() => setCopiedUid(false), 2000);
                     }}
-                    className="inline-flex items-center gap-1 text-[11px] font-mono-code text-[#54656F] dark:text-[#8696A0] hover:text-[#008069] cursor-pointer"
+                    className="inline-flex items-center gap-1 text-[11px] font-mono-code text-[#54656F] dark:text-[#8696A0] hover:text-[var(--wa-accent-strong)] cursor-pointer"
                   >
                     <Copy className="w-3 h-3" aria-hidden="true" />
                     <span>{copiedUid ? 'تم النسخ!' : currentUser.uid.slice(0, 10)}</span>
@@ -230,7 +259,7 @@ export function SettingsView({
             </div>
 
             {/* Quick Avatar Presets */}
-            <div className="flex items-center gap-2 pt-1">
+            <div className="flex flex-wrap items-center gap-2 pt-1 min-w-0">
               <span className="text-[11px] text-[#54656F] dark:text-[#8696A0]">صور سريعة:</span>
               {PRESET_AVATARS.map((preset, idx) => (
                 <button
@@ -239,7 +268,7 @@ export function SettingsView({
                   aria-label={`اختيار الصورة الرمزية ${idx + 1}`}
                   onClick={() => setAvatarUrl(preset)}
                   className={`rounded-full p-0.5 transition-all cursor-pointer ${
-                    avatarUrl === preset ? 'ring-2 ring-[#00A884]' : 'opacity-80 hover:opacity-100'
+                    avatarUrl === preset ? 'ring-2 ring-[var(--wa-accent)]' : 'opacity-80 hover:opacity-100'
                   }`}
                 >
                   <Avatar src={preset} name={`صورة ${idx + 1}`} size="sm" />
@@ -254,7 +283,7 @@ export function SettingsView({
             )}
 
             <div>
-              <label htmlFor="profile-name" className="block text-xs font-medium text-[#008069] dark:text-[#06CF9C] mb-1">
+              <label htmlFor="profile-name" className="block text-xs font-medium text-[var(--wa-accent-strong)] mb-1">
                 الاسم الظاهر
               </label>
               <input
@@ -263,13 +292,13 @@ export function SettingsView({
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 maxLength={80}
-                className="w-full rounded-lg bg-[#F0F2F5] dark:bg-[#202C33] px-3 py-2 text-sm text-[#111B21] dark:text-[#E9EDEF] focus:outline-none focus:ring-2 focus:ring-[#00A884]"
+                className="w-full rounded-lg bg-[#F0F2F5] dark:bg-[#202C33] px-3 py-2 text-sm text-[#111B21] dark:text-[#E9EDEF] focus:outline-none focus:ring-2 focus:ring-[var(--wa-accent)]"
               />
             </div>
 
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label htmlFor="profile-about" className="block text-xs font-medium text-[#008069] dark:text-[#06CF9C]">
+                <label htmlFor="profile-about" className="block text-xs font-medium text-[var(--wa-accent-strong)]">
                   النبذة التعريفية (Bio)
                 </label>
                 <span className="text-[11px] font-mono-code text-[#667781] dark:text-[#8696A0]">
@@ -283,14 +312,14 @@ export function SettingsView({
                 onChange={(e) => setAbout(e.target.value)}
                 maxLength={200}
                 placeholder="اكتب نبذة قصيرة عنك..."
-                className="w-full rounded-lg bg-[#F0F2F5] dark:bg-[#202C33] px-3 py-2 text-sm text-[#111B21] dark:text-[#E9EDEF] resize-none focus:outline-none focus:ring-2 focus:ring-[#00A884]"
+                className="w-full rounded-lg bg-[#F0F2F5] dark:bg-[#202C33] px-3 py-2 text-sm text-[#111B21] dark:text-[#E9EDEF] resize-none focus:outline-none focus:ring-2 focus:ring-[var(--wa-accent)]"
               />
             </div>
 
             <button
               type="submit"
               disabled={isSaving}
-              className="px-4 py-2 rounded-lg bg-[#00A884] text-white text-xs font-semibold hover:bg-[#008069] transition-colors flex items-center gap-1.5 disabled:opacity-60 cursor-pointer"
+              className="px-4 py-2 rounded-lg bg-[var(--wa-accent)] text-white text-xs font-semibold hover:brightness-95 transition-all flex items-center gap-1.5 disabled:opacity-60 cursor-pointer"
             >
               {savedNotice ? (
                 <>
@@ -309,11 +338,11 @@ export function SettingsView({
           <div className="space-y-3 pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">
             <div className="flex items-center justify-between">
               <h2 className="text-xs font-semibold text-[#54656F] dark:text-[#8696A0] flex items-center gap-1.5">
-                <Eye className="w-3.5 h-3.5 text-[#00A884]" aria-hidden="true" />
+                <Eye className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
                 <span>إعدادات الخصوصية والمظهر</span>
               </h2>
               {privacySavedNotice && (
-                <span className="text-[11px] text-[#00A884] font-medium">تم تحديث الخصوصية ✓</span>
+                <span className="text-[11px] text-[var(--wa-accent)] font-medium">تم تحديث الخصوصية ✓</span>
               )}
             </div>
 
@@ -330,7 +359,7 @@ export function SettingsView({
                 )}
                 <span>المظهر الحالي</span>
               </span>
-              <span className="text-xs font-semibold text-[#008069] dark:text-[#06CF9C]">
+              <span className="text-xs font-semibold text-[var(--wa-accent-strong)]">
                 {theme === 'dark' ? 'الوضع الداكن' : 'الوضع الفاتح'}
               </span>
             </button>
@@ -345,8 +374,8 @@ export function SettingsView({
               />
             </label>
 
-            <div className="p-3 rounded-xl bg-[#F0F2F5] dark:bg-[#202C33] flex items-center justify-between gap-3">
-              <label htmlFor="privacy-last-seen" className="text-sm text-[#111B21] dark:text-[#E9EDEF]">
+            <div className="p-3 rounded-xl bg-[#F0F2F5] dark:bg-[#202C33] flex items-center justify-between gap-2 min-w-0">
+              <label htmlFor="privacy-last-seen" className="text-xs sm:text-sm text-[#111B21] dark:text-[#E9EDEF] min-w-0 flex-1 truncate">
                 آخر ظهور ومتصل الآن
               </label>
               <select
@@ -355,7 +384,7 @@ export function SettingsView({
                 onChange={(e) =>
                   void handlePrivacyChange({ lastSeenMode: e.target.value as VisibilityScope })
                 }
-                className="rounded-lg bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#374248] px-2.5 py-1.5 text-xs text-[#111B21] dark:text-[#E9EDEF] focus:outline-none"
+                className="shrink-0 max-w-[46%] rounded-lg bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#374248] px-2.5 py-1.5 text-xs text-[#111B21] dark:text-[#E9EDEF] focus:outline-none"
               >
                 {visibilityOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -365,8 +394,8 @@ export function SettingsView({
               </select>
             </div>
 
-            <div className="p-3 rounded-xl bg-[#F0F2F5] dark:bg-[#202C33] flex items-center justify-between gap-3">
-              <label htmlFor="privacy-photo" className="text-sm text-[#111B21] dark:text-[#E9EDEF]">
+            <div className="p-3 rounded-xl bg-[#F0F2F5] dark:bg-[#202C33] flex items-center justify-between gap-2 min-w-0">
+              <label htmlFor="privacy-photo" className="text-xs sm:text-sm text-[#111B21] dark:text-[#E9EDEF] min-w-0 flex-1 truncate">
                 رؤية الصورة الشخصية
               </label>
               <select
@@ -377,7 +406,7 @@ export function SettingsView({
                     profilePhotoVisibility: e.target.value as VisibilityScope
                   })
                 }
-                className="rounded-lg bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#374248] px-2.5 py-1.5 text-xs text-[#111B21] dark:text-[#E9EDEF] focus:outline-none"
+                className="shrink-0 max-w-[46%] rounded-lg bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#374248] px-2.5 py-1.5 text-xs text-[#111B21] dark:text-[#E9EDEF] focus:outline-none"
               >
                 {visibilityOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -387,8 +416,8 @@ export function SettingsView({
               </select>
             </div>
 
-            <div className="p-3 rounded-xl bg-[#F0F2F5] dark:bg-[#202C33] flex items-center justify-between gap-3">
-              <label htmlFor="privacy-bio" className="text-sm text-[#111B21] dark:text-[#E9EDEF]">
+            <div className="p-3 rounded-xl bg-[#F0F2F5] dark:bg-[#202C33] flex items-center justify-between gap-2 min-w-0">
+              <label htmlFor="privacy-bio" className="text-xs sm:text-sm text-[#111B21] dark:text-[#E9EDEF] min-w-0 flex-1 truncate">
                 رؤية النبذة التعريفية
               </label>
               <select
@@ -397,7 +426,7 @@ export function SettingsView({
                 onChange={(e) =>
                   void handlePrivacyChange({ bioVisibility: e.target.value as VisibilityScope })
                 }
-                className="rounded-lg bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#374248] px-2.5 py-1.5 text-xs text-[#111B21] dark:text-[#E9EDEF] focus:outline-none"
+                className="shrink-0 max-w-[46%] rounded-lg bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#374248] px-2.5 py-1.5 text-xs text-[#111B21] dark:text-[#E9EDEF] focus:outline-none"
               >
                 {visibilityOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -408,19 +437,26 @@ export function SettingsView({
             </div>
           </div>
 
+          {/* Installation & Mobile Packages */}
+          <div className="space-y-2.5 pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">
+            <h2 className="text-xs font-semibold text-[#54656F] dark:text-[#8696A0] flex items-center gap-1.5">
+              <Download className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
+              <span>تثبيت التطبيق وحزم الأجهزة (PWA & APK)</span>
+            </h2>
+            <PWAInstallButton />
+          </div>
+
           {/* Account Actions */}
           <div className="space-y-2.5">
             {!isCloudSynced && (
               <button
                 type="button"
                 onClick={() => void onGoogleSignIn()}
-                className="w-full py-2.5 px-4 rounded-xl bg-[#00A884] text-white text-sm font-semibold hover:bg-[#008069] transition-colors cursor-pointer"
+                className="w-full py-2.5 px-4 rounded-xl bg-[var(--wa-accent)] text-white text-sm font-semibold hover:brightness-95 transition-all cursor-pointer"
               >
                 الربط بحساب Google للمزامنة السحابية
               </button>
             )}
-
-            <PWAInstallButton />
 
             <button
               type="button"
@@ -439,7 +475,7 @@ export function SettingsView({
         <div className="w-full max-w-md space-y-4">
           <div className="bg-white dark:bg-[#111B21] rounded-2xl p-6 border border-[#E9EDEF] dark:border-[#222D34] space-y-4">
             <div className="flex items-center justify-between text-xs text-[#54656F] dark:text-[#8696A0]">
-              <span className="flex items-center gap-1.5 font-semibold text-[#008069] dark:text-[#06CF9C]">
+              <span className="flex items-center gap-1.5 font-semibold text-[var(--wa-accent-strong)]">
                 <UserCheck className="w-4 h-4" aria-hidden="true" />
                 <span>معاينة بطاقة ملفك الشخصي</span>
               </span>
@@ -472,7 +508,7 @@ export function SettingsView({
           </div>
 
           <div className="bg-white dark:bg-[#111B21] rounded-2xl p-6 border border-[#E9EDEF] dark:border-[#222D34] space-y-3">
-            <div className="flex items-center gap-3 text-[#00A884]">
+            <div className="flex items-center gap-3 text-[var(--wa-accent)]">
               <Shield className="w-5 h-5" aria-hidden="true" />
               <h2 className="font-display text-base font-bold text-[#111B21] dark:text-[#E9EDEF]">
                 هوية الأمان والمفاتيح المحلية
@@ -482,7 +518,7 @@ export function SettingsView({
               {currentUser.safetyCode}
             </div>
             <div className="flex items-center gap-2 text-[11px] text-[#54656F] dark:text-[#8696A0]">
-              <Lock className="w-3.5 h-3.5 text-[#00A884]" aria-hidden="true" />
+              <Lock className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
               <span>حماية قواعد Firestore مفعلة بعزل كامل للبيانات الشخصية.</span>
             </div>
           </div>

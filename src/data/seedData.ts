@@ -82,6 +82,8 @@ export function createInitialChats(myUid: string): ChatRoom[] {
       favorite: false,
       unreadCount: 0,
       disappearingSeconds: 604800,
+      adminOnlyPost: false,
+      inviteCode: 'WSL-ENG2026',
       lastMessagePreview: 'استطلاع: ما موعد المراجعة التقنية القادم؟',
       lastMessageType: 'poll',
       lastMessageSenderId: 'contact_omar',
@@ -128,10 +130,10 @@ export function createInitialChats(myUid: string): ChatRoom[] {
       favorite: false,
       unreadCount: 1,
       disappearingSeconds: 0,
-      lastMessagePreview: 'رسالة صوتية (0:14)',
-      lastMessageType: 'voice',
-      lastMessageSenderId: 'contact_layla',
-      lastMessageStatus: 'read',
+      lastMessagePreview: 'بانتظار اتصالك عند عودتك أونلاين',
+      lastMessageType: 'text',
+      lastMessageSenderId: myUid,
+      lastMessageStatus: 'sent',
       lastMessageAtMs: now - 86400000,
       roomSeed: 'chat_layla_seed_v1'
     },
@@ -148,6 +150,8 @@ export function createInitialChats(myUid: string): ChatRoom[] {
       favorite: false,
       unreadCount: 0,
       disappearingSeconds: 0,
+      adminOnlyPost: true,
+      inviteCode: 'WSL-SEC2026',
       lastMessagePreview: 'تحديث بروتوكول AES-GCM-256 متاح الآن للجميع',
       lastMessageType: 'text',
       lastMessageSenderId: 'contact_omar',
@@ -171,6 +175,7 @@ async function buildEncryptedSeedMessage(
     replyToId?: string;
     reactions?: Record<string, string[]>;
     starredBy?: string[];
+    status?: 'sent' | 'delivered' | 'read';
   }
 ): Promise<DecryptedMessage> {
   const key = await deriveRoomKeyFromSeed(roomSeed);
@@ -193,7 +198,7 @@ async function buildEncryptedSeedMessage(
     reactionsCount,
     starredBy: options?.starredBy || [],
     isDeleted: false,
-    status: 'read',
+    status: options?.status || 'read',
     createdAtMs
   };
 }
@@ -359,7 +364,18 @@ export async function createInitialMessagesMap(myUid: string, myName: string): P
           voiceDurationSec: 14,
           voiceWaveform: [25, 55, 40, 85, 70, 30, 60, 95, 75, 45, 55, 80, 35, 65, 90, 50, 40, 60, 30, 20]
         },
-        now - 86400000
+        now - 86400000 - 300000
+      ),
+      await buildEncryptedSeedMessage(
+        'm_layla_2',
+        'chat_layla',
+        'chat_layla_seed_v1',
+        myUid,
+        myName,
+        'text',
+        { text: 'بانتظار اتصالك عند عودتك أونلاين' },
+        now - 86400000,
+        { status: 'sent' }
       )
     ],
     chat_community_security: [

@@ -1,4 +1,5 @@
-import { Phone, Video, PhoneIncoming, PhoneOutgoing, PhoneMissed, Lock } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Phone, Video, PhoneIncoming, PhoneOutgoing, PhoneMissed, Lock, Search, X } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { formatCallDuration, formatWhatsAppTime } from '../lib/chatLogic';
 import type { CallRecord, ChatRoom } from '../types/chat';
@@ -9,26 +10,107 @@ interface CallsViewProps {
   onStartCall: (chat: ChatRoom, callType: 'audio' | 'video') => void;
 }
 
+type CallFilterMode = 'all' | 'audio' | 'video' | 'missed';
+
 export function CallsView({ calls, chats, onStartCall }: CallsViewProps) {
-  const directChats = chats.filter((c) => c.type === 'direct');
+  const [filterMode, setFilterMode] = useState<CallFilterMode>('all');
+  const [search, setSearch] = useState('');
+
+  const directChats = useMemo(
+    () =>
+      chats.filter(
+        (c) =>
+          c.type === 'direct' &&
+          (!search.trim() || c.title.toLowerCase().includes(search.trim().toLowerCase()))
+      ),
+    [chats, search]
+  );
+
+  const filteredCalls = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return calls.filter((call) => {
+      if (filterMode === 'audio' && call.callType !== 'audio') return false;
+      if (filterMode === 'video' && call.callType !== 'video') return false;
+      if (filterMode === 'missed' && call.status !== 'missed' && call.status !== 'declined') {
+        return false;
+      }
+      if (q) {
+        const peerName = (call.direction === 'outgoing' ? call.calleeName : call.callerName).toLowerCase();
+        if (!peerName.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [calls, filterMode, search]);
+
+  const filters: { id: CallFilterMode; label: string }[] = [
+    { id: 'all', label: 'الكل' },
+    { id: 'audio', label: 'الصوتية' },
+    { id: 'video', label: 'المرئية' },
+    { id: 'missed', label: 'الفائتة' }
+  ];
 
   return (
-    <div className="flex-1 flex flex-col md:flex-row h-full bg-white dark:bg-[#111B21]">
-      <div className="w-full md:w-96 border-l border-[#E9EDEF] dark:border-[#222D34] flex flex-col h-full">
-        <header className="h-16 px-4 flex items-center justify-between border-b border-[#F0F2F5] dark:border-[#222D34]">
-          <h1 className="font-display text-xl font-bold text-[#111B21] dark:text-[#E9EDEF]">
+    <div className="flex-1 min-w-0 w-full max-w-full overflow-hidden flex flex-col md:flex-row h-full bg-white dark:bg-[#111B21]">
+      <div className="w-full max-w-full min-w-0 md:w-96 md:shrink-0 border-l border-[#E9EDEF] dark:border-[#222D34] flex flex-col h-full overflow-hidden">
+        <header className="h-16 px-3 sm:px-4 flex items-center justify-between gap-2 border-b border-[#F0F2F5] dark:border-[#222D34] shrink-0 min-w-0">
+          <h1 className="font-display text-lg sm:text-xl font-bold text-[#111B21] dark:text-[#E9EDEF] truncate min-w-0">
             المكالمات
           </h1>
-          <span className="text-xs text-[#54656F] dark:text-[#8696A0] flex items-center gap-1">
-            <Lock className="w-3.5 h-3.5 text-[#00A884]" aria-hidden="true" />
+          <span className="text-xs text-[#54656F] dark:text-[#8696A0] flex items-center gap-1 shrink-0 whitespace-nowrap">
+            <Lock className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
             <span>مشفرة تماماً</span>
           </span>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-3 space-y-5 pb-20 md:pb-4">
+        {/* Search & Filter Controls */}
+        <div className="p-3 space-y-2.5 border-b border-[#F0F2F5] dark:border-[#222D34] shrink-0">
+          <div className="flex items-center bg-[#F0F2F5] dark:bg-[#202C33] rounded-xl px-3 h-9.5">
+            <Search className="w-4 h-4 text-[#54656F] dark:text-[#8696A0] ml-2 shrink-0" aria-hidden="true" />
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="ابحث في المكالمات وجهات الاتصال..."
+              aria-label="ابحث في المكالمات"
+              className="w-full bg-transparent text-xs text-[#111B21] dark:text-[#E9EDEF] placeholder:text-[#54656F] dark:placeholder:text-[#8696A0] focus:outline-none"
+            />
+            {search && (
+              <button
+                type="button"
+                aria-label="مسح البحث"
+                onClick={() => setSearch('')}
+                className="p-0.5 text-[#54656F] cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+            {filters.map((f) => {
+              const active = filterMode === f.id;
+              return (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setFilterMode(f.id)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${
+                    active
+                      ? 'bg-[var(--wa-accent-soft)] text-[var(--wa-accent-strong)] font-bold'
+                      : 'bg-[#F0F2F5] dark:bg-[#202C33] text-[#54656F] dark:text-[#8696A0]'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden p-3 space-y-5 pb-24 md:pb-4">
           {/* Quick call contacts */}
           <div>
-            <p className="px-2 pb-2 text-xs font-semibold text-[#008069] dark:text-[#06CF9C]">
+            <p className="px-2 pb-2 text-xs font-semibold text-[var(--wa-accent-strong)]">
               إجراء مكالمة فورية
             </p>
             <ul className="space-y-1">
@@ -53,7 +135,7 @@ export function CallsView({ calls, chats, onStartCall }: CallsViewProps) {
                       type="button"
                       aria-label={`مكالمة صوتية مع ${chat.title}`}
                       onClick={() => onStartCall(chat, 'audio')}
-                      className="w-9 h-9 rounded-full flex items-center justify-center text-[#00A884] hover:bg-[#D9FDD3]/60 dark:hover:bg-[#0A332C] cursor-pointer"
+                      className="w-9 h-9 rounded-full flex items-center justify-center text-[var(--wa-accent)] hover:bg-[var(--wa-accent-soft)] cursor-pointer"
                     >
                       <Phone className="w-4 h-4" aria-hidden="true" />
                     </button>
@@ -61,7 +143,7 @@ export function CallsView({ calls, chats, onStartCall }: CallsViewProps) {
                       type="button"
                       aria-label={`مكالمة مرئية مع ${chat.title}`}
                       onClick={() => onStartCall(chat, 'video')}
-                      className="w-9 h-9 rounded-full flex items-center justify-center text-[#00A884] hover:bg-[#D9FDD3]/60 dark:hover:bg-[#0A332C] cursor-pointer"
+                      className="w-9 h-9 rounded-full flex items-center justify-center text-[var(--wa-accent)] hover:bg-[var(--wa-accent-soft)] cursor-pointer"
                     >
                       <Video className="w-4 h-4" aria-hidden="true" />
                     </button>
@@ -74,18 +156,18 @@ export function CallsView({ calls, chats, onStartCall }: CallsViewProps) {
           {/* Call History */}
           <div>
             <p className="px-2 pb-2 text-xs font-semibold text-[#54656F] dark:text-[#8696A0]">
-              سجل المكالمات الأخيرة
+              سجل المكالمات الأخيرة ({filteredCalls.length})
             </p>
-            {calls.length === 0 ? (
-              <p className="text-xs text-center text-[#667781] py-6">لا توجد مكالمات مسجلة بعد.</p>
+            {filteredCalls.length === 0 ? (
+              <p className="text-xs text-center text-[#667781] py-6">لا توجد مكالمات مطابقة للفلتر الحالي.</p>
             ) : (
               <ul className="space-y-1">
-                {calls.map((call) => {
+                {filteredCalls.map((call) => {
                   const peerName = call.direction === 'outgoing' ? call.calleeName : call.callerName;
                   const peerAvatar = call.direction === 'outgoing' ? call.calleeAvatar : call.callerAvatar;
                   const isMissed = call.status === 'missed' || call.status === 'declined';
 
-                  const matchingChat = directChats.find((c) => c.title === peerName) || directChats[0];
+                  const matchingChat = chats.find((c) => c.type === 'direct' && c.title === peerName) || chats.find((c) => c.type === 'direct');
 
                   return (
                     <li
@@ -108,9 +190,9 @@ export function CallsView({ calls, chats, onStartCall }: CallsViewProps) {
                             {isMissed ? (
                               <PhoneMissed className="w-3.5 h-3.5 text-red-500" aria-hidden="true" />
                             ) : call.direction === 'outgoing' ? (
-                              <PhoneOutgoing className="w-3.5 h-3.5 text-[#00A884]" aria-hidden="true" />
+                              <PhoneOutgoing className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
                             ) : (
-                              <PhoneIncoming className="w-3.5 h-3.5 text-[#00A884]" aria-hidden="true" />
+                              <PhoneIncoming className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
                             )}
                             <span>{formatWhatsAppTime(call.createdAtMs)}</span>
                             {call.durationSeconds > 0 && (
@@ -128,7 +210,7 @@ export function CallsView({ calls, chats, onStartCall }: CallsViewProps) {
                           type="button"
                           aria-label={`إعادة الاتصال بـ ${peerName}`}
                           onClick={() => onStartCall(matchingChat, call.callType)}
-                          className="w-9 h-9 rounded-full flex items-center justify-center text-[#00A884] hover:bg-[#D9FDD3]/60 dark:hover:bg-[#0A332C] cursor-pointer"
+                          className="w-9 h-9 rounded-full flex items-center justify-center text-[var(--wa-accent)] hover:bg-[var(--wa-accent-soft)] cursor-pointer"
                         >
                           {call.callType === 'video' ? (
                             <Video className="w-4 h-4" aria-hidden="true" />
@@ -149,7 +231,7 @@ export function CallsView({ calls, chats, onStartCall }: CallsViewProps) {
       {/* Right Summary Pane */}
       <div className="hidden md:flex flex-1 items-center justify-center bg-[#F0F2F5] dark:bg-[#0B141A] p-8 text-center">
         <div className="max-w-sm">
-          <div className="w-16 h-16 rounded-full bg-[#00A884]/15 text-[#00A884] flex items-center justify-center mx-auto mb-4">
+          <div className="w-16 h-16 rounded-full bg-[var(--wa-accent-soft)] text-[var(--wa-accent-strong)] flex items-center justify-center mx-auto mb-4">
             <Phone className="w-7 h-7" aria-hidden="true" />
           </div>
           <h2 className="font-display text-lg font-bold text-[#111B21] dark:text-[#E9EDEF]">

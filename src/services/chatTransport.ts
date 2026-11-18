@@ -95,12 +95,22 @@ async function encryptForGroup(
   if (!ownPublicKeyJwk) throw new Error('مفتاحك العام غير صالح.');
 
   const groupKeyBytes = crypto.getRandomValues(new Uint8Array(32));
-  const groupKey = await crypto.subtle.importKey('raw', groupKeyBytes, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+  const groupKey = await crypto.subtle.importKey(
+    'raw',
+    groupKeyBytes as unknown as BufferSource,
+    { name: 'AES-GCM' },
+    false,
+    ['encrypt', 'decrypt']
+  );
   const payloadIv = crypto.getRandomValues(new Uint8Array(12));
   const payloadCipherBytes = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: payloadIv, additionalData: new TextEncoder().encode(`wasil-group-v2:${chatId}`) },
+    {
+      name: 'AES-GCM',
+      iv: payloadIv as unknown as BufferSource,
+      additionalData: new TextEncoder().encode(`wasil-group-v2:${chatId}`) as unknown as BufferSource
+    },
     groupKey,
-    new TextEncoder().encode(plaintext)
+    new TextEncoder().encode(plaintext) as unknown as BufferSource
   );
   const wrappedKeys: GroupCipherEnvelope['wrappedKeys'] = {};
 
@@ -156,15 +166,21 @@ async function decryptGroupMessage(
   const wrappingKey = await derivePairwiseChatKey(identity.privateKeyJwk, senderPublicKey, chatId);
   const rawKey = fromBase64(await decryptPayload(wrapped.ciphertext, wrapped.iv, wrappingKey));
   if (rawKey.byteLength !== 32) throw new Error('مفتاح المجموعة غير صالح.');
-  const groupKey = await crypto.subtle.importKey('raw', rawKey, { name: 'AES-GCM' }, false, ['decrypt']);
+  const groupKey = await crypto.subtle.importKey(
+    'raw',
+    rawKey as unknown as BufferSource,
+    { name: 'AES-GCM' },
+    false,
+    ['decrypt']
+  );
   const plaintext = await crypto.subtle.decrypt(
     {
       name: 'AES-GCM',
-      iv: fromBase64(envelope.payloadIv),
-      additionalData: new TextEncoder().encode(`wasil-group-v2:${chatId}`)
+      iv: fromBase64(envelope.payloadIv) as unknown as BufferSource,
+      additionalData: new TextEncoder().encode(`wasil-group-v2:${chatId}`) as unknown as BufferSource
     },
     groupKey,
-    fromBase64(envelope.payloadCiphertext)
+    fromBase64(envelope.payloadCiphertext) as unknown as BufferSource
   );
   return JSON.parse(new TextDecoder().decode(plaintext)) as MessagePayload;
 }

@@ -14,7 +14,17 @@ import {
   formatRemainingStatusTime,
   extractContactsFromChats,
   resolveStatusViewerIds,
-  extractChatSharedAssets
+  extractChatSharedAssets,
+  buildDirectChatId,
+  isRemoteFirebaseUid,
+  MAX_STATUS_VIDEO_SECONDS,
+  validateStatusVideoDuration,
+  formatMediaSeconds,
+  buildChannelInviteCode,
+  sortStatusesWithPinned,
+  resolveMessageReceiptStatus,
+  mergePollVotesMap,
+  filterExpiredDisappearingMessages
 } from './chatLogic';
 import type { ChatRoom, DecryptedMessage, PollOption, StatusItem } from '../types/chat';
 
@@ -262,3 +272,125 @@ test('extractChatSharedAssets extracts media, links, and docs, sorts newest-firs
   assert.equal(assets.docs[0].fileSizeLabel, '1.2 MB');
   assert.equal(assets.totalCount, 5);
 });
+
+test('buildDirectChatId is symmetric/commutative and matches Firestore ID rules', () => {
+  const ab = buildDirectChatId('uid_alpha_123', 'uid_beta_456');
+  const ba = buildDirectChatId('uid_beta_456', 'uid_alpha_123');
+  assert.equal(ab, ba);
+  assert.ok(/^[a-zA-Z0-9_-]{1,128}$/.test(ab));
+});
+
+test('isRemoteFirebaseUid distinguishes real UIDs from local demo/contact prefixes', () => {
+  assert.equal(isRemoteFirebaseUid('ic9rp0CjQ7WX0BB2lZwJBDNMHX22'), true);
+  assert.equal(isRemoteFirebaseUid('demo_local_user'), false);
+  assert.equal(isRemoteFirebaseUid('peer_sara'), false);
+  assert.equal(isRemoteFirebaseUid('contact_123'), false);
+  assert.equal(isRemoteFirebaseUid('gcontact_abc'), false);
+  assert.equal(isRemoteFirebaseUid(''), false);
+});
+
+test('3-minute status video validation, formatting, channel invite codes, and pinned sorting', () => {
+  assert.equal(MAX_STATUS_VIDEO_SECONDS, 180);
+  assert.equal(validateStatusVideoDuration(12).valid, true);
+  assert.equal(validateStatusVideoDuration(180).valid, true);
+  assert.equal(validateStatusVideoDuration(181).valid, false);
+  assert.equal(validateStatusVideoDuration(0).valid, false);
+  assert.equal(validateStatusVideoDuration(-5).valid, false);
+
+  assert.equal(formatMediaSeconds(0), '00:00');
+  assert.equal(formatMediaSeconds(75), '01:15');
+  assert.equal(formatMediaSeconds(180), '03:00');
+
+  const code = buildChannelInviteCode('comm_tech_2026');
+  assert.ok(code.startsWith('WSL-'));
+  assert.equal(code.length, 12);
+  assert.equal(code, buildChannelInviteCode('comm_tech_2026'));
+
+  const now = 1_700_000_000_000;
+  const s1: StatusItem = {
+    id: 'st_old',
+    authorId: 'u1',
+    authorName: 'عمر',
+    authorAvatar: '',
+    type: 'text',
+    content: 'أولى',
+    backgroundColor: '#005C4B',
+    viewerIds: ['u1'],
+    viewedByIds: [],
+    viewCount: 0,
+    viewedByMe: false,
+    createdAtMs: now - 5000,
+    expiresAtMs: now + STATUS_TTL_MS
+  };
+  const s2: StatusItem = {
+    ...s1,
+    id: 'st_new',
+    content: 'أحدث',
+    createdAtMs: now - 1000
+  };
+  const sorted = sortStatusesWithPinned([s2, s1], ['st_old'], now);
+  assert.deepEqual(sorted.map((s) => s.id), ['st_old', 'st_new']);
+  assert.equal(sorted[0].pinned, true);
+  assert.equal(sorted[1].pinned, false);
+});
+
+test('resolveMessageReceiptStatus accurately resolves single check, double gray checks, and double blue checks', () => {
+  // Only sender in arrays -> sent (single gray check)
+  assert.equal(resolveMessageReceiptStatus('me', ['me'], ['me']), 'sent');
+  assert.equal(resolveMessageReceiptStatus('me', [], []), 'sent');
+
+  // Peer delivered but not read -> delivered (double gray checks)
+  assert.equal(resolveMessageReceiptStatus('me', ['me', 'peer_1'], ['me']), 'delivered');
+
+  // Peer read -> read (double blue checks)
+  assert.equal(resolveMessageReceiptStatus('me', ['me', 'peer_1'], ['me', 'peer_1']), 'read');
+
+  // Group chat: at least one peer delivered vs read
+  assert.equal(resolveMessageReceiptStatus('me', ['me', 'u2'], ['me']), 'delivered');
+  assert.equal(resolveMessageReceiptStatus('me', ['me', 'u2', 'u3'], ['me', 'u3']), 'read');
+
+  // Fallback for legacy records without receipt arrays
+  assert.equal(resolveMessageReceiptStatus('me', undefined, undefined, 'sent'), 'sent');
+  assert.equal(resolveMessageReceiptStatus('me', undefined, undefined, 'read'), 'read');
+});
+
+test('mergePollVotesMap maps uid->optionId accurately and handles empty votes', () => {
+  const options: PollOption[] = [
+    { id: 'opt_1', text: 'نعم', voterIds: [] },
+    { id: 'opt_2', text: 'لا', voterIds: [] }
+  ];
+  const merged = mergePollVotesMap(options, { u1: 'opt_1', u2: 'opt_2', u3: 'opt_1' });
+  assert.deepEqual(merged[0].voterIds, ['u1', 'u3']);
+  assert.deepEqual(merged[1].voterIds, ['u2']);
+});
+
+test('filterExpiredDisappearingMessages filters old messages when disappearingSeconds > 0', () => {
+  const now = 1_700_000_000_000;
+  const baseMsg: DecryptedMessage = {
+    id: 'm1',
+    chatId: 'c1',
+    senderId: 'me',
+    senderName: 'أحمد',
+    type: 'text',
+    payload: { text: 'مرحبا' },
+    ciphertext: 'c',
+    iv: 'iv',
+    algorithm: 'AES-GCM-256',
+    reactions: {},
+    reactionsCount: 0,
+    starredBy: [],
+    isDeleted: false,
+    status: 'sent',
+    createdAtMs: now - 90_000_000 // 25 hours ago
+  };
+  const recentMsg: DecryptedMessage = {
+    ...baseMsg,
+    id: 'm2',
+    createdAtMs: now - 3600_000 // 1 hour ago
+  };
+
+  assert.equal(filterExpiredDisappearingMessages([baseMsg, recentMsg], 0, now).length, 2);
+  const filtered = filterExpiredDisappearingMessages([baseMsg, recentMsg], 86400, now);
+  assert.deepEqual(filtered.map((m) => m.id), ['m2']);
+});
+

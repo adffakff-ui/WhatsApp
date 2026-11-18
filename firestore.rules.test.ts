@@ -45,4 +45,12 @@ test('Dirty Dozen security invariants are enforced in firestore.rules', () => {
     assert.equal(rule.includes('get('), false, `allow list must not use get(): ${rule}`);
     assert.equal(rule.includes('exists('), false, `allow list must not use exists(): ${rule}`);
   }
+
+  // 12. Scoped message receipt & typing fields
+  assert.match(rulesContent, /'deliveredToIds'/);
+  assert.match(rulesContent, /'readByIds'/);
+  assert.match(rulesContent, /'lastMessageDeliveredToIds'/);
+  assert.match(rulesContent, /'lastMessageReadByIds'/);
+  assert.match(rulesContent, /'isTyping'/);
 });
+

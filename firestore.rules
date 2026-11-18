@@ -101,7 +101,7 @@ service cloud.firestore {
 
     function isValidChat(data) {
       return data.keys().hasAll(['id', 'type', 'title', 'createdBy', 'lastMessageAt', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'type', 'title', 'description', 'avatarUrl', 'createdBy', 'memberIds', 'lastMessageCiphertext', 'lastMessageIv', 'lastMessageSenderId', 'lastMessageType', 'lastMessageAt', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'type', 'title', 'description', 'avatarUrl', 'createdBy', 'memberIds', 'adminOnlyPost', 'inviteCode', 'lastMessageCiphertext', 'lastMessageIv', 'lastMessageSenderId', 'lastMessageType', 'lastMessageDeliveredToIds', 'lastMessageReadByIds', 'lastMessageAt', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && data.type in ['direct', 'group', 'community']
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 100
@@ -109,10 +109,14 @@ service cloud.firestore {
         && (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 65536))
         && isValidId(data.createdBy)
         && (!('memberIds' in data) || (data.memberIds is list && data.memberIds.size() >= 1 && data.memberIds.size() <= 50 && data.memberIds[0] is string))
+        && (!('adminOnlyPost' in data) || data.adminOnlyPost is bool)
+        && (!('inviteCode' in data) || (data.inviteCode is string && data.inviteCode.size() <= 32))
         && (!('lastMessageCiphertext' in data) || (data.lastMessageCiphertext is string && data.lastMessageCiphertext.size() <= 2048))
         && (!('lastMessageIv' in data) || (data.lastMessageIv is string && data.lastMessageIv.size() <= 64))
         && (!('lastMessageSenderId' in data) || (data.lastMessageSenderId is string && data.lastMessageSenderId.size() <= 128))
         && (!('lastMessageType' in data) || data.lastMessageType in ['text', 'image', 'voice', 'file', 'poll', 'system'])
+        && (!('lastMessageDeliveredToIds' in data) || (data.lastMessageDeliveredToIds is list && data.lastMessageDeliveredToIds.size() <= 50))
+        && (!('lastMessageReadByIds' in data) || (data.lastMessageReadByIds is list && data.lastMessageReadByIds.size() <= 50))
         && data.lastMessageAt is timestamp
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -120,20 +124,22 @@ service cloud.firestore {
 
     function isValidChatMember(data) {
       return data.keys().hasAll(['chatId', 'uid', 'role', 'displayName', 'avatarUrl', 'publicKeyJwk', 'joinedAt', 'updatedAt'])
-        && data.keys().hasOnly(['chatId', 'uid', 'role', 'displayName', 'avatarUrl', 'publicKeyJwk', 'joinedAt', 'updatedAt'])
+        && data.keys().hasOnly(['chatId', 'uid', 'role', 'displayName', 'avatarUrl', 'publicKeyJwk', 'isTyping', 'typingAt', 'joinedAt', 'updatedAt'])
         && isValidId(data.chatId)
         && isValidId(data.uid)
         && data.role in ['admin', 'member']
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
         && data.avatarUrl is string && data.avatarUrl.size() <= 65536
         && data.publicKeyJwk is string && data.publicKeyJwk.size() >= 10 && data.publicKeyJwk.size() <= 1024
+        && (!('isTyping' in data) || data.isTyping is bool)
+        && (!('typingAt' in data) || data.typingAt is timestamp)
         && data.joinedAt is timestamp
         && data.updatedAt is timestamp;
     }
 
     function isValidMessage(data) {
       return data.keys().hasAll(['id', 'chatId', 'senderId', 'senderName', 'type', 'ciphertext', 'iv', 'algorithm', 'viewerIds', 'reactionsCount', 'isDeleted', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'chatId', 'senderId', 'senderName', 'type', 'ciphertext', 'iv', 'algorithm', 'viewerIds', 'replyToId', 'reactionsCount', 'isDeleted', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'chatId', 'senderId', 'senderName', 'type', 'ciphertext', 'iv', 'algorithm', 'viewerIds', 'replyToId', 'deliveredToIds', 'readByIds', 'reactions', 'reactionsCount', 'starredBy', 'pollVotes', 'isDeleted', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && isValidId(data.chatId)
         && isValidId(data.senderId)
@@ -144,7 +150,12 @@ service cloud.firestore {
         && data.algorithm == 'AES-GCM-256'
         && data.viewerIds is list && data.viewerIds.size() >= 1 && data.viewerIds.size() <= 50 && data.viewerIds[0] is string
         && (!('replyToId' in data) || (data.replyToId is string && data.replyToId.size() <= 128))
+        && (!('deliveredToIds' in data) || (data.deliveredToIds is list && data.deliveredToIds.size() <= 50))
+        && (!('readByIds' in data) || (data.readByIds is list && data.readByIds.size() <= 50))
+        && (!('reactions' in data) || (data.reactions is map && data.reactions.size() <= 20))
         && data.reactionsCount is int && data.reactionsCount >= 0 && data.reactionsCount <= 10000
+        && (!('starredBy' in data) || (data.starredBy is list && data.starredBy.size() <= 50))
+        && (!('pollVotes' in data) || (data.pollVotes is map && data.pollVotes.size() <= 50))
         && data.isDeleted is bool
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -152,18 +163,21 @@ service cloud.firestore {
 
     function isValidStatus(data) {
       return data.keys().hasAll(['id', 'authorId', 'authorName', 'authorAvatar', 'type', 'content', 'backgroundColor', 'viewerIds', 'viewedByIds', 'viewCount', 'expiresAt', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'authorId', 'authorName', 'authorAvatar', 'type', 'content', 'backgroundColor', 'fontStyle', 'mediaUrl', 'viewerIds', 'viewedByIds', 'viewCount', 'expiresAt', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'authorId', 'authorName', 'authorAvatar', 'type', 'content', 'backgroundColor', 'fontStyle', 'mediaUrl', 'posterUrl', 'durationSec', 'pinned', 'viewerIds', 'viewedByIds', 'viewCount', 'expiresAt', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && isValidId(data.authorId)
         && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80
         && data.authorAvatar is string && data.authorAvatar.size() <= 65536
-        && data.type in ['text', 'image']
+        && data.type in ['text', 'image', 'video']
         && data.content is string && data.content.size() <= 500
         && (data.type != 'text' || data.content.size() >= 1)
         && data.backgroundColor is string && data.backgroundColor.size() >= 4 && data.backgroundColor.size() <= 32
         && (!('fontStyle' in data) || data.fontStyle in ['display', 'sans', 'mono'])
         && (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 262144))
-        && (data.type != 'image' || ('mediaUrl' in data && data.mediaUrl.size() >= 5))
+        && (!('posterUrl' in data) || (data.posterUrl is string && data.posterUrl.size() <= 65536))
+        && (!('durationSec' in data) || (data.durationSec is int && data.durationSec >= 0 && data.durationSec <= 180))
+        && (!('pinned' in data) || data.pinned is bool)
+        && (data.type == 'text' || ('mediaUrl' in data && data.mediaUrl.size() >= 5))
         && data.viewerIds is list && data.viewerIds.size() >= 1 && data.viewerIds.size() <= 50 && data.viewerIds[0] is string
         && data.viewedByIds is list && data.viewedByIds.size() <= 50
         && data.viewCount is int && data.viewCount >= 0 && data.viewCount <= 100000
@@ -178,10 +192,10 @@ service cloud.firestore {
         && isValidId(data.id)
         && isValidId(data.callerId)
         && data.callerName is string && data.callerName.size() >= 1 && data.callerName.size() <= 80
-        && (!('callerAvatar' in data) || (data.callerAvatar is string && data.callerAvatar.size() <= 500))
+        && (!('callerAvatar' in data) || (data.callerAvatar is string && data.callerAvatar.size() <= 65536))
         && isValidId(data.calleeId)
         && data.calleeName is string && data.calleeName.size() >= 1 && data.calleeName.size() <= 80
-        && (!('calleeAvatar' in data) || (data.calleeAvatar is string && data.calleeAvatar.size() <= 500))
+        && (!('calleeAvatar' in data) || (data.calleeAvatar is string && data.calleeAvatar.size() <= 65536))
         && data.callType in ['audio', 'video']
         && data.status in ['ringing', 'connected', 'ended', 'declined', 'missed']
         && (!('offerSdp' in data) || (data.offerSdp is string && data.offerSdp.size() <= 32768))
@@ -278,9 +292,10 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          (incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageCiphertext', 'lastMessageIv', 'lastMessageSenderId', 'lastMessageType', 'lastMessageAt', 'updatedAt'])
+          (incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageCiphertext', 'lastMessageIv', 'lastMessageSenderId', 'lastMessageType', 'lastMessageDeliveredToIds', 'lastMessageReadByIds', 'lastMessageAt', 'updatedAt'])
             && incoming().lastMessageAt == request.time) ||
-          (isChatAdmin(chatId) && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'avatarUrl', 'memberIds', 'updatedAt']))
+          (incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageDeliveredToIds', 'lastMessageReadByIds', 'updatedAt'])) ||
+          (isChatAdmin(chatId) && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'avatarUrl', 'memberIds', 'adminOnlyPost', 'inviteCode', 'updatedAt']))
         );
       allow delete: if isVerifiedUser() && isValidId(chatId) && existing().createdBy == request.auth.uid;
 
@@ -304,7 +319,7 @@ service cloud.firestore {
           && incoming().updatedAt == request.time
           && (
             (isChatAdmin(chatId) && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'updatedAt'])) ||
-            (memberId == request.auth.uid && incoming().role == existing().role && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'avatarUrl', 'publicKeyJwk', 'updatedAt']))
+            (memberId == request.auth.uid && incoming().role == existing().role && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'avatarUrl', 'publicKeyJwk', 'isTyping', 'typingAt', 'updatedAt']))
           );
         allow delete: if isVerifiedUser() && isValidId(chatId) && isValidId(memberId)
           && (memberId == request.auth.uid || isChatAdmin(chatId));
@@ -312,7 +327,7 @@ service cloud.firestore {
 
       match /messages/{messageId} {
         allow get: if isSignedIn() && isValidId(chatId) && isValidId(messageId) && isChatMember(chatId);
-        allow list: if isSignedIn() && resource.data.chatId == chatId && request.auth.uid in resource.data.viewerIds;
+        allow list: if isSignedIn() && request.auth.uid in resource.data.viewerIds;
         allow create: if isVerifiedUser() && isValidId(chatId) && isValidId(messageId)
           && isValidMessage(incoming())
           && incoming().id == messageId
@@ -332,7 +347,10 @@ service cloud.firestore {
           && incoming().updatedAt == request.time
           && (
             (existing().senderId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['ciphertext', 'iv', 'isDeleted', 'updatedAt'])) ||
-            (incoming().diff(existing()).affectedKeys().hasOnly(['reactionsCount', 'updatedAt']))
+            (incoming().diff(existing()).affectedKeys().hasOnly(['reactionsCount', 'reactions', 'updatedAt'])) ||
+            (incoming().diff(existing()).affectedKeys().hasOnly(['deliveredToIds', 'readByIds', 'updatedAt'])) ||
+            (incoming().diff(existing()).affectedKeys().hasOnly(['starredBy', 'updatedAt'])) ||
+            (incoming().diff(existing()).affectedKeys().hasOnly(['pollVotes', 'updatedAt']))
           );
         allow delete: if isVerifiedUser() && isValidId(chatId) && isValidId(messageId)
           && existing().senderId == request.auth.uid;
@@ -362,7 +380,7 @@ service cloud.firestore {
         && incoming().expiresAt == existing().expiresAt
         && incoming().updatedAt == request.time
         && (
-          (existing().authorId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['content', 'viewerIds', 'updatedAt'])) ||
+          (existing().authorId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['content', 'viewerIds', 'pinned', 'updatedAt'])) ||
           (request.auth.uid in existing().viewerIds
             && incoming().diff(existing()).affectedKeys().hasOnly(['viewCount', 'viewedByIds', 'updatedAt'])
             && incoming().viewCount == existing().viewCount + 1)
@@ -395,6 +413,7 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
+          (existing().callerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'offerSdp', 'updatedAt'])) ||
           (existing().calleeId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'answerSdp', 'updatedAt'])) ||
           (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'durationSeconds', 'updatedAt']))
         );

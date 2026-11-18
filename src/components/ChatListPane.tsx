@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Search,
   MessageSquarePlus,
@@ -10,12 +10,20 @@ import {
   Archive,
   MoreVertical,
   Lock,
+  Unlock,
   Heart,
-  X
+  X,
+  Plane,
+  Palette,
+  Megaphone,
+  Plus,
+  Star,
+  Camera,
+  Radio
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { formatWhatsAppTime } from '../lib/chatLogic';
-import type { ChatFilter, ChatRoom } from '../types/chat';
+import type { ChatFilter, ChatRoom, StatusItem, UserProfile } from '../types/chat';
 
 interface ChatListPaneProps {
   chats: ChatRoom[];
@@ -28,13 +36,27 @@ interface ChatListPaneProps {
   showArchived: boolean;
   onToggleArchivedView: (show: boolean) => void;
   archivedCount: number;
+  lockedCount: number;
+  lockedChatIds: string[];
   myUid: string;
+  currentUser: UserProfile;
+  statuses: StatusItem[];
+  showStoriesTray: boolean;
+  dndMode: boolean;
+  onToggleDndMode: () => void;
   onOpenNewChat: () => void;
   onOpenNewGroup: () => void;
+  onOpenNewChannel?: () => void;
+  onOpenBroadcast: () => void;
+  onOpenOmarAddons: () => void;
+  onOpenCommunities: () => void;
+  onOpenStarred: () => void;
+  onOpenStatusTab: (authorId?: string) => void;
   onTogglePin: (chatId: string) => void;
   onToggleArchive: (chatId: string) => void;
   onToggleMute: (chatId: string) => void;
   onToggleFavorite: (chatId: string) => void;
+  onToggleLockChat: (chatId: string) => void;
   isCloudSynced: boolean;
 }
 
@@ -49,75 +71,257 @@ export function ChatListPane({
   showArchived,
   onToggleArchivedView,
   archivedCount,
+  lockedCount,
+  lockedChatIds,
   myUid,
+  currentUser,
+  statuses,
+  showStoriesTray,
+  dndMode,
+  onToggleDndMode,
   onOpenNewChat,
   onOpenNewGroup,
+  onOpenNewChannel,
+  onOpenBroadcast,
+  onOpenOmarAddons,
+  onOpenCommunities,
+  onOpenStarred,
+  onOpenStatusTab,
   onTogglePin,
   onToggleArchive,
   onToggleMute,
   onToggleFavorite,
+  onToggleLockChat,
   isCloudSynced
 }: ChatListPaneProps) {
   const [menuChatId, setMenuChatId] = useState<string | null>(null);
+  const [showHeaderMenu, setShowHeaderMenu] = useState(false);
+  const [fabOpen, setFabOpen] = useState(false);
 
-  const filterButtons: { id: ChatFilter; label: string }[] = [
+  useEffect(() => {
+    if (!menuChatId && !showHeaderMenu && !fabOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest('[data-floating-menu="chat-list"]')) return;
+      setMenuChatId(null);
+      setShowHeaderMenu(false);
+      setFabOpen(false);
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMenuChatId(null);
+        setShowHeaderMenu(false);
+        setFabOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    window.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      window.removeEventListener('keydown', handleKey);
+    };
+  }, [menuChatId, showHeaderMenu, fabOpen]);
+
+  const filterButtons: { id: ChatFilter; label: string; count?: number }[] = [
     { id: 'all', label: 'الكل' },
     { id: 'unread', label: 'غير مقروءة' },
     { id: 'favorites', label: 'المفضلة' },
-    { id: 'groups', label: 'المجموعات' }
+    { id: 'groups', label: 'المجموعات' },
+    { id: 'locked', label: 'المقفلة', count: lockedCount }
   ];
+
+  // Deduplicate contact stories for the top quick stories tray
+  const uniqueStoryAuthors = statuses.reduce<StatusItem[]>((acc, st) => {
+    if (!acc.some((existing) => existing.authorId === st.authorId)) {
+      acc.push(st);
+    }
+    return acc;
+  }, []);
 
   return (
     <section
       aria-label="قائمة المحادثات"
-      className="flex flex-col h-full bg-white dark:bg-[#111B21] border-l border-[#E9EDEF] dark:border-[#222D34]"
+      className="relative flex flex-col h-full w-full max-w-full min-w-0 overflow-hidden bg-white dark:bg-[#111B21] border-l border-[#E9EDEF] dark:border-[#222D34]"
     >
       {/* Top Header */}
-      <header className="px-4 h-16 shrink-0 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <h1 className="font-display text-xl font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
-            {showArchived ? 'المؤرشفة' : 'الدردشات'}
+      <header className="px-3 sm:px-4 h-16 shrink-0 flex items-center justify-between gap-1.5 sm:gap-2 border-b border-[#F0F2F5] dark:border-[#222D34] min-w-0">
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+          <h1 className="font-display text-lg sm:text-xl font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
+            {showArchived ? 'المؤرشفة' : 'تواصل'}
           </h1>
-          <span className="text-xs text-[#54656F] dark:text-[#8696A0] flex items-center gap-1 whitespace-nowrap">
-            <Lock className="w-3 h-3 text-[#00A884]" aria-hidden="true" />
-            <span>{isCloudSynced ? 'مزامنة سحابية' : 'تشفير محلي'}</span>
+          <span className="text-[11px] text-[#54656F] dark:text-[#8696A0] flex items-center gap-1 whitespace-nowrap shrink-0">
+            <Lock className="w-3 h-3 text-[var(--wa-accent)]" aria-hidden="true" />
+            <span>{isCloudSynced ? 'سحابي' : 'محلي'}</span>
           </span>
         </div>
 
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-0.5 shrink-0 relative">
           {showArchived && (
             <button
               type="button"
               onClick={() => onToggleArchivedView(false)}
-              className="min-h-[40px] px-3 rounded-full text-xs font-medium text-[#008069] dark:text-[#06CF9C] hover:bg-[#F0F2F5] dark:hover:bg-[#202C33] transition-colors whitespace-nowrap cursor-pointer"
+              className="min-h-[38px] px-2.5 sm:px-3 rounded-full text-xs font-medium text-[var(--wa-accent-strong)] hover:bg-[#F0F2F5] dark:hover:bg-[#202C33] transition-colors whitespace-nowrap cursor-pointer"
             >
-              العودة للدردشات
+              العودة
             </button>
           )}
+
+          {/* Airplane / DND Quick Toggle */}
           <button
             type="button"
-            aria-label="مجموعة جديدة"
-            title="مجموعة جديدة"
-            onClick={onOpenNewGroup}
-            className="w-10 h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-[#F0F2F5] dark:hover:bg-[#202C33] transition-colors cursor-pointer"
+            aria-label={dndMode ? 'إلغاء وضع عدم الإزعاج' : 'تفعيل وضع عدم الإزعاج'}
+            title={dndMode ? 'وضع الطيران مفعّل' : 'وضع عدم الإزعاج (الطيران)'}
+            onClick={onToggleDndMode}
+            className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
+              dndMode
+                ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                : 'text-[#54656F] dark:text-[#AEBAC1] hover:bg-[#F0F2F5] dark:hover:bg-[#202C33]'
+            }`}
           >
-            <Users className="w-5 h-5" aria-hidden="true" />
+            <Plane className="w-4.5 h-4.5" aria-hidden="true" />
           </button>
+
+          {/* Omar Add-ons & Themes Quick Shortcut */}
+          <button
+            type="button"
+            aria-label="إضافات وثيمات عمر"
+            title="ثيمات وإضافات عمر"
+            onClick={onOpenOmarAddons}
+            className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-[var(--wa-accent-strong)] hover:bg-[var(--wa-accent-soft)]/50 dark:hover:bg-[#202C33] transition-colors cursor-pointer"
+          >
+            <Palette className="w-4.5 h-4.5" aria-hidden="true" />
+          </button>
+
           <button
             type="button"
             aria-label="دردشة جديدة"
             title="دردشة جديدة"
             onClick={onOpenNewChat}
-            className="w-10 h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-[#F0F2F5] dark:hover:bg-[#202C33] transition-colors cursor-pointer"
+            className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-[#F0F2F5] dark:hover:bg-[#202C33] transition-colors cursor-pointer"
           >
             <MessageSquarePlus className="w-5 h-5" aria-hidden="true" />
           </button>
+
+          <div data-floating-menu="chat-list" className="relative">
+            <button
+              type="button"
+              aria-label="القائمة الإضافية"
+              aria-expanded={showHeaderMenu}
+              onClick={() => {
+                setShowHeaderMenu((v) => !v);
+                setMenuChatId(null);
+                setFabOpen(false);
+              }}
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-[#F0F2F5] dark:hover:bg-[#202C33] transition-colors cursor-pointer"
+            >
+              <MoreVertical className="w-5 h-5" aria-hidden="true" />
+            </button>
+
+            {showHeaderMenu && (
+              <div
+                role="menu"
+                className="absolute left-0 top-12 z-30 w-52 rounded-xl bg-white dark:bg-[#233138] shadow-xl border border-[#E9EDEF] dark:border-[#374248] py-1.5 text-sm"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onOpenNewGroup();
+                    setShowHeaderMenu(false);
+                  }}
+                  className="w-full px-4 py-2.5 text-right flex items-center gap-2.5 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+                >
+                  <Users className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+                  <span>مجموعة جديدة</span>
+                </button>
+                {onOpenNewChannel && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      onOpenNewChannel();
+                      setShowHeaderMenu(false);
+                    }}
+                    className="w-full px-4 py-2.5 text-right flex items-center gap-2.5 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+                  >
+                    <Radio className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+                    <span>قناة إخبارية جديدة</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onOpenBroadcast();
+                    setShowHeaderMenu(false);
+                  }}
+                  className="w-full px-4 py-2.5 text-right flex items-center gap-2.5 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+                >
+                  <Megaphone className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+                  <span>رسالة بث جماعية</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onOpenCommunities();
+                    setShowHeaderMenu(false);
+                  }}
+                  className="w-full px-4 py-2.5 text-right flex items-center gap-2.5 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+                >
+                  <Users className="w-4 h-4 text-[#54656F] dark:text-[#AEBAC1]" aria-hidden="true" />
+                  <span>المجتمعات والقنوات</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onOpenStarred();
+                    setShowHeaderMenu(false);
+                  }}
+                  className="w-full px-4 py-2.5 text-right flex items-center gap-2.5 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+                >
+                  <Star className="w-4 h-4 text-amber-400" aria-hidden="true" />
+                  <span>الرسائل المميزة بنجمة</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onOpenOmarAddons();
+                    setShowHeaderMenu(false);
+                  }}
+                  className="w-full px-4 py-2.5 text-right flex items-center gap-2.5 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[var(--wa-accent-strong)] font-semibold cursor-pointer"
+                >
+                  <Palette className="w-4 h-4" aria-hidden="true" />
+                  <span>ثيمات وإضافات عمر</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
+      {/* Optional DND Active Banner */}
+      {dndMode && (
+        <div className="px-4 py-2 bg-amber-500/12 border-b border-amber-500/20 flex items-center justify-between text-xs text-amber-800 dark:text-amber-300 shrink-0">
+          <span className="flex items-center gap-1.5 font-medium">
+            <Plane className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>وضع عدم الإزعاج مفعّل — الإشعارات مكتومة</span>
+          </span>
+          <button
+            type="button"
+            onClick={onToggleDndMode}
+            className="font-bold underline cursor-pointer"
+          >
+            إيقاف
+          </button>
+        </div>
+      )}
+
       {/* Search Bar */}
-      <div className="px-3 pb-2.5 shrink-0">
-        <div className="relative flex items-center bg-[#F0F2F5] dark:bg-[#202C33] rounded-lg px-3 h-9.5">
+      <div className="px-3 pt-2.5 pb-2 shrink-0">
+        <div className="relative flex items-center bg-[#F0F2F5] dark:bg-[#202C33] rounded-xl px-3 h-10">
           <Search className="w-4 h-4 text-[#54656F] dark:text-[#8696A0] shrink-0 ml-2.5" aria-hidden="true" />
           <input
             type="search"
@@ -140,9 +344,58 @@ export function ChatListPane({
         </div>
       </div>
 
+      {/* Omar Stories Tray (Instagram/WhatsApp Omar Style) */}
+      {!showArchived && showStoriesTray && (
+        <div className="px-3 pb-2.5 shrink-0">
+          <div className="flex items-center gap-3 overflow-x-auto no-scrollbar py-1">
+            <button
+              type="button"
+              onClick={() => onOpenStatusTab()}
+              className="flex flex-col items-center gap-1 shrink-0 w-14 cursor-pointer group"
+            >
+              <div className="relative">
+                <div className="p-0.5 rounded-full border-2 border-dashed border-[var(--wa-accent)]">
+                  <Avatar src={currentUser.avatarUrl} name={currentUser.displayName} size="md" />
+                </div>
+                <span className="absolute -bottom-0.5 -left-0.5 w-4.5 h-4.5 rounded-full bg-[var(--wa-accent)] text-white flex items-center justify-center ring-2 ring-white dark:ring-[#111B21]">
+                  <Plus className="w-3 h-3" aria-hidden="true" />
+                </span>
+              </div>
+              <span className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate w-full text-center">
+                حالتي
+              </span>
+            </button>
+
+            {uniqueStoryAuthors
+              .filter((st) => st.authorId !== myUid)
+              .map((st) => (
+                <button
+                  key={st.id}
+                  type="button"
+                  onClick={() => onOpenStatusTab(st.authorId)}
+                  className="flex flex-col items-center gap-1 shrink-0 w-14 cursor-pointer"
+                >
+                  <div
+                    className={`p-0.5 rounded-full border-2 ${
+                      st.viewedByMe
+                        ? 'border-[#8696A0]/50'
+                        : 'border-[var(--wa-accent)]'
+                    }`}
+                  >
+                    <Avatar src={st.authorAvatar} name={st.authorName} size="md" />
+                  </div>
+                  <span className="text-[11px] font-medium text-[#111B21] dark:text-[#E9EDEF] truncate w-full text-center">
+                    {st.authorName.split(' ')[0]}
+                  </span>
+                </button>
+              ))}
+          </div>
+        </div>
+      )}
+
       {/* Filter Segmented Controls */}
       {!showArchived && (
-        <div className="px-3 pb-2.5 flex items-center gap-1.5 overflow-x-auto shrink-0">
+        <div className="px-3 pb-2.5 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
           {filterButtons.map((btn) => {
             const active = filter === btn.id;
             return (
@@ -150,13 +403,17 @@ export function ChatListPane({
                 key={btn.id}
                 type="button"
                 onClick={() => onChangeFilter(btn.id)}
-                className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 flex items-center gap-1 cursor-pointer ${
                   active
-                    ? 'bg-[#D9FDD3] dark:bg-[#0A332C] text-[#008069] dark:text-[#06CF9C]'
+                    ? 'bg-[var(--wa-accent-soft)] text-[var(--wa-accent-strong)] font-semibold'
                     : 'bg-[#F0F2F5] dark:bg-[#202C33] text-[#54656F] dark:text-[#8696A0] hover:bg-[#E9EDEF] dark:hover:bg-[#2A3942]'
                 }`}
               >
-                {btn.label}
+                {btn.id === 'locked' && <Lock className="w-3 h-3" aria-hidden="true" />}
+                <span>{btn.label}</span>
+                {typeof btn.count === 'number' && btn.count > 0 && (
+                  <span className="font-mono-code text-[10px]">({btn.count})</span>
+                )}
               </button>
             );
           })}
@@ -171,28 +428,30 @@ export function ChatListPane({
           className="w-full px-4 py-3 flex items-center justify-between border-b border-[#F0F2F5] dark:border-[#222D34] hover:bg-[#F5F6F6] dark:hover:bg-[#202C33] transition-colors cursor-pointer shrink-0"
         >
           <div className="flex items-center gap-4">
-            <div className="w-9 h-9 rounded-full flex items-center justify-center text-[#00A884]">
+            <div className="w-9 h-9 rounded-full flex items-center justify-center text-[var(--wa-accent)]">
               <Archive className="w-5 h-5" aria-hidden="true" />
             </div>
             <span className="text-sm font-medium text-[#111B21] dark:text-[#E9EDEF]">المؤرشفة</span>
           </div>
-          <span className="text-xs font-semibold text-[#00A884] font-mono-code">{archivedCount}</span>
+          <span className="text-xs font-semibold text-[var(--wa-accent)] font-mono-code">{archivedCount}</span>
         </button>
       )}
 
       {/* Chat List */}
-      <div className="flex-1 overflow-y-auto pb-16 md:pb-2">
+      <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden pb-24 md:pb-16">
         {chats.length === 0 ? (
           <div className="px-6 py-14 text-center">
             <p className="text-sm font-medium text-[#54656F] dark:text-[#8696A0]">
-              لا توجد محادثات مطابقة للفلتر الحالي
+              {filter === 'locked'
+                ? 'لا توجد محادثات مقفلة حالياً'
+                : 'لا توجد محادثات مطابقة للفلتر الحالي'}
             </p>
             <button
               type="button"
-              onClick={onOpenNewChat}
-              className="mt-4 px-4 py-2 rounded-full bg-[#00A884] text-white text-xs font-semibold hover:bg-[#008069] transition-colors cursor-pointer"
+              onClick={filter === 'locked' ? () => onChangeFilter('all') : onOpenNewChat}
+              className="mt-4 px-4 py-2 rounded-full bg-[var(--wa-accent)] text-white text-xs font-semibold hover:brightness-95 transition-all cursor-pointer"
             >
-              بدء محادثة مشفرة جديدة
+              {filter === 'locked' ? 'عرض جميع الدردشات' : 'بدء محادثة مشفرة جديدة'}
             </button>
           </div>
         ) : (
@@ -200,9 +459,13 @@ export function ChatListPane({
             {chats.map((chat) => {
               const isSelected = selectedChatId === chat.id;
               const isMine = chat.lastMessageSenderId === myUid;
+              const isLocked = lockedChatIds.includes(chat.id);
 
               return (
-                <li key={chat.id} className="relative group">
+                <li
+                  key={chat.id}
+                  className={`relative group ${menuChatId === chat.id ? 'z-20' : ''}`}
+                >
                   <button
                     type="button"
                     onClick={() => {
@@ -225,13 +488,16 @@ export function ChatListPane({
 
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-[15px] font-semibold text-[#111B21] dark:text-[#E9EDEF] truncate">
-                          {chat.title}
+                        <span className="text-[15px] font-semibold text-[#111B21] dark:text-[#E9EDEF] truncate flex items-center gap-1.5">
+                          <span className="truncate">{chat.title}</span>
+                          {isLocked && (
+                            <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" aria-label="محادثة مقفلة" />
+                          )}
                         </span>
                         <span
                           className={`text-[11px] font-mono-code whitespace-nowrap shrink-0 ${
                             chat.unreadCount > 0
-                              ? 'text-[#00A884] font-semibold'
+                              ? 'text-[var(--wa-accent)] font-semibold'
                               : 'text-[#667781] dark:text-[#8696A0]'
                           }`}
                         >
@@ -244,7 +510,7 @@ export function ChatListPane({
                           {isMine && (
                             <span className="shrink-0">
                               {chat.lastMessageStatus === 'read' ? (
-                                <CheckCheck className="w-4 h-4 text-[#53BDEB]" aria-label="مقروءة" />
+                                <CheckCheck className="w-4 h-4 text-[#53BDEB]" aria-label="تمت القراءة والمشاهدة" />
                               ) : chat.lastMessageStatus === 'delivered' ? (
                                 <CheckCheck className="w-4 h-4 text-[#8696A0]" aria-label="تم الاستلام" />
                               ) : (
@@ -253,8 +519,10 @@ export function ChatListPane({
                             </span>
                           )}
                           <span className="truncate">
-                            {chat.isTyping ? (
-                              <span className="text-[#00A884] font-medium">يكتب الآن...</span>
+                            {isLocked ? (
+                              'محادثة مقفلة برمز سري'
+                            ) : chat.isTyping ? (
+                              <span className="text-[var(--wa-accent)] font-medium">يكتب الآن...</span>
                             ) : (
                               chat.lastMessagePreview
                             )}
@@ -263,7 +531,7 @@ export function ChatListPane({
 
                         <div className="flex items-center gap-1.5 shrink-0">
                           {chat.favorite && (
-                            <Heart className="w-3.5 h-3.5 text-[#00A884] fill-[#00A884]" aria-label="مفضلة" />
+                            <Heart className="w-3.5 h-3.5 text-[var(--wa-accent)] fill-[var(--wa-accent)]" aria-label="مفضلة" />
                           )}
                           {chat.muted && (
                             <VolumeX className="w-3.5 h-3.5 text-[#8696A0]" aria-label="مكتومة" />
@@ -272,7 +540,7 @@ export function ChatListPane({
                             <Pin className="w-3.5 h-3.5 text-[#8696A0] rotate-45" aria-label="مثبتة" />
                           )}
                           {chat.unreadCount > 0 && (
-                            <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-[#00A884] text-white text-[11px] font-bold flex items-center justify-center font-mono-code">
+                            <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-[var(--wa-accent)] text-white text-[11px] font-bold flex items-center justify-center font-mono-code">
                               {chat.unreadCount}
                             </span>
                           )}
@@ -282,23 +550,26 @@ export function ChatListPane({
                   </button>
 
                   {/* Quick-action menu button */}
-                  <button
-                    type="button"
-                    aria-label={`خيارات المحادثة ${chat.title}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setMenuChatId(menuChatId === chat.id ? null : chat.id);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 focus:opacity-100 absolute left-2 top-8 w-7 h-7 rounded-full bg-white/90 dark:bg-[#202C33] shadow-sm flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:text-[#111B21] dark:hover:text-white transition-opacity cursor-pointer"
-                  >
-                    <MoreVertical className="w-4 h-4" aria-hidden="true" />
-                  </button>
-
-                  {menuChatId === chat.id && (
-                    <div
-                      role="menu"
-                      className="absolute left-3 top-14 z-20 w-44 rounded-xl bg-white dark:bg-[#233138] shadow-lg border border-[#E9EDEF] dark:border-[#374248] py-1.5 text-sm"
+                  <div data-floating-menu="chat-list" className="contents">
+                    <button
+                      type="button"
+                      aria-label={`خيارات المحادثة ${chat.title}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMenuChatId((curr) => (curr === chat.id ? null : chat.id));
+                        setShowHeaderMenu(false);
+                        setFabOpen(false);
+                      }}
+                      className="opacity-80 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 absolute left-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-white/95 dark:bg-[#202C33] ring-1 ring-[#E9EDEF] dark:ring-[#374248] shadow-sm flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:text-[#111B21] dark:hover:text-white transition-opacity cursor-pointer"
                     >
+                      <MoreVertical className="w-4 h-4" aria-hidden="true" />
+                    </button>
+
+                    {menuChatId === chat.id && (
+                      <div
+                        role="menu"
+                        className="absolute left-3 top-14 z-30 w-48 rounded-xl bg-white dark:bg-[#233138] shadow-lg border border-[#E9EDEF] dark:border-[#374248] py-1.5 text-sm"
+                      >
                       <button
                         type="button"
                         role="menuitem"
@@ -325,6 +596,27 @@ export function ChatListPane({
                         type="button"
                         role="menuitem"
                         onClick={() => {
+                          onToggleLockChat(chat.id);
+                          setMenuChatId(null);
+                        }}
+                        className="w-full px-4 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+                      >
+                        {isLocked ? (
+                          <>
+                            <Unlock className="w-3.5 h-3.5 text-amber-500" aria-hidden="true" />
+                            <span>إلغاء قفل المحادثة</span>
+                          </>
+                        ) : (
+                          <>
+                            <Lock className="w-3.5 h-3.5 text-amber-500" aria-hidden="true" />
+                            <span>قفل المحادثة برمز</span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
                           onToggleMute(chat.id);
                           setMenuChatId(null);
                         }}
@@ -343,13 +635,99 @@ export function ChatListPane({
                       >
                         {chat.archived ? 'إلغاء الأرشفة' : 'أرشفة المحادثة'}
                       </button>
-                    </div>
-                  )}
+                      </div>
+                    )}
+                  </div>
                 </li>
               );
             })}
           </ul>
         )}
+      </div>
+
+      {/* Expandable Omar Floating Action Button (FAB) */}
+      <div
+        data-floating-menu="chat-list"
+        className="absolute bottom-20 left-4 md:bottom-5 md:left-4 z-20 flex flex-col items-start gap-2"
+      >
+        {fabOpen && (
+          <div className="flex flex-col items-start gap-2 mb-1">
+            <button
+              type="button"
+              onClick={() => {
+                setFabOpen(false);
+                onOpenOmarAddons();
+              }}
+              className="px-3.5 py-2 rounded-full bg-white dark:bg-[#233138] text-[#111B21] dark:text-[#E9EDEF] shadow-lg border border-[#E9EDEF] dark:border-[#374248] text-xs font-semibold flex items-center gap-2 hover:brightness-95 cursor-pointer"
+            >
+              <Palette className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+              <span>ثيمات وإضافات عمر</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFabOpen(false);
+                onOpenBroadcast();
+              }}
+              className="px-3.5 py-2 rounded-full bg-white dark:bg-[#233138] text-[#111B21] dark:text-[#E9EDEF] shadow-lg border border-[#E9EDEF] dark:border-[#374248] text-xs font-semibold flex items-center gap-2 hover:brightness-95 cursor-pointer"
+            >
+              <Megaphone className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+              <span>رسالة بث جماعية</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFabOpen(false);
+                onOpenStatusTab();
+              }}
+              className="px-3.5 py-2 rounded-full bg-white dark:bg-[#233138] text-[#111B21] dark:text-[#E9EDEF] shadow-lg border border-[#E9EDEF] dark:border-[#374248] text-xs font-semibold flex items-center gap-2 hover:brightness-95 cursor-pointer"
+            >
+              <Camera className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+              <span>نشر حالة جديدة</span>
+            </button>
+            {onOpenNewChannel && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFabOpen(false);
+                  onOpenNewChannel();
+                }}
+                className="px-3.5 py-2 rounded-full bg-white dark:bg-[#233138] text-[#111B21] dark:text-[#E9EDEF] shadow-lg border border-[#E9EDEF] dark:border-[#374248] text-xs font-semibold flex items-center gap-2 hover:brightness-95 cursor-pointer"
+              >
+                <Radio className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+                <span>قناة إخبارية جديدة</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setFabOpen(false);
+                onOpenNewGroup();
+              }}
+              className="px-3.5 py-2 rounded-full bg-white dark:bg-[#233138] text-[#111B21] dark:text-[#E9EDEF] shadow-lg border border-[#E9EDEF] dark:border-[#374248] text-xs font-semibold flex items-center gap-2 hover:brightness-95 cursor-pointer"
+            >
+              <Users className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+              <span>مجموعة جديدة</span>
+            </button>
+          </div>
+        )}
+
+        <button
+          type="button"
+          aria-label={fabOpen ? 'إغلاق الإجراءات السريعة' : 'الإجراءات السريعة'}
+          aria-expanded={fabOpen}
+          onClick={() => {
+            setFabOpen((v) => !v);
+            setShowHeaderMenu(false);
+            setMenuChatId(null);
+          }}
+          className="w-13 h-13 rounded-2xl bg-[var(--wa-accent)] text-white shadow-lg flex items-center justify-center hover:brightness-95 active:scale-95 transition-all cursor-pointer"
+        >
+          <Plus
+            className={`w-6 h-6 transition-transform duration-200 ${fabOpen ? 'rotate-45' : ''}`}
+            aria-hidden="true"
+          />
+        </button>
       </div>
     </section>
   );

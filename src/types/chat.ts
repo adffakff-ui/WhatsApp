@@ -1,9 +1,44 @@
 export type ThemeMode = 'light' | 'dark';
-export type NavTab = 'chats' | 'status' | 'communities' | 'calls' | 'starred' | 'archived' | 'settings';
-export type ChatFilter = 'all' | 'unread' | 'favorites' | 'groups';
+export type OmarThemeId = 'emerald' | 'burgundy' | 'blue' | 'gold' | 'pink';
+export type ChatWallpaperId = 'pattern' | 'mint' | 'slate' | 'sand' | 'velvet';
+export type BubbleStyleId = 'classic' | 'modern' | 'rounded';
+export type FontSizePref = 'sm' | 'md' | 'lg';
+
+export type NavTab =
+  | 'chats'
+  | 'status'
+  | 'communities'
+  | 'calls'
+  | 'starred'
+  | 'archived'
+  | 'omar'
+  | 'settings';
+export type ChatFilter = 'all' | 'unread' | 'favorites' | 'groups' | 'locked';
 export type RightPanelMode = 'none' | 'info' | 'search' | 'encryption';
 export type MessageType = 'text' | 'image' | 'voice' | 'file' | 'poll' | 'system';
 export type VisibilityScope = 'everyone' | 'contacts' | 'nobody';
+export type CallQualityPreset = 'ultra' | 'balanced' | 'saver';
+
+export interface OmarSettings {
+  omarTheme: OmarThemeId;
+  wallpaper: ChatWallpaperId;
+  bubbleStyle: BubbleStyleId;
+  fontSize: FontSizePref;
+  freezeLastSeen: boolean;
+  hideViewStatus: boolean;
+  antiDeleteMessages: boolean;
+  antiDeleteStatuses: boolean;
+  hideReadTicks: boolean;
+  hideTypingIndicator: boolean;
+  autoReplyEnabled: boolean;
+  autoReplyMessage: string;
+  quickTemplates: string[];
+  lockedChatIds: string[];
+  chatLockPin: string;
+  appLockOnLaunch?: boolean;
+  dndMode: boolean;
+  showStoriesTray: boolean;
+}
 
 export interface PrivacySettings {
   readReceipts: boolean;
@@ -34,6 +69,7 @@ export interface PollOption {
 export interface MessagePayload {
   text: string;
   mediaUrl?: string;
+  fileDataUrl?: string;
   fileName?: string;
   fileSizeLabel?: string;
   voiceDurationSec?: number;
@@ -42,6 +78,8 @@ export interface MessagePayload {
   pollOptions?: PollOption[];
   replyToText?: string;
   replyToSender?: string;
+  forwarded?: boolean;
+  edited?: boolean;
 }
 
 export interface DecryptedMessage {
@@ -55,11 +93,14 @@ export interface DecryptedMessage {
   iv: string;
   algorithm: 'AES-GCM-256';
   replyToId?: string;
+  deliveredToIds?: string[];
+  readByIds?: string[];
+  pollVotes?: Record<string, string>;
   reactions: Record<string, string[]>; // emoji -> array of uids
   reactionsCount: number;
   starredBy: string[];
   isDeleted: boolean;
-  status: 'sent' | 'delivered' | 'read';
+  status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
   createdAtMs: number;
 }
 
@@ -74,6 +115,7 @@ export interface ChatRoom {
   peerPublicKeyJwk?: string;
   isOnline?: boolean;
   isTyping?: boolean;
+  typingMemberNames?: string[];
   memberIds: string[];
   pinned: boolean;
   archived: boolean;
@@ -81,10 +123,14 @@ export interface ChatRoom {
   favorite: boolean;
   unreadCount: number;
   disappearingSeconds: number;
+  adminOnlyPost?: boolean;
+  inviteCode?: string;
   lastMessagePreview: string;
   lastMessageType: MessageType;
   lastMessageSenderId: string;
   lastMessageStatus: 'sent' | 'delivered' | 'read';
+  lastMessageDeliveredToIds?: string[];
+  lastMessageReadByIds?: string[];
   lastMessageAtMs: number;
   roomSeed: string;
 }
@@ -94,11 +140,14 @@ export interface StatusItem {
   authorId: string;
   authorName: string;
   authorAvatar: string;
-  type: 'text' | 'image';
+  type: 'text' | 'image' | 'video';
   content: string;
   backgroundColor: string;
   fontStyle?: 'display' | 'sans' | 'mono';
   mediaUrl?: string;
+  posterUrl?: string;
+  durationSec?: number;
+  pinned?: boolean;
   viewerIds: string[];
   viewedByIds: string[];
   viewCount: number;

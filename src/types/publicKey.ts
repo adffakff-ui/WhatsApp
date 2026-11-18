@@ -67,7 +67,7 @@ export async function validatePublicKeyJwk(value: unknown): Promise<PublicKeyJwk
       JSON.parse(parsed) as JsonWebKey,
       { name: 'ECDH', namedCurve: 'P-256' },
       false,
-      ['deriveKey']
+      []
     );
     return parsed;
   } catch {

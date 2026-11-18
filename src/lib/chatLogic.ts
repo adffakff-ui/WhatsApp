@@ -9,18 +9,65 @@ import type {
 
 export const STATUS_TTL_MS = 24 * 60 * 60 * 1000;
 export const MAX_STATUS_MEDIA_BYTES = 262144;
+export const MAX_STATUS_VIDEO_SECONDS = 180; // 3 minutes max video clip duration
+
+export function validateStatusVideoDuration(durationSeconds: number): {
+  valid: boolean;
+  clampedSeconds: number;
+  error?: string;
+} {
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    return {
+      valid: false,
+      clampedSeconds: 0,
+      error: 'تعذر قراءة مدة مقطع الفيديو المختار.'
+    };
+  }
+  const rounded = Math.ceil(durationSeconds);
+  if (rounded > MAX_STATUS_VIDEO_SECONDS) {
+    return {
+      valid: false,
+      clampedSeconds: MAX_STATUS_VIDEO_SECONDS,
+      error: `الحد الأقصى لحالة الفيديو هو 3 دقائق (180 ثانية). مدة المقطع المختار: ${formatMediaSeconds(rounded)}.`
+    };
+  }
+  return {
+    valid: true,
+    clampedSeconds: Math.max(1, Math.min(MAX_STATUS_VIDEO_SECONDS, rounded))
+  };
+}
+
+export function formatMediaSeconds(totalSeconds: number): string {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+export function buildChannelInviteCode(roomId: string): string {
+  const clean = roomId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  return `WSL-${clean.slice(-8) || 'CHAN2026'}`;
+}
 
 export function filterAndSortChats(
   chats: ChatRoom[],
   filter: ChatFilter,
   searchQuery: string,
-  showArchived: boolean
+  showArchived: boolean,
+  lockedChatIds: string[] = []
 ): ChatRoom[] {
   const normalizedQuery = searchQuery.trim().toLowerCase();
 
   return chats
     .filter((chat) => {
       if (showArchived ? !chat.archived : chat.archived) return false;
+      const isLocked = lockedChatIds.includes(chat.id);
+      if (filter === 'locked') {
+        if (!isLocked) return false;
+      } else if (isLocked && !normalizedQuery) {
+        // Locked chats stay neatly tucked in the Locked tab unless searched
+        return false;
+      }
       if (filter === 'unread' && chat.unreadCount === 0) return false;
       if (filter === 'favorites' && !chat.favorite) return false;
       if (filter === 'groups' && chat.type === 'direct') return false;
@@ -158,7 +205,32 @@ export function filterActiveStatuses(
 ): StatusItem[] {
   return statuses
     .filter((st) => !isStatusExpired(st, nowMs))
-    .sort((a, b) => b.createdAtMs - a.createdAtMs);
+    .sort((a, b) => {
+      if (Boolean(a.pinned) !== Boolean(b.pinned)) {
+        return a.pinned ? -1 : 1;
+      }
+      return b.createdAtMs - a.createdAtMs;
+    });
+}
+
+export function sortStatusesWithPinned(
+  statuses: StatusItem[],
+  pinnedIds: string[],
+  nowMs = Date.now()
+): StatusItem[] {
+  const pinnedSet = new Set(pinnedIds);
+  return statuses
+    .filter((st) => !isStatusExpired(st, nowMs))
+    .map((st) => ({
+      ...st,
+      pinned: Boolean(st.pinned) || pinnedSet.has(st.id)
+    }))
+    .sort((a, b) => {
+      if (Boolean(a.pinned) !== Boolean(b.pinned)) {
+        return a.pinned ? -1 : 1;
+      }
+      return b.createdAtMs - a.createdAtMs;
+    });
 }
 
 export function formatRemainingStatusTime(
@@ -310,4 +382,77 @@ export function extractChatSharedAssets(messages: DecryptedMessage[]): ChatShare
     docs,
     totalCount: media.length + links.length + docs.length
   };
+}
+
+/**
+ * Generates a deterministic Firestore-safe direct P2P chat document ID
+ * matching firestore.rules `isValidId` (^[a-zA-Z0-9_\-]+$, max 128 chars).
+ */
+export function buildDirectChatId(uidA: string, uidB: string): string {
+  const safeA = uidA.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 56) || 'u1';
+  const safeB = uidB.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 56) || 'u2';
+  const sorted = [safeA, safeB].sort();
+  return `direct_${sorted[0]}_${sorted[1]}`.slice(0, 128);
+}
+
+export function isRemoteFirebaseUid(uid?: string | null): boolean {
+  if (!uid) return false;
+  return (
+    !uid.startsWith('demo_') &&
+    !uid.startsWith('contact_') &&
+    !uid.startsWith('peer_') &&
+    !uid.startsWith('gcontact_')
+  );
+}
+
+/**
+ * Resolves message tick status from Firestore receipt arrays:
+ * - 'read' (2 blue ticks) if at least one peer other than senderId has read it.
+ * - 'delivered' (2 gray ticks) if at least one peer has received it on their device.
+ * - 'sent' (1 gray tick) if stored on server but not yet received by any peer.
+ */
+export function resolveMessageReceiptStatus(
+  senderId: string,
+  deliveredToIds?: string[],
+  readByIds?: string[],
+  fallbackStatus: 'sent' | 'delivered' | 'read' = 'sent'
+): 'sent' | 'delivered' | 'read' {
+  const hasReceiptTracking = Array.isArray(deliveredToIds) || Array.isArray(readByIds);
+  if (!hasReceiptTracking) {
+    return fallbackStatus;
+  }
+  const hasPeerRead = Array.isArray(readByIds) && readByIds.some((id) => Boolean(id) && id !== senderId);
+  if (hasPeerRead) return 'read';
+
+  const hasPeerDelivered =
+    Array.isArray(deliveredToIds) && deliveredToIds.some((id) => Boolean(id) && id !== senderId);
+  if (hasPeerDelivered) return 'delivered';
+
+  return 'sent';
+}
+
+export function mergePollVotesMap(
+  options: PollOption[],
+  pollVotes?: Record<string, string>
+): PollOption[] {
+  if (!pollVotes) return options;
+  return options.map((opt) => {
+    const mappedVoters = Object.entries(pollVotes)
+      .filter(([, selectedOptId]) => selectedOptId === opt.id)
+      .map(([uid]) => uid);
+    return {
+      ...opt,
+      voterIds: Array.from(new Set(mappedVoters))
+    };
+  });
+}
+
+export function filterExpiredDisappearingMessages(
+  messages: DecryptedMessage[],
+  disappearingSeconds: number,
+  nowMs = Date.now()
+): DecryptedMessage[] {
+  if (!disappearingSeconds || disappearingSeconds <= 0) return messages;
+  const maxAgeMs = disappearingSeconds * 1000;
+  return messages.filter((msg) => nowMs - msg.createdAtMs < maxAgeMs);
 }

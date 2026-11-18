@@ -2,7 +2,8 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
-  :root {
+  :root,
+  html[data-omar-theme="emerald"] {
     --wa-app-bg: #EAE6DF;
     --wa-panel-bg: #FFFFFF;
     --wa-sidebar-rail: #F0F2F5;
@@ -17,10 +18,40 @@
     --wa-text-secondary: #54656F;
     --wa-accent: #00A884;
     --wa-accent-strong: #008069;
+    --wa-accent-soft: #D9FDD3;
     --wa-tick-read: #53BDEB;
   }
 
-  .dark {
+  html[data-omar-theme="burgundy"] {
+    --wa-accent: #9D174D;
+    --wa-accent-strong: #800020;
+    --wa-accent-soft: #FCE7F3;
+    --wa-outgoing-bg: #FCE7F3;
+  }
+
+  html[data-omar-theme="blue"] {
+    --wa-accent: #0284C7;
+    --wa-accent-strong: #0369A1;
+    --wa-accent-soft: #E0F2FE;
+    --wa-outgoing-bg: #E0F2FE;
+  }
+
+  html[data-omar-theme="gold"] {
+    --wa-accent: #D97706;
+    --wa-accent-strong: #B45309;
+    --wa-accent-soft: #FEF3C7;
+    --wa-outgoing-bg: #FEF3C7;
+  }
+
+  html[data-omar-theme="pink"] {
+    --wa-accent: #DB2777;
+    --wa-accent-strong: #BE185D;
+    --wa-accent-soft: #FCE7F3;
+    --wa-outgoing-bg: #FCE7F3;
+  }
+
+  .dark,
+  html.dark[data-omar-theme="emerald"] {
     --wa-app-bg: #0C1317;
     --wa-panel-bg: #111B21;
     --wa-sidebar-rail: #202C33;
@@ -35,12 +66,46 @@
     --wa-text-secondary: #8696A0;
     --wa-accent: #00A884;
     --wa-accent-strong: #06CF9C;
+    --wa-accent-soft: #0A332C;
     --wa-tick-read: #53BDEB;
   }
 
+  html.dark[data-omar-theme="burgundy"] {
+    --wa-accent: #BE185D;
+    --wa-accent-strong: #F472B6;
+    --wa-accent-soft: #4C0519;
+    --wa-outgoing-bg: #500724;
+  }
+
+  html.dark[data-omar-theme="blue"] {
+    --wa-accent: #0EA5E9;
+    --wa-accent-strong: #38BDF8;
+    --wa-accent-soft: #0C4A6E;
+    --wa-outgoing-bg: #075985;
+  }
+
+  html.dark[data-omar-theme="gold"] {
+    --wa-accent: #F59E0B;
+    --wa-accent-strong: #FBBF24;
+    --wa-accent-soft: #451A03;
+    --wa-outgoing-bg: #78350F;
+  }
+
+  html.dark[data-omar-theme="pink"] {
+    --wa-accent: #EC4899;
+    --wa-accent-strong: #F472B6;
+    --wa-accent-soft: #500724;
+    --wa-outgoing-bg: #831843;
+  }
+
   html, body, #root {
+    width: 100%;
+    max-width: 100%;
     height: 100%;
+    overflow-x: hidden;
     font-family: 'IBM Plex Sans Arabic', system-ui, -apple-system, sans-serif;
+    overscroll-behavior-y: contain;
+    -webkit-tap-highlight-color: transparent;
   }
 
   h1, h2, h3, .font-display {
@@ -53,8 +118,18 @@
   }
 }
 
+/* Safe area bottom padding for notched phones (iOS / Android) */
+.pb-safe {
+  padding-bottom: max(0.25rem, env(safe-area-inset-bottom));
+}
+
+.pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+
 /* Authentic subtle WhatsApp doodle pattern using pure CSS radial/linear geometry */
-.wa-chat-pattern {
+.wa-chat-pattern,
+.wa-wallpaper-pattern {
   background-color: var(--wa-chat-bg);
   background-image:
     radial-gradient(circle at 24px 24px, rgba(134, 150, 160, 0.08) 1.5px, transparent 0),
@@ -62,12 +137,57 @@
   background-size: 72px 72px;
 }
 
-.dark .wa-chat-pattern {
+.dark .wa-chat-pattern,
+.dark .wa-wallpaper-pattern {
   background-color: var(--wa-chat-bg);
   background-image:
     radial-gradient(circle at 24px 24px, rgba(233, 237, 239, 0.035) 1.5px, transparent 0),
     radial-gradient(circle at 60px 60px, rgba(233, 237, 239, 0.025) 1.2px, transparent 0);
   background-size: 72px 72px;
+}
+
+.wa-wallpaper-mint {
+  background-color: #E3F3EE;
+  background-image: radial-gradient(circle at 18px 18px, rgba(0, 168, 132, 0.08) 1.5px, transparent 0);
+  background-size: 40px 40px;
+}
+.dark .wa-wallpaper-mint {
+  background-color: #071915;
+  background-image: radial-gradient(circle at 18px 18px, rgba(6, 207, 156, 0.06) 1.5px, transparent 0);
+  background-size: 40px 40px;
+}
+
+.wa-wallpaper-slate {
+  background-color: #E2E8F0;
+  background-image: linear-gradient(135deg, rgba(15, 23, 42, 0.03) 25%, transparent 25%);
+  background-size: 32px 32px;
+}
+.dark .wa-wallpaper-slate {
+  background-color: #0F172A;
+  background-image: linear-gradient(135deg, rgba(255, 255, 255, 0.025) 25%, transparent 25%);
+  background-size: 32px 32px;
+}
+
+.wa-wallpaper-sand {
+  background-color: #F5EFE6;
+  background-image: radial-gradient(circle at 20px 20px, rgba(180, 83, 9, 0.07) 1.5px, transparent 0);
+  background-size: 44px 44px;
+}
+.dark .wa-wallpaper-sand {
+  background-color: #1C1610;
+  background-image: radial-gradient(circle at 20px 20px, rgba(245, 158, 11, 0.05) 1.5px, transparent 0);
+  background-size: 44px 44px;
+}
+
+.wa-wallpaper-velvet {
+  background-color: #F9EBF0;
+  background-image: radial-gradient(circle at 22px 22px, rgba(157, 23, 77, 0.07) 1.5px, transparent 0);
+  background-size: 46px 46px;
+}
+.dark .wa-wallpaper-velvet {
+  background-color: #190910;
+  background-image: radial-gradient(circle at 22px 22px, rgba(244, 114, 182, 0.05) 1.5px, transparent 0);
+  background-size: 46px 46px;
 }
 
 /* Custom sleek scrollbars */
@@ -87,4 +207,13 @@
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(134, 150, 160, 0.55);
+}
+
+/* Hide scrollbars cleanly for horizontal stories/filter strips on mobile */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }

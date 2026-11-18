@@ -45,7 +45,11 @@ export async function uploadEncryptedMedia(
   const key = await deriveRoomKeyFromSeed(chatId);
   const plaintext = await file.arrayBuffer();
   const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv, additionalData: mediaAad(chatId, mediaId) },
+    {
+      name: 'AES-GCM',
+      iv: iv as unknown as BufferSource,
+      additionalData: mediaAad(chatId, mediaId) as unknown as BufferSource
+    },
     key,
     plaintext
   );
@@ -80,9 +84,13 @@ export async function downloadEncryptedMedia(
   const encrypted = await getBytes(ref(getStorage(), media.path), MAX_MEDIA_BYTES + 16);
   const iv = new Uint8Array(media.iv.match(/.{2}/g)!.map((part) => parseInt(part, 16)));
   const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv, additionalData: mediaAad(chatId, media.mediaId) },
+    {
+      name: 'AES-GCM',
+      iv: iv as unknown as BufferSource,
+      additionalData: mediaAad(chatId, media.mediaId) as unknown as BufferSource
+    },
     key,
-    encrypted
+    encrypted as unknown as BufferSource
   );
   return new Blob([plaintext], { type: mimeType || 'application/octet-stream' });
 }

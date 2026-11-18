@@ -5,25 +5,31 @@ import appletConfig from '../../firebase-applet-config.json';
 
 // Firebase web configuration is public. Production deployments can override it
 // with Vercel environment variables; the checked-in applet config remains a
-// development fallback so existing AI Studio previews continue to work.
+const metaEnv =
+  typeof import.meta !== 'undefined'
+    ? (import.meta as unknown as { env?: Record<string, string> }).env
+    : undefined;
+
 const firebaseConfig = {
   ...appletConfig,
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || appletConfig.apiKey,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || appletConfig.authDomain,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || appletConfig.projectId,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || appletConfig.appId,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || appletConfig.storageBucket,
+  apiKey: metaEnv?.VITE_FIREBASE_API_KEY || appletConfig.apiKey,
+  authDomain: metaEnv?.VITE_FIREBASE_AUTH_DOMAIN || appletConfig.authDomain,
+  projectId: metaEnv?.VITE_FIREBASE_PROJECT_ID || appletConfig.projectId,
+  appId: metaEnv?.VITE_FIREBASE_APP_ID || appletConfig.appId,
+  storageBucket: metaEnv?.VITE_FIREBASE_STORAGE_BUCKET || appletConfig.storageBucket,
   messagingSenderId:
-    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || appletConfig.messagingSenderId,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || appletConfig.measurementId,
-  firestoreDatabaseId:
-    import.meta.env.VITE_FIREBASE_DATABASE_ID || appletConfig.firestoreDatabaseId
+    metaEnv?.VITE_FIREBASE_MESSAGING_SENDER_ID || appletConfig.messagingSenderId,
+  measurementId: metaEnv?.VITE_FIREBASE_MEASUREMENT_ID || appletConfig.measurementId
 };
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = getFirestore(app);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.addScope('https://www.googleapis.com/auth/contacts');
+googleProvider.addScope('https://www.googleapis.com/auth/contacts.readonly');
+googleProvider.addScope('https://www.googleapis.com/auth/user.emails.read');
+googleProvider.addScope('https://www.googleapis.com/auth/user.phonenumbers.read');
 
 export enum OperationType {
   CREATE = 'create',
@@ -77,14 +83,4 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
-    }
-  }
-}
 
-void testConnection();

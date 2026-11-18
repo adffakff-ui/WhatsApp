@@ -7,6 +7,7 @@
 4. **Atomicity Guarantee**: Creating `/chats/{chatId}` enforces `existsAfter(/databases/$(database)/documents/chats/$(chatId)/members/$(request.auth.uid))` so orphaned chats without an admin member cannot exist.
 5. **Terminal State Locking**: Once a `/calls/{callId}` document transitions to `'ended'`, `'declined'`, or `'missed'`, all further updates are rejected.
 6. **Temporal Integrity & Verified Auth**: All writes require `request.auth.token.email_verified == true` and enforce `createdAt == request.time` / `updatedAt == request.time` with immutable `createdAt` and creator/owner UIDs.
+7. **Scoped Member Action Updates**: Chat members may only acknowledge delivery/read receipts (`deliveredToIds`, `readByIds`), toggle reactions/stars/poll votes, or update their own `isTyping` indicator without mutating message ciphertext, `senderId`, or admin roles.
 
 ## 2. The "Dirty Dozen" Adversarial Payloads
 1. **Unauthenticated Message Read**: `get` on `/chats/chat_1/messages/msg_1` with `auth: null` -> `PERMISSION_DENIED`.
