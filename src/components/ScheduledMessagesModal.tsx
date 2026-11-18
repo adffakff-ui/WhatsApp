@@ -1,14 +1,16 @@
-import { X, Clock, Trash2, Calendar, Send } from 'lucide-react';
-import type { ScheduledMessage } from '../types/chat';
+import { X, Clock, Trash2, Calendar, MessageSquare } from 'lucide-react';
+import type { ScheduledMessage, ChatRoom } from '../types/chat';
 
 interface ScheduledMessagesModalProps {
   scheduledMessages: ScheduledMessage[];
+  chats?: ChatRoom[];
   onCancelSchedule: (msgId: string) => Promise<void>;
   onClose: () => void;
 }
 
 export function ScheduledMessagesModal({
   scheduledMessages,
+  chats = [],
   onCancelSchedule,
   onClose
 }: ScheduledMessagesModalProps) {
@@ -56,13 +58,18 @@ export function ScheduledMessagesModal({
                 dateStyle: 'medium',
                 timeStyle: 'short'
               });
+              const targetChat = chats.find((c) => c.id === m.chatId);
               return (
                 <div
                   key={m.id}
                   className="p-3.5 rounded-xl bg-[#F0F2F5] dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#374248] flex items-start justify-between gap-3"
                 >
                   <div className="space-y-1.5 min-w-0 flex-1">
-                    <p className="text-xs sm:text-sm font-semibold text-[#111B21] dark:text-[#E9EDEF] break-words">
+                    <div className="flex items-center gap-1.5 text-[11px] font-bold text-[var(--wa-accent-strong)]">
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span className="truncate">{targetChat ? targetChat.title : 'محادثة'}</span>
+                    </div>
+                    <p className="text-xs sm:text-sm font-medium text-[#111B21] dark:text-[#E9EDEF] break-words">
                       {m.payload.text}
                     </p>
                     <div className="flex items-center gap-2 text-[11px] text-[#54656F] dark:text-[#8696A0]">

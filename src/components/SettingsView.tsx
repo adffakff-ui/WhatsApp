@@ -206,7 +206,7 @@ export function SettingsView({
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
-                    ثيمات وإضافات عمر المتقدمة
+                    ثيمات وإضافات أكرم المتقدمة
                   </p>
                   <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate">
                     الثيم العنابي، منع حذف الرسائل، قفل الدردشات، والرد التلقائي

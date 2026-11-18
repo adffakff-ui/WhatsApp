@@ -427,16 +427,19 @@ export function AuthScreen({
       <header className="w-full bg-[var(--wa-accent)] dark:bg-[var(--wa-accent-strong)] text-white px-4 sm:px-6 pt-5 pb-28 sm:pb-32 transition-colors">
         <div className="w-full max-w-5xl mx-auto flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-full bg-white/15 flex items-center justify-center shrink-0">
-              <MessageSquareLock className="w-5 h-5" aria-hidden="true" />
-            </div>
+            <img
+              src="/pwa-192x192.png"
+              alt="شعار تواصل"
+              className="w-10 h-10 rounded-xl object-cover shadow-sm shrink-0 border border-white/20"
+              referrerPolicy="no-referrer"
+            />
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="font-display text-lg sm:text-xl font-bold tracking-tight whitespace-nowrap">
                   تواصل · Wasil
                 </span>
                 <span className="hidden sm:inline-block text-[11px] font-medium text-white/85">
-                  إصدار عمر المطوّر
+                  إصدار أكرم المطوّر
                 </span>
               </div>
               <p className="text-[11px] text-white/85 flex items-center gap-1 min-w-0 truncate sm:whitespace-nowrap">
@@ -450,7 +453,7 @@ export function AuthScreen({
           <div className="flex items-center gap-2">
             <div
               role="group"
-              aria-label="ثيمات واتساب عمر الفورية"
+              aria-label="ثيمات واتساب أكرم الفورية"
               className="flex items-center gap-1.5 bg-black/15 px-2.5 py-1.5 rounded-full"
             >
               {OMAR_THEMES.map((t) => {
@@ -574,12 +577,15 @@ export function AuthScreen({
             {step === 'welcome' && (
               <div className="space-y-6">
                 <div className="flex items-start gap-4">
-                  <div className="w-16 h-16 rounded-2xl bg-[var(--wa-accent-soft)] dark:bg-[#202C33] text-[var(--wa-accent)] flex items-center justify-center shrink-0 shadow-xs">
-                    <ShieldCheck className="w-8 h-8" aria-hidden="true" />
-                  </div>
+                  <img
+                    src="/pwa-192x192.png"
+                    alt="شعار تواصل Wasil Messenger"
+                    className="w-16 h-16 rounded-2xl object-cover shadow-md shrink-0 border border-black/10 dark:border-white/10"
+                    referrerPolicy="no-referrer"
+                  />
                   <div className="min-w-0">
                     <h1 className="font-display text-xl sm:text-2xl font-bold text-[#111B21] dark:text-[#E9EDEF] leading-snug">
-                      مرحباً بك في تواصل · نظام واتساب عمر المتكامل
+                      مرحباً بك في تواصل · نظام واتساب أكرم المتكامل
                     </h1>
                     <p className="mt-1.5 text-sm text-[#54656F] dark:text-[#8696A0] leading-relaxed">
                       بنية دخول متكاملة تدعم التحقق عبر رقم الهاتف، البريد الإلكتروني، أو حساب Google مع تشفير فعلي بين الطرفين وثيمات حصرية.
@@ -781,7 +787,7 @@ export function AuthScreen({
                     {phonePhase === 'input' ? (
                       <form onSubmit={handleTriggerPhoneVerifyModal} className="space-y-4">
                         <p className="text-xs text-[#54656F] dark:text-[#8696A0] leading-relaxed">
-                          أدخل رقم هاتفك الدولي للتحقق من هويتك عبر رسالة نصية (SMS OTP) تماماً كما في نظام واتساب عمر الأصلي.
+                          أدخل رقم هاتفك الدولي للتحقق من هويتك عبر رسالة نصية (SMS OTP) تماماً كما في نظام واتساب أكرم الأصلي.
                         </p>
 
                         {/* Country Selector Row */}
@@ -1004,7 +1010,7 @@ export function AuthScreen({
                           required
                           value={registerName}
                           onChange={(e) => setRegisterName(e.target.value)}
-                          placeholder="مثال: عمر الحربي"
+                          placeholder="مثال: أكرم الحربي"
                           className="w-full min-h-[46px] px-4 rounded-xl bg-[#F7F8FA] dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#2A3942] text-sm text-[#111B21] dark:text-[#E9EDEF] focus:outline-none focus:ring-2 focus:ring-[var(--wa-accent)]"
                         />
                       </div>
@@ -1382,7 +1388,7 @@ export function AuthScreen({
                     </div>
                     <div>
                       <p className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF]">
-                        مجموعة عمر الملكية
+                        مجموعة أكرم الملكية
                       </p>
                       <p className="text-[10px] text-[var(--wa-accent)] font-medium">
                         متصل الآن · مشفر تماماً

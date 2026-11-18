@@ -44,7 +44,7 @@ export function NavRail({
     { id: 'calls', label: 'المكالمات', icon: Phone },
     { id: 'starred', label: 'المميزة بنجمة', icon: Star },
     { id: 'archived', label: 'المؤرشفة', icon: Archive, badge: archivedCount },
-    { id: 'omar', label: 'إضافات وثيمات عمر', icon: Palette }
+    { id: 'omar', label: 'إضافات وثيمات أكرم', icon: Palette }
   ];
 
   return (

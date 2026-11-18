@@ -101,6 +101,7 @@ import { SettingsView } from './components/SettingsView';
 import { NewChatModal } from './components/NewChatModal';
 import { CommunitiesView, type SuggestedChannelItem } from './components/CommunitiesView';
 import { StarredView } from './components/StarredView';
+import { ScheduledMessagesModal } from './components/ScheduledMessagesModal';
 import { OmarAddonsView } from './components/OmarAddonsView';
 import { OfflineIndicator } from './components/PWAInstallButton';
 import { Avatar } from './components/Avatar';
@@ -311,6 +312,7 @@ export default function App() {
 
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
+  const [showScheduledListModal, setShowScheduledListModal] = useState(false);
   const [highlightedJump, setHighlightedJump] = useState<{
     chatId: string;
     messageId: string;
@@ -1445,6 +1447,18 @@ export default function App() {
     }
   };
 
+  const handleCancelScheduledMessage = async (msgId: string) => {
+    if (isCloudSynced) {
+      try {
+        await deleteScheduledMessageFromFirestore(msgId);
+      } catch (err) {
+        console.error('Failed to cancel scheduled message in Firestore:', err);
+      }
+    }
+    setScheduledMessages((prev) => prev.filter((m) => m.id !== msgId));
+    showToast('تم إلغاء جدولة الرسالة');
+  };
+
   const handleRetryMessage = async (msg: DecryptedMessage) => {
     const targetChat = chats.find((c) => c.id === msg.chatId);
     if (!targetChat) return;
@@ -2510,6 +2524,8 @@ export default function App() {
                 onJumpToMessage={handleJumpToMessage}
                 onLockAppNow={handleLockAppNow}
                 onSignOut={handleRequestSignOut}
+                onOpenScheduledMessages={() => setShowScheduledListModal(true)}
+                scheduledCount={scheduledMessages.filter((m) => m.status === 'pending').length}
               />
             </div>
 
@@ -2559,6 +2575,7 @@ export default function App() {
                 }
                 onClearExternalHighlight={() => setHighlightedJump(null)}
                 onScheduleMessage={handleScheduleMessage}
+                onOpenScheduledMessages={() => setShowScheduledListModal(true)}
               />
 
               <RightDrawer
@@ -2983,6 +3000,16 @@ export default function App() {
             </footer>
           </form>
         </div>
+      )}
+
+      {/* Scheduled Messages Management Modal */}
+      {showScheduledListModal && (
+        <ScheduledMessagesModal
+          scheduledMessages={scheduledMessages.filter((m) => m.status === 'pending')}
+          chats={chats}
+          onCancelSchedule={handleCancelScheduledMessage}
+          onClose={() => setShowScheduledListModal(false)}
+        />
       )}
 
       {/* Active WebRTC Call Modal */}

@@ -22,8 +22,10 @@ export function ScheduleMessageModal({
   const [dateStr, setDateStr] = useState(defaultDateStr);
   const [timeStr, setTimeStr] = useState(defaultTimeStr);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const handlePreset = (minutes: number) => {
+    setErrorMessage(null);
     const target = new Date(Date.now() + minutes * 60 * 1000);
     setDateStr(target.toISOString().slice(0, 10));
     setTimeStr(target.toTimeString().slice(0, 5));
@@ -31,19 +33,23 @@ export function ScheduleMessageModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!text.trim()) return;
+    if (!text.trim()) {
+      setErrorMessage('يرجى كتابة نص الرسالة أولاً.');
+      return;
+    }
     const targetMs = new Date(`${dateStr}T${timeStr}:00`).getTime();
     if (isNaN(targetMs) || targetMs <= Date.now()) {
-      alert('يرجى اختيار وقت في المستقبل للرسالة المجدولة.');
+      setErrorMessage('يرجى تحديد وقت في المستقبل للرسالة المجدولة.');
       return;
     }
 
+    setErrorMessage(null);
     setIsSubmitting(true);
     try {
       await onConfirmSchedule(targetMs, text.trim());
       onClose();
     } catch {
-      alert('تعذر جدولة الرسالة. حاول مرة أخرى.');
+      setErrorMessage('تعذر جدولة الرسالة. يرجى المحاولة مرة أخرى.');
     } finally {
       setIsSubmitting(false);
     }
@@ -75,6 +81,12 @@ export function ScheduleMessageModal({
             <X className="w-4 h-4" />
           </button>
         </div>
+
+        {errorMessage && (
+          <div className="p-2.5 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-xs text-red-600 dark:text-red-400 font-medium">
+            {errorMessage}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">

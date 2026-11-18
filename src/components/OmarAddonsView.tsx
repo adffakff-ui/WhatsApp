@@ -106,7 +106,7 @@ export function OmarAddonsView({
             </div>
             <div className="min-w-0">
               <h1 className="font-display text-base sm:text-lg font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
-                إضافات وثيمات عمر
+                إضافات وثيمات أكرم
               </h1>
               <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate">
                 تخصيص كامل للخصوصية، المظهر، والردود السريعة
@@ -344,7 +344,7 @@ export function OmarAddonsView({
               <div className="p-3.5 rounded-xl bg-[var(--wa-accent-soft)]/50 dark:bg-[#202C33] border border-[var(--wa-accent)]/25 flex items-start gap-2.5 text-xs">
                 <EyeOff className="w-4 h-4 text-[var(--wa-accent-strong)] shrink-0 mt-0.5" aria-hidden="true" />
                 <p className="text-[#111B21] dark:text-[#E9EDEF] leading-relaxed">
-                  تمنحك إعدادات خصوصية عمر تحكماً كاملاً في الظهور، مشاهدة الحالات، ومنع حذف الرسائل من محادثاتك.
+                  تمنحك إعدادات خصوصية أكرم تحكماً كاملاً في الظهور، مشاهدة الحالات، ومنع حذف الرسائل من محادثاتك.
                 </p>
               </div>
 
@@ -628,7 +628,7 @@ export function OmarAddonsView({
                   }`}
                 >
                   <p className={FONT_SIZE_OPTIONS.find((f) => f.id === settings.fontSize)?.className}>
-                    التصميم مرن وأنيق مع خصوصية عمر والثيمات المباشرة ✨
+                    التصميم مرن وأنيق مع خصوصية أكرم والثيمات المباشرة ✨
                   </p>
                   <span className="block text-left text-[10px] text-[#54656F] dark:text-[#AEBAC1] font-mono-code mt-1">
                     ٠٩:٤٢ م ✓✓

@@ -64,12 +64,12 @@ test('parseWasilBackupJson parses valid JSON backups and rejects invalid structu
   const valid = parseWasilBackupJson(
     JSON.stringify({
       omarSettings: { omarTheme: 'burgundy', antiDeleteMessages: true },
-      profile: { displayName: 'عمر' },
+      profile: { displayName: 'أكرم' },
       chats: []
     })
   );
   assert.equal(valid.omarSettings?.omarTheme, 'burgundy');
-  assert.equal(valid.profile?.displayName, 'عمر');
+  assert.equal(valid.profile?.displayName, 'أكرم');
 
   assert.throws(() => parseWasilBackupJson('not json'));
   assert.throws(() => parseWasilBackupJson('{"foo":"bar"}'));

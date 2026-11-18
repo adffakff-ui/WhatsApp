@@ -21,7 +21,8 @@ import {
   Camera,
   Radio,
   LogOut,
-  MessageSquareText
+  MessageSquareText,
+  Clock
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { HighlightText } from './HighlightText';
@@ -78,6 +79,8 @@ interface ChatListPaneProps {
   onJumpToMessage?: (chatId: string, messageId: string, highlightQuery?: string) => void;
   onLockAppNow?: () => void;
   onSignOut?: () => void;
+  onOpenScheduledMessages?: () => void;
+  scheduledCount?: number;
 }
 
 export function ChatListPane({
@@ -118,7 +121,9 @@ export function ChatListPane({
   unlockedChatIds = [],
   onJumpToMessage,
   onLockAppNow,
-  onSignOut
+  onSignOut,
+  onOpenScheduledMessages,
+  scheduledCount = 0
 }: ChatListPaneProps) {
   const [menuChatId, setMenuChatId] = useState<string | null>(null);
   const [showHeaderMenu, setShowHeaderMenu] = useState(false);
@@ -225,8 +230,8 @@ export function ChatListPane({
           {/* Omar Add-ons & Themes Quick Shortcut */}
           <button
             type="button"
-            aria-label="إضافات وثيمات عمر"
-            title="ثيمات وإضافات عمر"
+            aria-label="إضافات وثيمات أكرم"
+            title="ثيمات وإضافات أكرم"
             onClick={onOpenOmarAddons}
             className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-[var(--wa-accent-strong)] hover:bg-[var(--wa-accent-soft)]/50 dark:hover:bg-[#202C33] transition-colors cursor-pointer"
           >
@@ -325,6 +330,27 @@ export function ChatListPane({
                   <Star className="w-4 h-4 text-amber-400" aria-hidden="true" />
                   <span>الرسائل المميزة بنجمة</span>
                 </button>
+                {onOpenScheduledMessages && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      onOpenScheduledMessages();
+                      setShowHeaderMenu(false);
+                    }}
+                    className="w-full px-4 py-2.5 text-right flex items-center justify-between hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Clock className="w-4 h-4 text-amber-500" aria-hidden="true" />
+                      <span>الرسائل المجدولة</span>
+                    </div>
+                    {scheduledCount > 0 && (
+                      <span className="px-1.5 py-0.5 rounded-full bg-[var(--wa-accent)] text-white text-[10px] font-bold font-mono-code">
+                        {scheduledCount}
+                      </span>
+                    )}
+                  </button>
+                )}
                 <button
                   type="button"
                   role="menuitem"
@@ -335,7 +361,7 @@ export function ChatListPane({
                   className="w-full px-4 py-2.5 text-right flex items-center gap-2.5 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[var(--wa-accent-strong)] font-semibold cursor-pointer"
                 >
                   <Palette className="w-4 h-4" aria-hidden="true" />
-                  <span>ثيمات وإضافات عمر</span>
+                  <span>ثيمات وإضافات أكرم</span>
                 </button>
                 {onLockAppNow && (
                   <button
@@ -873,7 +899,7 @@ export function ChatListPane({
               className="px-3.5 py-2 rounded-full bg-white dark:bg-[#233138] text-[#111B21] dark:text-[#E9EDEF] shadow-lg border border-[#E9EDEF] dark:border-[#374248] text-xs font-semibold flex items-center gap-2 hover:brightness-95 cursor-pointer"
             >
               <Palette className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
-              <span>ثيمات وإضافات عمر</span>
+              <span>ثيمات وإضافات أكرم</span>
             </button>
             <button
               type="button"

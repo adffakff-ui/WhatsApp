@@ -85,6 +85,7 @@ interface ChatWindowProps {
   externalSearchQuery?: string;
   onClearExternalHighlight?: () => void;
   onScheduleMessage?: (chatId: string, sendAtMs: number, text: string) => Promise<void>;
+  onOpenScheduledMessages?: () => void;
 }
 
 async function compressChatImageToDataUrl(file: File): Promise<string> {
@@ -147,7 +148,8 @@ export function ChatWindow({
   highlightedMessageId = null,
   externalSearchQuery = '',
   onClearExternalHighlight,
-  onScheduleMessage
+  onScheduleMessage,
+  onOpenScheduledMessages
 }: ChatWindowProps) {
   const [text, setText] = useState('');
   const [replyTo, setReplyTo] = useState<DecryptedMessage | null>(null);
@@ -293,11 +295,14 @@ export function ChatWindow({
   if (!chat) {
     return (
       <div className="hidden md:flex flex-1 flex-col items-center justify-center bg-[#F0F2F5] dark:bg-[#222E35] border-b-[6px] border-[var(--wa-accent)] px-8 text-center">
-        <div className="w-20 h-20 rounded-full bg-[var(--wa-accent-soft)] flex items-center justify-center text-[var(--wa-accent-strong)] mb-6">
-          <Lock className="w-9 h-9" aria-hidden="true" />
-        </div>
+        <img
+          src="/pwa-192x192.png"
+          alt="شعار تواصل Wasil"
+          className="w-20 h-20 rounded-2xl shadow-lg object-cover mb-6 border border-black/10 dark:border-white/10"
+          referrerPolicy="no-referrer"
+        />
         <h2 className="font-display text-2xl font-bold text-[#111B21] dark:text-[#E9EDEF]">
-          تواصل ويب · محادثات مشفرة بإضافات عمر
+          تواصل ويب · محادثات مشفرة بإضافات أكرم
         </h2>
         <p className="mt-3 text-sm text-[#54656F] dark:text-[#8696A0] max-w-md leading-relaxed">
           اختر محادثة من القائمة الجانبية لبدء المراسلة الفورية أو إجراء مكالمة صوتية ومرئية مشفرة بتقنية AES-GCM-256 مع ثيمات وخصوصية متقدمة.
@@ -774,6 +779,20 @@ export function ChatWindow({
               >
                 التحقق من التشفير
               </button>
+              {onOpenScheduledMessages && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onOpenScheduledMessages();
+                    setShowMoreMenu(false);
+                  }}
+                  className="w-full px-4 py-2.5 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+                >
+                  <Clock className="w-4 h-4 text-amber-500" aria-hidden="true" />
+                  <span>الرسائل المجدولة</span>
+                </button>
+              )}
               {onToggleLockChat && (
                 <button
                   type="button"
@@ -1462,7 +1481,7 @@ export function ChatWindow({
             <div className="px-2 py-1 flex items-center justify-between border-b border-[#E9EDEF] dark:border-[#374248]">
               <span className="text-xs font-bold text-[var(--wa-accent-strong)] flex items-center gap-1.5">
                 <Zap className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>قوالب عمر السريعة</span>
+                <span>قوالب أكرم السريعة</span>
               </span>
               <button
                 type="button"

@@ -55,7 +55,7 @@ export const OMAR_THEMES: OmarThemeMeta[] = [
   {
     id: 'burgundy',
     name: 'العنابي الملكي',
-    subtitle: 'ثيم واتساب عمر العنابي الشهير',
+    subtitle: 'ثيم واتساب أكرم العنابي الشهير',
     primaryHex: '#800020',
     softHex: '#FCE7F3'
   },

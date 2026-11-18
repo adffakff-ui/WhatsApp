@@ -313,7 +313,7 @@ test('3-minute status video validation, formatting, channel invite codes, and pi
   const s1: StatusItem = {
     id: 'st_old',
     authorId: 'u1',
-    authorName: 'عمر',
+    authorName: 'أكرم',
     authorAvatar: '',
     type: 'text',
     content: 'أولى',

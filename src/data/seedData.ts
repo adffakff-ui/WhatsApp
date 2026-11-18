@@ -23,7 +23,7 @@ export const DEMO_CONTACTS: UserProfile[] = [
   },
   {
     uid: 'contact_omar',
-    displayName: 'عمر الفاروق',
+    displayName: 'أكرم الفاروق',
     about: 'مهندس برمجيات ونظم موزعة',
     avatarUrl: BUNDLED_ASSETS.avatarOmar,
     publicKeyJwk: '{"kty":"EC","crv":"P-256","x":"demoOmarX","y":"demoOmarY"}',
@@ -95,7 +95,7 @@ export function createInitialChats(myUid: string): ChatRoom[] {
     {
       id: 'chat_omar',
       type: 'direct',
-      title: 'عمر الفاروق',
+      title: 'أكرم الفاروق',
       description: 'مهندس برمجيات ونظم موزعة',
       avatarUrl: BUNDLED_ASSETS.avatarOmar,
       peerUid: 'contact_omar',
@@ -292,7 +292,7 @@ export async function createInitialMessagesMap(myUid: string, myName: string): P
         'chat_tech_group',
         'chat_tech_group_seed_v1',
         'contact_omar',
-        'عمر الفاروق',
+        'أكرم الفاروق',
         'text',
         { text: 'مرحباً بالجميع 👋 جميع الرسائل في هذه المجموعة مشفرة بمفتاح AES-GCM 256.' },
         now - 7200000
@@ -316,7 +316,7 @@ export async function createInitialMessagesMap(myUid: string, myName: string): P
         'chat_tech_group',
         'chat_tech_group_seed_v1',
         'contact_omar',
-        'عمر الفاروق',
+        'أكرم الفاروق',
         'poll',
         {
           text: 'استطلاع: ما موعد المراجعة التقنية القادم؟',
@@ -336,7 +336,7 @@ export async function createInitialMessagesMap(myUid: string, myName: string): P
         'chat_omar',
         'chat_omar_seed_v1',
         'contact_omar',
-        'عمر الفاروق',
+        'أكرم الفاروق',
         'text',
         { text: 'السلام عليكم، هل قواعد الأمان في Firestore جاهزة للنشر؟' },
         now - 7200000
@@ -385,7 +385,7 @@ export async function createInitialMessagesMap(myUid: string, myName: string): P
         'chat_community_security',
         'chat_community_security_seed_v1',
         'contact_omar',
-        'عمر الفاروق',
+        'أكرم الفاروق',
         'text',
         { text: 'تحديث بروتوكول AES-GCM-256 متاح الآن للجميع مع التحقق من أرقام الأمان ذات الـ ٦٠ خانة.' },
         now - 172800000
@@ -417,7 +417,7 @@ export function createInitialStatuses(myUid = 'demo_user_me'): StatusItem[] {
     {
       id: 'st_omar_1',
       authorId: 'contact_omar',
-      authorName: 'عمر الفاروق',
+      authorName: 'أكرم الفاروق',
       authorAvatar: BUNDLED_ASSETS.avatarOmar,
       type: 'text',
       content: 'الخصوصية الحقيقية تبدأ بتشفير البيانات على جهازك قبل وصولها إلى السحابة 🔐',
@@ -457,7 +457,7 @@ export function createInitialCalls(myUid: string, myName: string): CallRecord[] 
       callerName: myName,
       callerAvatar: '',
       calleeId: 'contact_omar',
-      calleeName: 'عمر الفاروق',
+      calleeName: 'أكرم الفاروق',
       calleeAvatar: BUNDLED_ASSETS.avatarOmar,
       callType: 'audio',
       status: 'ended',
