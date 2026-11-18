@@ -209,30 +209,42 @@ export default function App() {
     );
   });
 
+  const uid = currentUser?.uid || 'demo_user_me';
+  const userKeys = useMemo(() => ({
+    CHATS: `${uid}_wasil_chats_v1`,
+    MESSAGES: `${uid}_wasil_messages_v1`,
+    STATUSES: `${uid}_wasil_statuses_v1`,
+    PINNED_STATUSES: `${uid}_wasil_pinned_statuses_v1`,
+    CALLS: `${uid}_wasil_calls_v1`,
+    PROFILE: `${uid}_wasil_profile_v1`,
+    PRIVACY: `${uid}_wasil_privacy_v1`,
+    ENTERED: `${uid}_wasil_entered_v1`
+  }), [uid]);
+
   const [privacySettings, setPrivacySettings] = useState<PrivacySettings>(() => {
-    return readJsonStorage<PrivacySettings>(STORAGE_KEYS.PRIVACY) || DEFAULT_PRIVACY;
+    return readJsonStorage<PrivacySettings>(userKeys.PRIVACY) || readJsonStorage<PrivacySettings>(STORAGE_KEYS.PRIVACY) || DEFAULT_PRIVACY;
   });
 
   const [chats, setChats] = useState<ChatRoom[]>(() => {
-    const saved = readJsonStorage<ChatRoom[]>(STORAGE_KEYS.CHATS);
-    return saved || createInitialChats('demo_user_me');
+    const saved = readJsonStorage<ChatRoom[]>(userKeys.CHATS) || readJsonStorage<ChatRoom[]>(STORAGE_KEYS.CHATS);
+    return saved || [];
   });
 
   const [messagesMap, setMessagesMap] = useState<Record<string, DecryptedMessage[]>>(
-    () => readJsonStorage<Record<string, DecryptedMessage[]>>(STORAGE_KEYS.MESSAGES) || {}
+    () => readJsonStorage<Record<string, DecryptedMessage[]>>(userKeys.MESSAGES) || readJsonStorage<Record<string, DecryptedMessage[]>>(STORAGE_KEYS.MESSAGES) || {}
   );
 
   const [statuses, setStatuses] = useState<StatusItem[]>(() => {
-    const saved = readJsonStorage<StatusItem[]>(STORAGE_KEYS.STATUSES);
-    return filterActiveStatuses(saved || createInitialStatuses());
+    const saved = readJsonStorage<StatusItem[]>(userKeys.STATUSES) || readJsonStorage<StatusItem[]>(STORAGE_KEYS.STATUSES);
+    return filterActiveStatuses(saved || []);
   });
   const [pinnedStatusIds, setPinnedStatusIds] = useState<string[]>(
-    () => readJsonStorage<string[]>(STORAGE_KEYS.PINNED_STATUSES) || []
+    () => readJsonStorage<string[]>(userKeys.PINNED_STATUSES) || readJsonStorage<string[]>(STORAGE_KEYS.PINNED_STATUSES) || []
   );
 
   const [calls, setCalls] = useState<CallRecord[]>(() => {
-    const saved = readJsonStorage<CallRecord[]>(STORAGE_KEYS.CALLS);
-    return saved || createInitialCalls('demo_user_me', 'أحمد العتيبي');
+    const saved = readJsonStorage<CallRecord[]>(userKeys.CALLS) || readJsonStorage<CallRecord[]>(STORAGE_KEYS.CALLS);
+    return saved || [];
   });
 
   const [activeTab, setActiveTab] = useState<NavTab>('chats');
@@ -339,10 +351,10 @@ export default function App() {
     localStorage.setItem(STORAGE_KEYS.OMAR, JSON.stringify(omarSettings));
   }, [omarSettings]);
 
-  // Ensure local ECDH identity keys & encrypted seed messages exist
+  // Ensure local ECDH identity keys exist (zero-out default chat state for fresh installs)
   useEffect(() => {
     let active = true;
-    async function bootstrapCryptoAndSeeds() {
+    async function bootstrapCrypto() {
       let keys = readJsonStorage<IdentityKeys>(STORAGE_KEYS.KEYS);
       if (!keys) {
         keys = await generateIdentityKeyPair();
@@ -355,47 +367,38 @@ export default function App() {
         publicKeyJwk: keys!.publicKeyJwk,
         safetyCode: keys!.safetyCode
       }));
-
-      const savedMsgs = readJsonStorage<Record<string, DecryptedMessage[]>>(STORAGE_KEYS.MESSAGES);
-      if (!savedMsgs || Object.keys(savedMsgs).length === 0) {
-        const seeded = await createInitialMessagesMap('demo_user_me', 'أحمد العتيبي');
-        if (active) {
-          setMessagesMap(seeded);
-          localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(seeded));
-        }
-      }
     }
-    void bootstrapCryptoAndSeeds();
+    void bootstrapCrypto();
     return () => {
       active = false;
     };
   }, []);
 
-  // Persist preview data locally when not cloud-synced
+  // Persist user-scoped data locally when not cloud-synced
   useEffect(() => {
     if (!isCloudSynced) {
-      localStorage.setItem(STORAGE_KEYS.CHATS, JSON.stringify(chats));
+      localStorage.setItem(userKeys.CHATS, JSON.stringify(chats));
     }
-  }, [chats, isCloudSynced]);
+  }, [chats, isCloudSynced, userKeys.CHATS]);
 
   useEffect(() => {
     if (!isCloudSynced && Object.keys(messagesMap).length > 0) {
-      localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(messagesMap));
+      localStorage.setItem(userKeys.MESSAGES, JSON.stringify(messagesMap));
     }
-  }, [messagesMap, isCloudSynced]);
+  }, [messagesMap, isCloudSynced, userKeys.MESSAGES]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.PINNED_STATUSES, JSON.stringify(pinnedStatusIds));
-  }, [pinnedStatusIds]);
+    localStorage.setItem(userKeys.PINNED_STATUSES, JSON.stringify(pinnedStatusIds));
+  }, [pinnedStatusIds, userKeys.PINNED_STATUSES]);
 
   useEffect(() => {
     if (!isCloudSynced) {
-      localStorage.setItem(STORAGE_KEYS.STATUSES, JSON.stringify(statuses));
-      localStorage.setItem(STORAGE_KEYS.CALLS, JSON.stringify(calls));
-      localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(currentUser));
-      localStorage.setItem(STORAGE_KEYS.PRIVACY, JSON.stringify(privacySettings));
+      localStorage.setItem(userKeys.STATUSES, JSON.stringify(statuses));
+      localStorage.setItem(userKeys.CALLS, JSON.stringify(calls));
+      localStorage.setItem(userKeys.PROFILE, JSON.stringify(currentUser));
+      localStorage.setItem(userKeys.PRIVACY, JSON.stringify(privacySettings));
     }
-  }, [statuses, calls, currentUser, privacySettings, isCloudSynced]);
+  }, [statuses, calls, currentUser, privacySettings, isCloudSynced, userKeys]);
 
   // Periodically prune expired 24-hour statuses from state and Firestore
   useEffect(() => {

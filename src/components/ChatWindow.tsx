@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { HighlightText } from './HighlightText';
+import { ImageViewerModal } from './ImageViewerModal';
 import { resolveBundledAssetUrl } from '../data/assets';
 import {
   filterExpiredDisappearingMessages,
@@ -165,6 +166,7 @@ export function ChatWindow({
   const [inChatSearchQuery, setInChatSearchQuery] = useState('');
   const [inChatFilterType, setInChatFilterType] = useState<MessageSearchFilter>('all');
   const [activeMatchIdx, setActiveMatchIdx] = useState(0);
+  const [lightboxImage, setLightboxImage] = useState<{ mediaUrl: string; caption?: string } | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1041,7 +1043,9 @@ export function ChatWindow({
                       src={resolveBundledAssetUrl(msg.payload.mediaUrl)}
                       alt={msg.payload.text || 'صورة مرفقة'}
                       referrerPolicy="no-referrer"
-                      className="rounded-lg max-h-72 w-full object-cover bg-black/10"
+                      onClick={() => setLightboxImage({ mediaUrl: msg.payload.mediaUrl!, caption: msg.payload.text })}
+                      className="rounded-lg max-h-72 w-full object-cover bg-black/10 cursor-pointer hover:opacity-95 transition-opacity"
+                      title="انقر لتكبير الصورة"
                     />
                     {msg.payload.text && (
                       <p className={`${fontSizeClass} leading-relaxed whitespace-pre-wrap`}>
@@ -1838,6 +1842,14 @@ export function ChatWindow({
             </ul>
           </div>
         </div>
+      )}
+
+      {lightboxImage && (
+        <ImageViewerModal
+          mediaUrl={lightboxImage.mediaUrl}
+          caption={lightboxImage.caption}
+          onClose={() => setLightboxImage(null)}
+        />
       )}
     </section>
   );
