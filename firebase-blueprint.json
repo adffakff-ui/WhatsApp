@@ -189,6 +189,23 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "callId", "senderId", "callerId", "calleeId", "candidate", "createdAt"]
+    },
+    "ScheduledMessage": {
+      "title": "ScheduledMessage",
+      "description": "Message scheduled for future automated dispatch.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "chatId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "type": { "type": "string", "enum": ["text", "image", "voice", "file", "poll", "system"] },
+        "payload": { "type": "object" },
+        "sendAtMs": { "type": "integer" },
+        "status": { "type": "string", "enum": ["pending", "sent", "cancelled"] },
+        "createdAtMs": { "type": "integer" }
+      },
+      "required": ["id", "chatId", "senderId", "senderName", "type", "payload", "sendAtMs", "status", "createdAtMs"]
     }
   },
   "firestore": {
@@ -227,6 +244,11 @@
     "/calls/{callId}/candidates/{candidateId}": {
       "schema": { "$ref": "#/entities/IceCandidate" },
       "description": "WebRTC ICE candidates for active calls."
+    },
+    "/scheduled_messages/{msgId}": {
+      "schema": { "$ref": "#/entities/ScheduledMessage" },
+      "description": "Messages scheduled for future automated dispatch."
     }
   }
 }
+

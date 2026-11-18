@@ -37,7 +37,8 @@ import type {
   StatusItem,
   ThemeMode,
   UserProfile,
-  VisibilityScope
+  VisibilityScope,
+  ScheduledMessage
 } from '../types/chat';
 
 function toMillis(val: unknown): number {
@@ -1589,4 +1590,63 @@ export function subscribeCallsFromFirestore(
     unsubOut();
     unsubIn();
   };
+}
+
+export async function scheduleMessageInFirestore(
+  msg: Omit<ScheduledMessage, 'createdAtMs'>
+): Promise<void> {
+  const path = `scheduled_messages/${msg.id}`;
+  try {
+    await setDoc(doc(db, 'scheduled_messages', msg.id), {
+      ...msg,
+      createdAt: serverTimestamp(),
+      createdAtMs: serverTimestamp()
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function deleteScheduledMessageFromFirestore(msgId: string): Promise<void> {
+  const path = `scheduled_messages/${msgId}`;
+  try {
+    await deleteDoc(doc(db, 'scheduled_messages', msgId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export function subscribeScheduledMessagesFromFirestore(
+  myUid: string,
+  onUpdate: (msgs: ScheduledMessage[]) => void
+): () => void {
+  const q = query(
+    collection(db, 'scheduled_messages'),
+    where('senderId', '==', myUid),
+    where('status', '==', 'pending')
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list: ScheduledMessage[] = [];
+      snap.forEach((docSnap) => {
+        const d = docSnap.data();
+        list.push({
+          id: d.id,
+          chatId: d.chatId,
+          senderId: d.senderId,
+          senderName: d.senderName,
+          type: d.type,
+          payload: d.payload,
+          sendAtMs: d.sendAtMs,
+          status: d.status,
+          createdAtMs: toMillis(d.createdAtMs || d.createdAt) || Date.now()
+        });
+      });
+      onUpdate(list);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'scheduled_messages');
+    }
+  );
 }

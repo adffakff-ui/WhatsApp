@@ -443,5 +443,19 @@ service cloud.firestore {
           && existing().senderId == request.auth.uid;
       }
     }
+
+    // Scheduled Messages
+    match /scheduled_messages/{msgId} {
+      allow get, list: if isSignedIn() && resource.data.senderId == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(msgId)
+        && incoming().id == msgId
+        && incoming().senderId == request.auth.uid
+        && incoming().sendAtMs is int
+        && incoming().createdAt == request.time;
+      allow update: if isVerifiedUser() && isValidId(msgId)
+        && existing().senderId == request.auth.uid;
+      allow delete: if isVerifiedUser() && isValidId(msgId)
+        && existing().senderId == request.auth.uid;
+    }
   }
 }

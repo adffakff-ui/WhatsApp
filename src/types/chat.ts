@@ -177,3 +177,15 @@ export interface CallRecord {
   answerSdp?: string;
   createdAtMs: number;
 }
+
+export interface ScheduledMessage {
+  id: string;
+  chatId: string;
+  senderId: string;
+  senderName: string;
+  type: MessageType;
+  payload: MessagePayload;
+  sendAtMs: number;
+  status: 'pending' | 'sent' | 'cancelled';
+  createdAtMs: number;
+}

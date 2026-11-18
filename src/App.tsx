@@ -84,7 +84,10 @@ import {
   updatePrivacySettingsInFirestore,
   updateProfileInFirestore,
   updateThemePrefInFirestore,
-  votePollInFirestore
+  votePollInFirestore,
+  scheduleMessageInFirestore,
+  deleteScheduledMessageFromFirestore,
+  subscribeScheduledMessagesFromFirestore
 } from './services/firestoreSync';
 import { AuthScreen, type OnboardingCompletionPayload } from './components/AuthScreen';
 import { NavRail } from './components/NavRail';
@@ -114,7 +117,8 @@ import type {
   RightPanelMode,
   StatusItem,
   ThemeMode,
-  UserProfile
+  UserProfile,
+  ScheduledMessage
 } from './types/chat';
 
 const STORAGE_KEYS = {
@@ -193,6 +197,7 @@ export default function App() {
     readJsonStorage<IdentityKeys>(STORAGE_KEYS.KEYS)
   );
 
+
   const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
     const saved = readJsonStorage<UserProfile>(STORAGE_KEYS.PROFILE);
     return (
@@ -246,6 +251,39 @@ export default function App() {
     const saved = readJsonStorage<CallRecord[]>(userKeys.CALLS) || readJsonStorage<CallRecord[]>(STORAGE_KEYS.CALLS);
     return saved || [];
   });
+
+  const [scheduledMessages, setScheduledMessages] = useState<ScheduledMessage[]>([]);
+
+  useEffect(() => {
+    if (!currentUser || !isCloudSynced) return;
+    const unsub = subscribeScheduledMessagesFromFirestore(currentUser.uid, (msgs) => {
+      setScheduledMessages(msgs);
+    });
+    return () => unsub();
+  }, [currentUser, isCloudSynced]);
+
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const now = Date.now();
+      const due = scheduledMessages.filter((m) => m.status === 'pending' && m.sendAtMs <= now);
+      for (const msg of due) {
+        try {
+          if (isCloudSynced) {
+            await deleteScheduledMessageFromFirestore(msg.id);
+          }
+          setScheduledMessages((prev) => prev.map((item) => item.id === msg.id ? { ...item, status: 'sent' } : item));
+          const targetChat = chats.find((c) => c.id === msg.chatId);
+          if (targetChat) {
+            await sendMessageToTargetChat(targetChat, msg.type, msg.payload);
+            showToast(`تم إرسال الرسالة المجدولة تلقائياً`);
+          }
+        } catch (err) {
+          console.error('Failed to dispatch scheduled message:', err);
+        }
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [scheduledMessages, chats, isCloudSynced]);
 
   const [activeTab, setActiveTab] = useState<NavTab>('chats');
   const [initialStoryAuthorId, setInitialStoryAuthorId] = useState<string | null>(null);
@@ -1377,6 +1415,36 @@ export default function App() {
     await sendMessageToTargetChat(selectedChat, type, payload, replyToId);
   };
 
+  const handleScheduleMessage = async (chatId: string, sendAtMs: number, text: string) => {
+    if (!text.trim()) return;
+    const msgId = 'sch_' + Math.random().toString(36).substring(2, 11);
+    const payload: MessagePayload = { text: text.trim() };
+    const newScheduled: ScheduledMessage = {
+      id: msgId,
+      chatId,
+      senderId: currentUser.uid,
+      senderName: currentUser.displayName,
+      type: 'text',
+      payload,
+      sendAtMs,
+      status: 'pending',
+      createdAtMs: Date.now()
+    };
+
+    setScheduledMessages((prev) => [...prev, newScheduled]);
+    if (isCloudSynced) {
+      try {
+        await scheduleMessageInFirestore(newScheduled);
+        showToast('تم جدولة الرسالة بنجاح');
+      } catch (err) {
+        console.error('Failed to schedule message in Firestore:', err);
+        showToast('تعذر حفظ الجدولة في السحابة');
+      }
+    } else {
+      showToast('تم جدولة الرسالة محلياً');
+    }
+  };
+
   const handleRetryMessage = async (msg: DecryptedMessage) => {
     const targetChat = chats.find((c) => c.id === msg.chatId);
     if (!targetChat) return;
@@ -2490,6 +2558,7 @@ export default function App() {
                     : ''
                 }
                 onClearExternalHighlight={() => setHighlightedJump(null)}
+                onScheduleMessage={handleScheduleMessage}
               />
 
               <RightDrawer

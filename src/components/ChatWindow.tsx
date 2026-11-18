@@ -39,6 +39,7 @@ import {
 import { Avatar } from './Avatar';
 import { HighlightText } from './HighlightText';
 import { ImageViewerModal } from './ImageViewerModal';
+import { ScheduleMessageModal } from './ScheduleMessageModal';
 import { resolveBundledAssetUrl } from '../data/assets';
 import {
   filterExpiredDisappearingMessages,
@@ -83,6 +84,7 @@ interface ChatWindowProps {
   highlightedMessageId?: string | null;
   externalSearchQuery?: string;
   onClearExternalHighlight?: () => void;
+  onScheduleMessage?: (chatId: string, sendAtMs: number, text: string) => Promise<void>;
 }
 
 async function compressChatImageToDataUrl(file: File): Promise<string> {
@@ -144,7 +146,8 @@ export function ChatWindow({
   isLocked = false,
   highlightedMessageId = null,
   externalSearchQuery = '',
-  onClearExternalHighlight
+  onClearExternalHighlight,
+  onScheduleMessage
 }: ChatWindowProps) {
   const [text, setText] = useState('');
   const [replyTo, setReplyTo] = useState<DecryptedMessage | null>(null);
@@ -167,6 +170,7 @@ export function ChatWindow({
   const [inChatFilterType, setInChatFilterType] = useState<MessageSearchFilter>('all');
   const [activeMatchIdx, setActiveMatchIdx] = useState(0);
   const [lightboxImage, setLightboxImage] = useState<{ mediaUrl: string; caption?: string } | null>(null);
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1532,6 +1536,17 @@ export function ChatWindow({
               <BarChart3 className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
               <span>استطلاع رأي</span>
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowScheduleModal(true);
+                setShowAttachMenu(false);
+              }}
+              className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+            >
+              <Clock className="w-4 h-4 text-amber-500" aria-hidden="true" />
+              <span>جدولة رسالة مستقبلية</span>
+            </button>
           </div>
         )}
 
@@ -1849,6 +1864,18 @@ export function ChatWindow({
           mediaUrl={lightboxImage.mediaUrl}
           caption={lightboxImage.caption}
           onClose={() => setLightboxImage(null)}
+        />
+      )}
+
+      {showScheduleModal && chat && onScheduleMessage && (
+        <ScheduleMessageModal
+          chatId={chat.id}
+          initialText={text}
+          onClose={() => setShowScheduleModal(false)}
+          onConfirmSchedule={async (sendAtMs, msgText) => {
+            await onScheduleMessage(chat.id, sendAtMs, msgText);
+            setText('');
+          }}
         />
       )}
     </section>
