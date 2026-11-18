@@ -294,6 +294,8 @@ service cloud.firestore {
         && (
           (incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageCiphertext', 'lastMessageIv', 'lastMessageSenderId', 'lastMessageType', 'lastMessageDeliveredToIds', 'lastMessageReadByIds', 'lastMessageAt', 'updatedAt'])
             && incoming().lastMessageAt == request.time) ||
+          (existing().lastMessageSenderId == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageCiphertext', 'lastMessageIv', 'updatedAt'])) ||
           (incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageDeliveredToIds', 'lastMessageReadByIds', 'updatedAt'])) ||
           (isChatAdmin(chatId) && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'avatarUrl', 'memberIds', 'adminOnlyPost', 'inviteCode', 'updatedAt']))
         );

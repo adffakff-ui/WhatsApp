@@ -623,8 +623,9 @@ export async function editEncryptedMessageInFirestore(
   chatId: string,
   messageId: string,
   roomSeed: string,
-  newPayload: MessagePayload
-): Promise<void> {
+  newPayload: MessagePayload,
+  updateChatLastMessage = false
+): Promise<{ ciphertext: string; iv: string; algorithm: string }> {
   const path = `chats/${chatId}/messages/${messageId}`;
   const key = await deriveRoomKeyFromSeed(roomSeed);
   const envelope = await encryptPayload(
@@ -632,11 +633,27 @@ export async function editEncryptedMessageInFirestore(
     key
   );
   try {
-    await updateDoc(doc(db, 'chats', chatId, 'messages', messageId), {
-      ciphertext: envelope.ciphertext,
-      iv: envelope.iv,
-      updatedAt: serverTimestamp()
-    });
+    if (updateChatLastMessage) {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'chats', chatId, 'messages', messageId), {
+        ciphertext: envelope.ciphertext,
+        iv: envelope.iv,
+        updatedAt: serverTimestamp()
+      });
+      batch.update(doc(db, 'chats', chatId), {
+        lastMessageCiphertext: envelope.ciphertext.slice(0, 2048),
+        lastMessageIv: envelope.iv,
+        updatedAt: serverTimestamp()
+      });
+      await batch.commit();
+    } else {
+      await updateDoc(doc(db, 'chats', chatId, 'messages', messageId), {
+        ciphertext: envelope.ciphertext,
+        iv: envelope.iv,
+        updatedAt: serverTimestamp()
+      });
+    }
+    return envelope;
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }

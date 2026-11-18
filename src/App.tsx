@@ -1245,32 +1245,83 @@ export default function App() {
 
   const handleEditMessage = async (messageId: string, newText: string) => {
     if (!selectedChat) return;
-    const targetMsg = (messagesMap[selectedChat.id] || []).find((m) => m.id === messageId);
-    if (!targetMsg) return;
+    const chatId = selectedChat.id;
+    const chatMessages = messagesMap[chatId] || [];
+    const targetMsg = chatMessages.find((m) => m.id === messageId);
+    if (!targetMsg || targetMsg.senderId !== currentUser.uid || targetMsg.isDeleted) return;
+
+    const trimmed = newText.trim();
+    if (!trimmed || trimmed === targetMsg.payload.text) return;
+
     const updatedPayload: MessagePayload = {
       ...targetMsg.payload,
-      text: newText,
+      text: trimmed,
       edited: true
     };
+
+    const key = await deriveRoomKeyFromSeed(selectedChat.roomSeed);
+    const localEnvelope = await encryptPayload(JSON.stringify(updatedPayload), key);
+
+    const latestMsg = chatMessages[chatMessages.length - 1];
+    const isLastMessage = Boolean(latestMsg && latestMsg.id === messageId);
+    const prevChatPreview = selectedChat.lastMessagePreview;
+
     setMessagesMap((prev) => ({
       ...prev,
-      [selectedChat.id]: (prev[selectedChat.id] || []).map((m) =>
-        m.id === messageId ? { ...m, payload: updatedPayload } : m
+      [chatId]: (prev[chatId] || []).map((m) =>
+        m.id === messageId
+          ? {
+              ...m,
+              payload: updatedPayload,
+              ciphertext: localEnvelope.ciphertext,
+              iv: localEnvelope.iv
+            }
+          : m
       )
     }));
+
+    if (isLastMessage) {
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chatId && c.lastMessageSenderId === currentUser.uid
+            ? { ...c, lastMessagePreview: trimmed }
+            : c
+        )
+      );
+    }
+
     if (isCloudSynced) {
       try {
         await editEncryptedMessageInFirestore(
-          selectedChat.id,
+          chatId,
           messageId,
           selectedChat.roomSeed,
-          updatedPayload
+          updatedPayload,
+          isLastMessage
         );
         showToast('تم تعديل الرسالة');
       } catch {
+        setMessagesMap((prev) => ({
+          ...prev,
+          [chatId]: (prev[chatId] || []).map((m) =>
+            m.id === messageId ? targetMsg : m
+          )
+        }));
+        if (isLastMessage) {
+          setChats((prev) =>
+            prev.map((c) =>
+              c.id === chatId && c.lastMessageSenderId === currentUser.uid
+                ? { ...c, lastMessagePreview: prevChatPreview }
+                : c
+            )
+          );
+        }
         showToast('تعذر حفظ تعديل الرسالة سحابياً');
       }
+      return;
     }
+
+    showToast('تم تعديل الرسالة');
   };
 
   const handleForwardMessage = async (msg: DecryptedMessage, targetChatId: string) => {

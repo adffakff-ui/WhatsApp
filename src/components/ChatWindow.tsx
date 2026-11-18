@@ -151,6 +151,7 @@ export function ChatWindow({
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -166,6 +167,7 @@ export function ChatWindow({
   useEffect(() => {
     setReplyTo(null);
     setEditingMsg(null);
+    setText('');
     setForwardMsg(null);
     setShowEmojiPicker(false);
     setShowTemplatesPicker(false);
@@ -182,7 +184,8 @@ export function ChatWindow({
       showMoreMenu ||
       Boolean(activeMsgMenu) ||
       showPollModal ||
-      Boolean(forwardMsg);
+      Boolean(forwardMsg) ||
+      Boolean(editingMsg);
     if (!hasFloatingOpen) return;
 
     const handleOutside = (e: MouseEvent) => {
@@ -204,6 +207,10 @@ export function ChatWindow({
         setActiveMsgMenu(null);
         setShowPollModal(false);
         setForwardMsg(null);
+        if (editingMsg) {
+          setEditingMsg(null);
+          setText('');
+        }
       }
     };
 
@@ -220,7 +227,8 @@ export function ChatWindow({
     showMoreMenu,
     activeMsgMenu,
     showPollModal,
-    forwardMsg
+    forwardMsg,
+    editingMsg
   ]);
 
   if (!chat) {
@@ -935,7 +943,9 @@ export function ChatWindow({
                 {/* Timestamp, Edited badge, Star & Ticks */}
                 <div className="mt-1 flex items-center justify-end gap-1.5 text-[11px] text-[#667781] dark:text-[#AEBAC1] font-mono-code">
                   {msg.payload.edited && !msg.isDeleted && (
-                    <span className="text-[10px] font-sans opacity-80">تم التعديل</span>
+                    <span className="text-[10px] font-sans font-medium opacity-80">
+                      تم التعديل
+                    </span>
                   )}
                   {isStarred && <Star className="w-3 h-3 fill-amber-400 text-amber-400" aria-label="مميزة بنجمة" />}
                   <span>{formatWhatsAppTime(msg.createdAtMs)}</span>
@@ -1075,7 +1085,7 @@ export function ChatWindow({
                       <Lock className="w-3.5 h-3.5" aria-hidden="true" />
                       <span>معاينة النص المشفر</span>
                     </button>
-                    {isMine && msg.type === 'text' && onEditMessage && (
+                    {isMine && !msg.isDeleted && (msg.type === 'text' || msg.type === 'image') && onEditMessage && (
                       <button
                         type="button"
                         role="menuitem"
@@ -1084,6 +1094,7 @@ export function ChatWindow({
                           setReplyTo(null);
                           setText(msg.payload.text);
                           setActiveMsgMenu(null);
+                          window.requestAnimationFrame(() => textareaRef.current?.focus());
                         }}
                         className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer"
                       >
@@ -1371,6 +1382,7 @@ export function ChatWindow({
 
             <div className="flex-1 min-w-0 bg-white dark:bg-[#2A3942] rounded-xl px-3 sm:px-3.5 py-2 flex items-center">
               <textarea
+                ref={textareaRef}
                 rows={1}
                 value={text}
                 onChange={(e) => {
@@ -1379,6 +1391,13 @@ export function ChatWindow({
                   onTypingChange?.(val.trim().length > 0);
                 }}
                 onKeyDown={(e) => {
+                  if (e.key === 'Escape' && editingMsg) {
+                    e.preventDefault();
+                    setEditingMsg(null);
+                    setText('');
+                    onTypingChange?.(false);
+                    return;
+                  }
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     onTypingChange?.(false);
@@ -1386,11 +1405,13 @@ export function ChatWindow({
                   }
                 }}
                 placeholder={
-                  chat.type === 'community' && chat.adminOnlyPost
-                    ? 'اكتب رسالة بث لمتابعي القناة...'
-                    : 'اكتب رسالة مشفرة...'
+                  editingMsg
+                    ? 'عدّل نص الرسالة ثم اضغط حفظ...'
+                    : chat.type === 'community' && chat.adminOnlyPost
+                      ? 'اكتب رسالة بث لمتابعي القناة...'
+                      : 'اكتب رسالة مشفرة...'
                 }
-                aria-label="اكتب رسالة"
+                aria-label={editingMsg ? 'تعديل الرسالة' : 'اكتب رسالة'}
                 className="w-full bg-transparent text-sm text-[#111B21] dark:text-[#E9EDEF] placeholder:text-[#667781] dark:placeholder:text-[#8696A0] resize-none focus:outline-none max-h-28 leading-6"
               />
             </div>
@@ -1398,11 +1419,19 @@ export function ChatWindow({
             {text.trim() ? (
               <button
                 type="button"
-                aria-label="إرسال الرسالة"
-                onClick={() => void handleSendText()}
+                aria-label={editingMsg ? 'حفظ التعديل' : 'إرسال الرسالة'}
+                title={editingMsg ? 'حفظ التعديل' : 'إرسال الرسالة'}
+                onClick={() => {
+                  onTypingChange?.(false);
+                  void handleSendText();
+                }}
                 className="w-10 h-10 rounded-full bg-[var(--wa-accent)] text-white flex items-center justify-center hover:brightness-95 transition-all shrink-0 cursor-pointer"
               >
-                <SendHorizontal className="w-5 h-5 rotate-180" aria-hidden="true" />
+                {editingMsg ? (
+                  <Check className="w-5 h-5" aria-hidden="true" />
+                ) : (
+                  <SendHorizontal className="w-5 h-5 rotate-180" aria-hidden="true" />
+                )}
               </button>
             ) : (
               <button
