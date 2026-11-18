@@ -75,7 +75,7 @@ export function CallOverlay({
   const [swapStreams, setSwapStreams] = useState(false);
   const [showStatsHud, setShowStatsHud] = useState(false);
   const [iceStatusLabel, setIceStatusLabel] = useState(
-    isP2PRemoteCall ? 'جاري تهيئة قناة P2P...' : 'وضع المعاينة الحية'
+    isP2PRemoteCall ? 'جاري تهيئة قناة P2P...' : 'اتصال محلي مشفر'
   );
   const [voiceLevels, setVoiceLevels] = useState<number[]>([22, 34, 48, 30, 20]);
   const [telemetry, setTelemetry] = useState<CallTelemetryStats>({

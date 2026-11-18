@@ -21,7 +21,6 @@ import {
   QrCode,
   Shield,
   ShieldCheck,
-  Sparkles,
   Sun,
   UserCheck,
   Video,
@@ -39,6 +38,7 @@ import {
 } from '../lib/authHelpers';
 import { OMAR_THEMES } from '../lib/omarConfig';
 import { CountryPickerModal } from './CountryPickerModal';
+import { PWAInstallButton } from './PWAInstallButton';
 import type { OmarSettings, OmarThemeId, ThemeMode, UserProfile } from '../types/chat';
 
 export type AuthStep = 'welcome' | 'auth' | 'profile';
@@ -75,7 +75,6 @@ interface AuthScreenProps {
   onPhoneAuthSuccess: (phoneE164: string, uid?: string) => void;
   onCompleteOnboarding: (payload: OnboardingCompletionPayload) => Promise<void>;
   onRestoreBackupJson: (rawJson: string) => Promise<void>;
-  onEnterDemo: () => void;
 }
 
 const BIO_PRESETS = [
@@ -106,8 +105,7 @@ export function AuthScreen({
   onResetPassword,
   onPhoneAuthSuccess,
   onCompleteOnboarding,
-  onRestoreBackupJson,
-  onEnterDemo
+  onRestoreBackupJson
 }: AuthScreenProps) {
   const [step, setStep] = useState<AuthStep>('welcome');
   const [methodTab, setMethodTab] = useState<AuthMethodTab>('phone');
@@ -697,21 +695,13 @@ export function AuthScreen({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     <button
                       type="button"
-                      onClick={onEnterDemo}
-                      className="min-h-[44px] px-4 py-2 rounded-full border border-[#D1D7DB] dark:border-[#374248] hover:bg-[#F5F6F6] dark:hover:bg-[#202C33] text-[var(--wa-accent-strong)] dark:text-[var(--wa-accent)] font-semibold text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      <Sparkles className="w-4 h-4" aria-hidden="true" />
-                      <span>معاينة تفاعلية فورية</span>
-                    </button>
-
-                    <button
-                      type="button"
                       onClick={() => backupFileRef.current?.click()}
                       className="min-h-[44px] px-4 py-2 rounded-full border border-[#D1D7DB] dark:border-[#374248] hover:bg-[#F5F6F6] dark:hover:bg-[#202C33] text-[#3B4A54] dark:text-[#D1D7DB] font-semibold text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
                     >
-                      <FileUp className="w-4 h-4" aria-hidden="true" />
+                      <FileUp className="w-4 h-4 shrink-0" aria-hidden="true" />
                       <span>استعادة نسخة احتياطية (JSON)</span>
                     </button>
+                    <PWAInstallButton variant="pill" className="w-full" />
                     <input
                       ref={backupFileRef}
                       type="file"
@@ -960,10 +950,13 @@ export function AuthScreen({
                         </button>
                         <button
                           type="button"
-                          onClick={onEnterDemo}
+                          onClick={() => {
+                            clearNotices();
+                            setMethodTab('google_qr');
+                          }}
                           className="font-bold text-[#3B4A54] dark:text-[#D1D7DB] hover:underline cursor-pointer"
                         >
-                          معاينة فورية
+                          الدخول عبر Google
                         </button>
                       </div>
                     </div>
@@ -1164,7 +1157,7 @@ export function AuthScreen({
                         </h2>
                         <ol className="text-xs text-[#54656F] dark:text-[#8696A0] space-y-1">
                           <li>١. اضغط على تسجيل الدخول عبر Google للمزامنة ومشاركة جهات الاتصال</li>
-                          <li>٢. أو استخدم وضع المعاينة الفورية لاختبار جميع ميزات واتساب عمر محلياً</li>
+                          <li>٢. أو استخدم رقم الهاتف أو البريد الإلكتروني لتأمين حسابك ومحادثاتك</li>
                         </ol>
                       </div>
                     </div>
@@ -1182,10 +1175,13 @@ export function AuthScreen({
 
                       <button
                         type="button"
-                        onClick={onEnterDemo}
+                        onClick={() => {
+                          clearNotices();
+                          setMethodTab('email');
+                        }}
                         className="min-h-[48px] px-5 py-2.5 rounded-full border border-[#D1D7DB] dark:border-[#374248] hover:bg-[#F5F6F6] dark:hover:bg-[#202C33] text-[var(--wa-accent-strong)] dark:text-[var(--wa-accent)] font-semibold text-sm transition-colors whitespace-nowrap cursor-pointer"
                       >
-                        معاينة تفاعلية فورية
+                        الدخول بالبريد الإلكتروني
                       </button>
                     </div>
                   </div>
@@ -1370,7 +1366,7 @@ export function AuthScreen({
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-[var(--wa-accent)] flex items-center gap-1.5">
                   <Shield className="w-4 h-4" aria-hidden="true" />
-                  <span>معاينة الثيم والأمان الحي</span>
+                  <span>مظهر المحادثة والتشفير الحي</span>
                 </span>
                 <span className="font-mono-code text-[11px] text-[#667781] dark:text-[#8696A0]">
                   ECDH P-256

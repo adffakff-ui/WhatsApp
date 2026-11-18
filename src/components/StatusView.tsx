@@ -37,6 +37,7 @@ import {
   resolveStatusViewerIds,
   sortStatusesWithPinned
 } from '../lib/chatLogic';
+import { BUNDLED_ASSETS, resolveBundledAssetUrl } from '../data/assets';
 import {
   downloadMediaUriOrUrl,
   inspectVideoAndCapturePoster,
@@ -83,7 +84,7 @@ const FONT_STYLES: { id: 'display' | 'sans' | 'mono'; label: string; className: 
 const SAMPLE_STATUS_PHOTOS = [
   {
     label: 'غروب العلا',
-    url: '/src/assets/images/status_desert_sunset_1794759601351.jpg'
+    url: BUNDLED_ASSETS.statusDesertSunset
   }
 ];
 
@@ -979,7 +980,7 @@ export function StatusView({
           {/* Background Image or Video Layer */}
           {activeStory.type === 'image' && activeStory.mediaUrl && (
             <img
-              src={activeStory.mediaUrl}
+              src={resolveBundledAssetUrl(activeStory.mediaUrl)}
               alt={activeStory.content || 'حالة مصورة'}
               referrerPolicy="no-referrer"
               className="absolute inset-0 w-full h-full object-contain bg-black"

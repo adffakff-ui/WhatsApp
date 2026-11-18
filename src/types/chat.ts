@@ -36,6 +36,10 @@ export interface OmarSettings {
   lockedChatIds: string[];
   chatLockPin: string;
   appLockOnLaunch?: boolean;
+  lockMethod?: 'pin' | 'biometric';
+  biometricCredentialId?: string;
+  biometricEnrolledAtMs?: number;
+  biometricDeviceLabel?: string;
   dndMode: boolean;
   showStoriesTray: boolean;
 }

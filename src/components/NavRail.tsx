@@ -8,7 +8,8 @@ import {
   Settings,
   Moon,
   Sun,
-  Palette
+  Palette,
+  LogOut
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import type { NavTab, ThemeMode, UserProfile } from '../types/chat';
@@ -22,6 +23,7 @@ interface NavRailProps {
   onToggleTheme: () => void;
   currentUser: UserProfile;
   hideMobileNav?: boolean;
+  onSignOut?: () => void;
 }
 
 export function NavRail({
@@ -32,7 +34,8 @@ export function NavRail({
   theme,
   onToggleTheme,
   currentUser,
-  hideMobileNav = false
+  hideMobileNav = false,
+  onSignOut
 }: NavRailProps) {
   const navItems: { id: NavTab; label: string; icon: typeof MessageSquareText; badge?: number }[] = [
     { id: 'chats', label: 'الدردشات', icon: MessageSquareText, badge: totalUnread },
@@ -119,6 +122,18 @@ export function NavRail({
           >
             <Avatar src={currentUser.avatarUrl} name={currentUser.displayName} size="sm" isOnline />
           </button>
+
+          {onSignOut && (
+            <button
+              type="button"
+              aria-label="تسجيل الخروج"
+              title="تسجيل الخروج"
+              onClick={onSignOut}
+              className="w-11 h-11 rounded-full flex items-center justify-center text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors cursor-pointer"
+            >
+              <LogOut className="w-4.5 h-4.5" aria-hidden="true" />
+            </button>
+          )}
         </div>
       </nav>
 

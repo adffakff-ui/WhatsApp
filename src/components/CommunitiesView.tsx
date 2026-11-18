@@ -15,6 +15,7 @@ import {
   Radio,
   Sparkles
 } from 'lucide-react';
+import { BUNDLED_ASSETS } from '../data/assets';
 import { Avatar } from './Avatar';
 import { buildChannelInviteCode, formatWhatsAppTime } from '../lib/chatLogic';
 import type { ChatRoom } from '../types/chat';
@@ -33,14 +34,14 @@ const SUGGESTED_CHANNELS: SuggestedChannelItem[] = [
     title: 'قناة تحديثات تواصل الرسمية',
     description: 'أخبار التطوير، ميزات الخصوصية الجديدة، وإصدارات الأمان الفورية.',
     followersLabel: '48.2K متابع',
-    avatarUrl: '/src/assets/images/avatar_tech_group_1794759600547.jpg'
+    avatarUrl: BUNDLED_ASSETS.avatarTechGroup
   },
   {
     id: 'channel_cyber_alerts',
     title: 'قناة الأمن السيبراني والتشفير',
     description: 'تنبيهات حماية الحسابات وأفضل الممارسات للتواصل المشفر.',
     followersLabel: '19.5K متابع',
-    avatarUrl: '/src/assets/images/avatar_omar_1794759600042.jpg'
+    avatarUrl: BUNDLED_ASSETS.avatarOmar
   }
 ];
 

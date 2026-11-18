@@ -26,11 +26,15 @@ import {
   Megaphone
 } from 'lucide-react';
 import { Avatar } from './Avatar';
+import { HighlightText } from './HighlightText';
+import { GROUP_ICON_PRESETS } from '../data/assets';
 import {
   buildChannelInviteCode,
   extractChatSharedAssets,
   formatDisappearingLabel,
   formatWhatsAppTime,
+  getMessageSearchableText,
+  searchMessagesInChat,
   validateAvatarUrl,
   type SharedMediaItem
 } from '../lib/chatLogic';
@@ -60,13 +64,8 @@ interface RightDrawerProps {
   ) => Promise<void>;
   onInviteMemberToGroup: (chatId: string, contact: UserProfile) => Promise<void>;
   onRemoveMemberFromGroup: (chatId: string, memberUid: string) => Promise<void>;
+  onJumpToMessage?: (messageId: string, query?: string) => void;
 }
-
-const GROUP_ICON_PRESETS = [
-  '/src/assets/images/avatar_tech_group_1794759600547.jpg',
-  '/src/assets/images/avatar_sara_1794759599750.jpg',
-  '/src/assets/images/avatar_omar_1794759600042.jpg'
-];
 
 async function compressGroupIcon(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -114,7 +113,8 @@ export function RightDrawer({
   onClearChat,
   onUpdateGroupSettings,
   onInviteMemberToGroup,
-  onRemoveMemberFromGroup
+  onRemoveMemberFromGroup,
+  onJumpToMessage
 }: RightDrawerProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [isEditingGroup, setIsEditingGroup] = useState(false);
@@ -191,9 +191,7 @@ export function RightDrawer({
     null;
 
   const filteredMessages = searchTerm.trim()
-    ? messages.filter((m) =>
-        m.payload.text.toLowerCase().includes(searchTerm.trim().toLowerCase())
-      )
+    ? searchMessagesInChat(messages, searchTerm, 'all')
     : [];
 
   const handleGroupIconUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -833,14 +831,23 @@ export function RightDrawer({
             ) : (
               <ul className="divide-y divide-[#F0F2F5] dark:divide-[#222D34]">
                 {filteredMessages.map((msg) => (
-                  <li key={msg.id} className="py-2.5">
-                    <div className="flex items-center justify-between text-[11px] text-[#667781] dark:text-[#8696A0]">
-                      <span className="font-semibold">{msg.senderName}</span>
-                      <span className="font-mono-code">{formatWhatsAppTime(msg.createdAtMs)}</span>
-                    </div>
-                    <p className="mt-1 text-sm text-[#111B21] dark:text-[#E9EDEF]">
-                      {msg.payload.text}
-                    </p>
+                  <li key={msg.id}>
+                    <button
+                      type="button"
+                      onClick={() => onJumpToMessage?.(msg.id, searchTerm)}
+                      className="w-full py-2.5 px-2 rounded-lg text-right hover:bg-[#F5F6F6] dark:hover:bg-[#202C33] transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center justify-between text-[11px] text-[#667781] dark:text-[#8696A0]">
+                        <span className="font-semibold">{msg.senderName}</span>
+                        <span className="font-mono-code">{formatWhatsAppTime(msg.createdAtMs)}</span>
+                      </div>
+                      <p className="mt-1 text-sm text-[#111B21] dark:text-[#E9EDEF] break-words">
+                        <HighlightText
+                          text={getMessageSearchableText(msg) || msg.payload.text}
+                          query={searchTerm}
+                        />
+                      </p>
+                    </button>
                   </li>
                 ))}
               </ul>

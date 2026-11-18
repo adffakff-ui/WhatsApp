@@ -23,18 +23,109 @@ import { useOnlineStatus, usePWAInstall } from '../hooks/usePWAInstall';
 interface PWAInstallButtonProps {
   className?: string;
   compact?: boolean;
+  variant?: 'full' | 'pill' | 'menu';
+  onAction?: () => void;
+  onOpenGuide?: () => void;
 }
 
-export function PWAInstallButton({ className = '', compact = false }: PWAInstallButtonProps) {
+export function PWAInstallGuideModal({
+  open,
+  onClose,
+  isIOS: isIOSProp
+}: {
+  open: boolean;
+  onClose: () => void;
+  isIOS?: boolean;
+}) {
+  const { isIOS: detectedIOS } = usePWAInstall();
+  const isIOS = isIOSProp ?? detectedIOS;
+  if (!open) return null;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="تثبيت التطبيق على الجوال والكمبيوتر"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-sm rounded-2xl bg-white dark:bg-[#202C33] p-5 sm:p-6 shadow-2xl border border-[#E9EDEF] dark:border-[#374248] space-y-4 text-right"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="font-display text-base font-bold text-[#111B21] dark:text-[#E9EDEF]">
+            {isIOS ? 'تثبيت تواصل على iPhone / iPad' : 'تثبيت تطبيق تواصل على جهازك'}
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#8696A0] hover:bg-[#F0F2F5] dark:hover:bg-[#111B21] cursor-pointer shrink-0"
+            aria-label="إغلاق النافذة"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {isIOS ? (
+          <div className="space-y-2.5 text-xs text-[#54656F] dark:text-[#8696A0] leading-relaxed">
+            <div className="flex items-start gap-2.5 bg-[#F0F2F5] dark:bg-[#111B21] p-3 rounded-xl">
+              <span className="w-5 h-5 rounded-full bg-[#00A884] text-white flex items-center justify-center font-bold text-[11px] shrink-0">
+                ١
+              </span>
+              <span>اضغط على زر <strong>المشاركة (Share)</strong> في شريط متصفح Safari.</span>
+            </div>
+            <div className="flex items-start gap-2.5 bg-[#F0F2F5] dark:bg-[#111B21] p-3 rounded-xl">
+              <span className="w-5 h-5 rounded-full bg-[#00A884] text-white flex items-center justify-center font-bold text-[11px] shrink-0">
+                ٢
+              </span>
+              <span>اختر <strong>إضافة إلى الشاشة الرئيسية (Add to Home Screen)</strong> ثم إضافة.</span>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2.5 text-xs text-[#54656F] dark:text-[#8696A0] leading-relaxed">
+            <div className="flex items-start gap-2.5 bg-[#F0F2F5] dark:bg-[#111B21] p-3 rounded-xl">
+              <span className="w-5 h-5 rounded-full bg-[#00A884] text-white flex items-center justify-center font-bold text-[11px] shrink-0">
+                ١
+              </span>
+              <span>افتح قائمة المتصفح (<strong>⋮</strong> في Chrome Android أو أيقونة التثبيت في شريط العنوان).</span>
+            </div>
+            <div className="flex items-start gap-2.5 bg-[#F0F2F5] dark:bg-[#111B21] p-3 rounded-xl">
+              <span className="w-5 h-5 rounded-full bg-[#00A884] text-white flex items-center justify-center font-bold text-[11px] shrink-0">
+                ٢
+              </span>
+              <span>اختر <strong>تثبيت التطبيق (Install app)</strong> أو <strong>إضافة إلى الشاشة الرئيسية</strong>.</span>
+            </div>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="w-full rounded-xl bg-[#00A884] py-2.5 text-xs font-semibold text-white hover:bg-[#008069] cursor-pointer transition-colors"
+        >
+          فهمت، إغلاق
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function PWAInstallButton({
+  className = '',
+  compact = false,
+  variant = 'full',
+  onAction,
+  onOpenGuide
+}: PWAInstallButtonProps) {
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
-  const [showIOSGuide, setShowIOSGuide] = useState(false);
+  const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [showPWABuilderModal, setShowPWABuilderModal] = useState(false);
 
   // PWABuilder modal state
   const [currentUrl, setCurrentUrl] = useState('');
   const [customUrl, setCustomUrl] = useState('');
   const [copiedUrl, setCopiedUrl] = useState(false);
-  const [copiedManifestUrl, setCopiedManifestUrl] = useState(false);
   const [copiedPackageId, setCopiedPackageId] = useState(false);
   const [activeTab, setActiveTab] = useState<'builder' | 'checklist' | 'steps'>('builder');
   const [isVerifying, setIsVerifying] = useState(false);
@@ -78,7 +169,7 @@ export function PWAInstallButton({ className = '', compact = false }: PWAInstall
       const manifestOk = resp.ok;
       let manifestJson: { icons?: unknown[]; display?: string } | null = null;
       if (manifestOk) {
-        manifestJson = await resp.json() as { icons?: unknown[]; display?: string };
+        manifestJson = (await resp.json()) as { icons?: unknown[]; display?: string };
       }
 
       const hasSw = 'serviceWorker' in navigator;
@@ -102,13 +193,12 @@ export function PWAInstallButton({ className = '', compact = false }: PWAInstall
   };
 
   const effectiveUrl = (customUrl.trim() || currentUrl || 'https://wasil-messenger.vercel.app').trim();
-  const manifestUrl = `${effectiveUrl.replace(/\/$/, '')}/manifest.json`;
   const packageId = 'com.wasil.messenger';
 
   const pwabuilderDirectUrl = `https://www.pwabuilder.com/?url=${encodeURIComponent(effectiveUrl)}`;
   const pwabuilderReportUrl = `https://www.pwabuilder.com/reportcard?site=${encodeURIComponent(effectiveUrl)}`;
 
-  const handleCopy = async (text: string, type: 'url' | 'manifest' | 'pkg') => {
+  const handleCopy = async (text: string, type: 'url' | 'pkg') => {
     try {
       if (navigator.clipboard) {
         await navigator.clipboard.writeText(text);
@@ -123,9 +213,6 @@ export function PWAInstallButton({ className = '', compact = false }: PWAInstall
       if (type === 'url') {
         setCopiedUrl(true);
         window.setTimeout(() => setCopiedUrl(false), 2000);
-      } else if (type === 'manifest') {
-        setCopiedManifestUrl(true);
-        window.setTimeout(() => setCopiedManifestUrl(false), 2000);
       } else {
         setCopiedPackageId(true);
         window.setTimeout(() => setCopiedPackageId(false), 2000);
@@ -153,6 +240,68 @@ export function PWAInstallButton({ className = '', compact = false }: PWAInstall
       });
   };
 
+  const handleTriggerUniversalInstall = async () => {
+    onAction?.();
+    if (isInstallable) {
+      const accepted = await install();
+      if (accepted) return;
+    }
+    if (onOpenGuide) {
+      onOpenGuide();
+    } else {
+      setShowInstallGuide(true);
+    }
+  };
+
+  const installGuideModal = (
+    <PWAInstallGuideModal
+      open={showInstallGuide}
+      onClose={() => setShowInstallGuide(false)}
+      isIOS={isIOS}
+    />
+  );
+
+  if (variant === 'menu') {
+    if (isInstalled) return null;
+    return (
+      <>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => void handleTriggerUniversalInstall()}
+          className={`w-full px-4 py-2.5 text-right flex items-center gap-2.5 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] font-medium cursor-pointer ${className}`}
+        >
+          <Download className="w-4 h-4 text-[var(--wa-accent)] shrink-0" aria-hidden="true" />
+          <span className="truncate">تثبيت التطبيق على الجهاز</span>
+        </button>
+        {installGuideModal}
+      </>
+    );
+  }
+
+  if (variant === 'pill') {
+    if (isInstalled) return null;
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => void handleTriggerUniversalInstall()}
+          className={`min-h-[44px] px-4 py-2 rounded-full border border-[#D1D7DB] dark:border-[#374248] hover:bg-[#F5F6F6] dark:hover:bg-[#202C33] text-[var(--wa-accent-strong)] dark:text-[var(--wa-accent)] font-semibold text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer ${className}`}
+        >
+          {isIOS ? (
+            <Smartphone className="w-4 h-4 shrink-0" aria-hidden="true" />
+          ) : (
+            <Download className="w-4 h-4 shrink-0" aria-hidden="true" />
+          )}
+          <span className="truncate">
+            {isIOS ? 'تثبيت التطبيق على iPhone' : 'تثبيت التطبيق على الجوال'}
+          </span>
+        </button>
+        {installGuideModal}
+      </>
+    );
+  }
+
   return (
     <div className={`space-y-2 w-full max-w-full min-w-0 ${className}`}>
       {/* 1. Status Pill if already installed */}
@@ -168,31 +317,33 @@ export function PWAInstallButton({ className = '', compact = false }: PWAInstall
         </div>
       )}
 
-      {/* 2. Direct PWA Install for Chromium / Desktop */}
-      {isInstallable && !isInstalled && (
+      {/* 2. Direct PWA Install or Guided Mobile Install when not yet installed */}
+      {!isInstalled && (
         <button
           type="button"
-          onClick={() => void install()}
-          className="w-full max-w-full min-w-0 overflow-hidden py-2.5 px-3 sm:px-4 rounded-xl bg-[#00A884] hover:bg-[#008069] text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+          onClick={() => void handleTriggerUniversalInstall()}
+          className={`w-full max-w-full min-w-0 overflow-hidden py-2.5 px-3 sm:px-4 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+            isInstallable
+              ? 'bg-[#00A884] hover:bg-[#008069] text-white shadow-sm'
+              : 'bg-[#F0F2F5] dark:bg-[#202C33] text-[#008069] dark:text-[#06CF9C] hover:brightness-95'
+          }`}
         >
-          <Download className="w-4 h-4 shrink-0" aria-hidden="true" />
-          <span className="truncate">تثبيت التطبيق على الجهاز مباشرة (PWA)</span>
+          {isIOS ? (
+            <Smartphone className="w-4 h-4 shrink-0" aria-hidden="true" />
+          ) : (
+            <Download className="w-4 h-4 shrink-0" aria-hidden="true" />
+          )}
+          <span className="truncate">
+            {isInstallable
+              ? 'تثبيت التطبيق على الجهاز مباشرة (PWA)'
+              : isIOS
+                ? 'تثبيت التطبيق على iPhone / iPad'
+                : 'تثبيت التطبيق على الجوال والكمبيوتر'}
+          </span>
         </button>
       )}
 
-      {/* 3. iOS Safari Guide Button */}
-      {isIOS && !isInstalled && (
-        <button
-          type="button"
-          onClick={() => setShowIOSGuide(true)}
-          className="w-full max-w-full min-w-0 overflow-hidden py-2.5 px-3 sm:px-4 rounded-xl bg-[#F0F2F5] dark:bg-[#202C33] text-[#008069] dark:text-[#06CF9C] text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 hover:brightness-95 transition-all cursor-pointer"
-        >
-          <Smartphone className="w-4 h-4 shrink-0" aria-hidden="true" />
-          <span className="truncate">تثبيت التطبيق على iPhone / iPad</span>
-        </button>
-      )}
-
-      {/* 4. PWABuilder Android APK Generator Button (Always Available) */}
+      {/* 3. PWABuilder Android APK Generator Button (Always Available) */}
       <button
         type="button"
         onClick={() => {
@@ -212,56 +363,7 @@ export function PWAInstallButton({ className = '', compact = false }: PWAInstall
         </span>
       </button>
 
-      {/* iOS Installation Guide Modal */}
-      {showIOSGuide && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="إرشادات التثبيت على iOS"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-          onClick={() => setShowIOSGuide(false)}
-        >
-          <div
-            className="w-full max-w-sm rounded-2xl bg-white dark:bg-[#202C33] p-6 shadow-2xl border border-[#E9EDEF] dark:border-[#374248] space-y-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="font-display text-base font-bold text-[#111B21] dark:text-[#E9EDEF]">
-                تثبيت تواصل على iPhone / iPad
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowIOSGuide(false)}
-                className="w-8 h-8 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#8696A0] hover:bg-[#F0F2F5] dark:hover:bg-[#111B21] cursor-pointer"
-                aria-label="إغلاق النافذة"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="space-y-3 text-xs text-[#54656F] dark:text-[#8696A0] leading-relaxed">
-              <div className="flex items-start gap-2.5 bg-[#F0F2F5] dark:bg-[#111B21] p-3 rounded-xl">
-                <span className="w-5 h-5 rounded-full bg-[#00A884] text-white flex items-center justify-center font-bold text-[11px] shrink-0">
-                  ١
-                </span>
-                <span>اضغط على زر <strong>المشاركة (Share)</strong> في شريط متصفح Safari السفلي.</span>
-              </div>
-              <div className="flex items-start gap-2.5 bg-[#F0F2F5] dark:bg-[#111B21] p-3 rounded-xl">
-                <span className="w-5 h-5 rounded-full bg-[#00A884] text-white flex items-center justify-center font-bold text-[11px] shrink-0">
-                  ٢
-                </span>
-                <span>مرر للأسفل واختر <strong>إضافة إلى الشاشة الرئيسية (Add to Home Screen)</strong>.</span>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowIOSGuide(false)}
-              className="w-full rounded-xl bg-[#00A884] py-2.5 text-xs font-semibold text-white hover:bg-[#008069] cursor-pointer transition-colors"
-            >
-              فهمت، إغلاق
-            </button>
-          </div>
-        </div>
-      )}
+      {installGuideModal}
 
       {/* PWABuilder APK Generator Modal */}
       {showPWABuilderModal && (
@@ -513,7 +615,7 @@ export function PWAInstallButton({ className = '', compact = false }: PWAInstall
                           </span>
                         </div>
                         <p className="text-[11px] text-[#54656F] dark:text-[#8696A0]">
-                          ملف <code className="font-mono-code">sw.js</code> مسجل مع استراتيجيات التخزين المؤقت للعمل بدون إنترنت.
+                          عامل الخدمة <code className="font-mono-code">Service Worker</code> مسجل عبر Workbox مع استراتيجيات التخزين المؤقت للعمل بدون إنترنت.
                         </p>
                       </div>
                       <span className="text-[10px] bg-[#00A884]/15 text-[#008069] dark:text-[#06CF9C] px-2 py-0.5 rounded-full font-bold">

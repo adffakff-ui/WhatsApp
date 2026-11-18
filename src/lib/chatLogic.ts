@@ -456,3 +456,138 @@ export function filterExpiredDisappearingMessages(
   const maxAgeMs = disappearingSeconds * 1000;
   return messages.filter((msg) => nowMs - msg.createdAtMs < maxAgeMs);
 }
+
+export type MessageSearchFilter = 'all' | 'text' | 'link' | 'file' | 'poll';
+
+export interface MessageSearchResult {
+  message: DecryptedMessage;
+  chatId: string;
+  chatTitle: string;
+  chatAvatar: string;
+  isGroup: boolean;
+  snippet: string;
+}
+
+/**
+ * 1:1 character folding for Arabic & Latin search (preserves string length & exact slice indices).
+ */
+export function foldForSearch(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ى/g, 'ي');
+}
+
+export function splitTextByHighlight(
+  text: string,
+  query: string
+): Array<{ text: string; match: boolean }> {
+  const cleanQuery = query.trim();
+  if (!text || !cleanQuery) {
+    return text ? [{ text, match: false }] : [];
+  }
+
+  const foldedText = foldForSearch(text);
+  const foldedQuery = foldForSearch(cleanQuery);
+  if (!foldedQuery) {
+    return [{ text, match: false }];
+  }
+
+  const parts: Array<{ text: string; match: boolean }> = [];
+  let cursor = 0;
+  const qLen = foldedQuery.length;
+
+  while (cursor < text.length) {
+    const idx = foldedText.indexOf(foldedQuery, cursor);
+    if (idx === -1) {
+      parts.push({ text: text.slice(cursor), match: false });
+      break;
+    }
+    if (idx > cursor) {
+      parts.push({ text: text.slice(cursor, idx), match: false });
+    }
+    parts.push({ text: text.slice(idx, idx + qLen), match: true });
+    cursor = idx + qLen;
+  }
+
+  return parts;
+}
+
+export function getMessageSearchableText(msg: DecryptedMessage): string {
+  const parts: string[] = [];
+  if (msg.payload.text) parts.push(msg.payload.text);
+  if (msg.payload.fileName && msg.payload.fileName !== msg.payload.text) {
+    parts.push(msg.payload.fileName);
+  }
+  if (msg.payload.pollQuestion && msg.payload.pollQuestion !== msg.payload.text) {
+    parts.push(msg.payload.pollQuestion);
+  }
+  if (msg.payload.pollOptions?.length) {
+    for (const opt of msg.payload.pollOptions) {
+      if (opt.text) parts.push(opt.text);
+    }
+  }
+  return parts.join(' · ');
+}
+
+function matchesSearchFilterType(msg: DecryptedMessage, filterType: MessageSearchFilter): boolean {
+  if (filterType === 'all') return true;
+  if (filterType === 'text') return msg.type === 'text' || msg.type === 'image';
+  if (filterType === 'file') return msg.type === 'file';
+  if (filterType === 'poll') return msg.type === 'poll';
+  if (filterType === 'link') return /https?:\/\/[^\s<>"'`]+/i.test(msg.payload.text || '');
+  return true;
+}
+
+export function searchMessagesInChat(
+  messages: DecryptedMessage[],
+  query: string,
+  filterType: MessageSearchFilter = 'all'
+): DecryptedMessage[] {
+  const cleanQuery = foldForSearch(query.trim());
+  if (!cleanQuery && filterType === 'all') return [];
+
+  return messages.filter((msg) => {
+    if (msg.isDeleted) return false;
+    if (!matchesSearchFilterType(msg, filterType)) return false;
+    if (!cleanQuery) return true;
+    const searchable = foldForSearch(getMessageSearchableText(msg));
+    return searchable.includes(cleanQuery);
+  });
+}
+
+export function searchAllChatsMessages(
+  messagesMap: Record<string, DecryptedMessage[]>,
+  chats: ChatRoom[],
+  query: string,
+  excludedChatIds: string[] = [],
+  filterType: MessageSearchFilter = 'all',
+  limit = 40
+): MessageSearchResult[] {
+  const cleanQuery = foldForSearch(query.trim());
+  if (!cleanQuery && filterType === 'all') return [];
+
+  const excludedSet = new Set(excludedChatIds);
+  const results: MessageSearchResult[] = [];
+
+  for (const chat of chats) {
+    if (excludedSet.has(chat.id)) continue;
+    const msgs = messagesMap[chat.id] || [];
+    const matched = searchMessagesInChat(msgs, query, filterType);
+    for (const message of matched) {
+      const snippet = getMessageSearchableText(message) || message.payload.text || '';
+      results.push({
+        message,
+        chatId: chat.id,
+        chatTitle: chat.title,
+        chatAvatar: chat.avatarUrl,
+        isGroup: chat.type !== 'direct',
+        snippet
+      });
+    }
+  }
+
+  return results
+    .sort((a, b) => b.message.createdAtMs - a.message.createdAtMs)
+    .slice(0, Math.max(1, limit));
+}

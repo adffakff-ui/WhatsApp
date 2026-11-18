@@ -32,14 +32,20 @@ import {
   Pencil,
   Clock,
   RotateCcw,
-  Download
+  Download,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
 import { Avatar } from './Avatar';
+import { HighlightText } from './HighlightText';
+import { resolveBundledAssetUrl } from '../data/assets';
 import {
   filterExpiredDisappearingMessages,
   formatCallDuration,
   formatDisappearingLabel,
-  formatWhatsAppTime
+  formatWhatsAppTime,
+  searchMessagesInChat,
+  type MessageSearchFilter
 } from '../lib/chatLogic';
 import { FONT_SIZE_OPTIONS } from '../lib/omarConfig';
 import type {
@@ -73,6 +79,9 @@ interface ChatWindowProps {
   onToggleLockChat?: (chatId: string) => void;
   onTypingChange?: (isTyping: boolean) => void;
   isLocked?: boolean;
+  highlightedMessageId?: string | null;
+  externalSearchQuery?: string;
+  onClearExternalHighlight?: () => void;
 }
 
 async function compressChatImageToDataUrl(file: File): Promise<string> {
@@ -131,7 +140,10 @@ export function ChatWindow({
   onSetDisappearing,
   onToggleLockChat,
   onTypingChange,
-  isLocked = false
+  isLocked = false,
+  highlightedMessageId = null,
+  externalSearchQuery = '',
+  onClearExternalHighlight
 }: ChatWindowProps) {
   const [text, setText] = useState('');
   const [replyTo, setReplyTo] = useState<DecryptedMessage | null>(null);
@@ -149,9 +161,15 @@ export function ChatWindow({
   const [isRecording, setIsRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
+  const [showInChatSearch, setShowInChatSearch] = useState(false);
+  const [inChatSearchQuery, setInChatSearchQuery] = useState('');
+  const [inChatFilterType, setInChatFilterType] = useState<MessageSearchFilter>('all');
+  const [activeMatchIdx, setActiveMatchIdx] = useState(0);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const inChatSearchInputRef = useRef<HTMLInputElement>(null);
+  const msgRefsMap = useRef<Record<string, HTMLDivElement | null>>({});
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -160,9 +178,28 @@ export function ChatWindow({
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const recordTimerRef = useRef<number | null>(null);
 
+  const visibleMessages = chat
+    ? filterExpiredDisappearingMessages(messages, chat.disappearingSeconds)
+    : [];
+
+  const inChatMatches = showInChatSearch
+    ? searchMessagesInChat(visibleMessages, inChatSearchQuery, inChatFilterType)
+    : [];
+
+  const activeHighlightQuery = showInChatSearch
+    ? inChatSearchQuery
+    : externalSearchQuery || '';
+
+  const focusedMatchId =
+    showInChatSearch && inChatMatches.length > 0
+      ? inChatMatches[Math.min(activeMatchIdx, inChatMatches.length - 1)]?.id || null
+      : highlightedMessageId;
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length, chat?.id]);
+    if (!highlightedMessageId) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages.length, chat?.id, highlightedMessageId]);
 
   useEffect(() => {
     setReplyTo(null);
@@ -174,7 +211,23 @@ export function ChatWindow({
     setShowAttachMenu(false);
     setShowMoreMenu(false);
     setActiveMsgMenu(null);
+    setShowInChatSearch(false);
+    setInChatSearchQuery('');
+    setInChatFilterType('all');
+    setActiveMatchIdx(0);
   }, [chat?.id]);
+
+  useEffect(() => {
+    setActiveMatchIdx(inChatMatches.length > 0 ? inChatMatches.length - 1 : 0);
+  }, [inChatSearchQuery, inChatFilterType, inChatMatches.length]);
+
+  useEffect(() => {
+    if (!focusedMatchId) return;
+    const targetEl = msgRefsMap.current[focusedMatchId];
+    if (targetEl) {
+      targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [focusedMatchId]);
 
   useEffect(() => {
     const hasFloatingOpen =
@@ -624,9 +677,26 @@ export function ChatWindow({
           <button
             type="button"
             aria-label="البحث في الرسائل"
-            title="بحث في الدردشة"
-            onClick={() => onOpenRightPanel('search')}
-            className="hidden sm:flex w-10 h-10 rounded-full items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
+            title="بحث داخل المحادثة"
+            onClick={() => {
+              setShowInChatSearch((v) => {
+                const next = !v;
+                if (next) {
+                  if (externalSearchQuery) setInChatSearchQuery(externalSearchQuery);
+                  window.requestAnimationFrame(() => inChatSearchInputRef.current?.focus());
+                } else {
+                  setInChatSearchQuery('');
+                  setInChatFilterType('all');
+                  onClearExternalHighlight?.();
+                }
+                return next;
+              });
+            }}
+            className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
+              showInChatSearch
+                ? 'bg-[var(--wa-accent-soft)] text-[var(--wa-accent-strong)]'
+                : 'text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/10'
+            }`}
           >
             <Search className="w-5 h-5" aria-hidden="true" />
           </button>
@@ -668,12 +738,24 @@ export function ChatWindow({
                 type="button"
                 role="menuitem"
                 onClick={() => {
+                  setShowInChatSearch(true);
+                  setShowMoreMenu(false);
+                  window.requestAnimationFrame(() => inChatSearchInputRef.current?.focus());
+                }}
+                className="w-full px-4 py-2.5 text-right hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+              >
+                البحث في الرسائل
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
                   onOpenRightPanel('search');
                   setShowMoreMenu(false);
                 }}
-                className="sm:hidden w-full px-4 py-2.5 text-right hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+                className="hidden sm:block w-full px-4 py-2.5 text-right hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
               >
-                البحث في الرسائل
+                فهرس البحث الجانبي
               </button>
               <button
                 type="button"
@@ -740,6 +822,133 @@ export function ChatWindow({
         </div>
       </header>
 
+      {/* Inline Advanced In-Chat Search Bar */}
+      {showInChatSearch && (
+        <div
+          role="search"
+          aria-label="شريط البحث المتقدم داخل الرسائل"
+          className="px-3 sm:px-4 py-2 bg-white dark:bg-[#182229] border-b border-[#E9EDEF] dark:border-[#222D34] space-y-2 z-10 shrink-0"
+        >
+          <div className="flex items-center gap-2">
+            <div className="flex-1 min-w-0 flex items-center bg-[#F0F2F5] dark:bg-[#202C33] rounded-xl px-3 h-9">
+              <Search className="w-4 h-4 text-[#54656F] dark:text-[#8696A0] shrink-0 ml-2" aria-hidden="true" />
+              <input
+                ref={inChatSearchInputRef}
+                type="search"
+                value={inChatSearchQuery}
+                onChange={(e) => setInChatSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    setShowInChatSearch(false);
+                    setInChatSearchQuery('');
+                    setInChatFilterType('all');
+                    onClearExternalHighlight?.();
+                  } else if (e.key === 'Enter' && inChatMatches.length > 0) {
+                    e.preventDefault();
+                    setActiveMatchIdx((idx) =>
+                      e.shiftKey
+                        ? (idx + 1) % inChatMatches.length
+                        : (idx - 1 + inChatMatches.length) % inChatMatches.length
+                    );
+                  }
+                }}
+                placeholder="ابحث داخل رسائل هذه المحادثة..."
+                aria-label="نص البحث داخل الرسائل"
+                className="w-full bg-transparent text-xs sm:text-sm text-[#111B21] dark:text-[#E9EDEF] placeholder:text-[#54656F] dark:placeholder:text-[#8696A0] focus:outline-none"
+              />
+              {(inChatSearchQuery || inChatFilterType !== 'all') && (
+                <span className="text-[11px] font-mono-code text-[#54656F] dark:text-[#8696A0] whitespace-nowrap px-1.5">
+                  {inChatMatches.length > 0
+                    ? `${activeMatchIdx + 1}/${inChatMatches.length}`
+                    : '0/0'}
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                aria-label="النتيجة السابقة"
+                disabled={inChatMatches.length === 0}
+                onClick={() =>
+                  setActiveMatchIdx((idx) => (idx - 1 + inChatMatches.length) % inChatMatches.length)
+                }
+                className="w-8 h-8 rounded-lg bg-[#F0F2F5] dark:bg-[#202C33] flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] disabled:opacity-40 cursor-pointer"
+              >
+                <ChevronUp className="w-4 h-4" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                aria-label="النتيجة التالية"
+                disabled={inChatMatches.length === 0}
+                onClick={() =>
+                  setActiveMatchIdx((idx) => (idx + 1) % inChatMatches.length)
+                }
+                className="w-8 h-8 rounded-lg bg-[#F0F2F5] dark:bg-[#202C33] flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] disabled:opacity-40 cursor-pointer"
+              >
+                <ChevronDown className="w-4 h-4" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                aria-label="إغلاق شريط البحث"
+                onClick={() => {
+                  setShowInChatSearch(false);
+                  setInChatSearchQuery('');
+                  setInChatFilterType('all');
+                  onClearExternalHighlight?.();
+                }}
+                className="w-8 h-8 rounded-lg hover:bg-[#F0F2F5] dark:hover:bg-[#202C33] flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] cursor-pointer"
+              >
+                <X className="w-4 h-4" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+            {(
+              [
+                { id: 'all', label: 'الكل' },
+                { id: 'text', label: 'نص وصور' },
+                { id: 'link', label: 'روابط' },
+                { id: 'file', label: 'ملفات' },
+                { id: 'poll', label: 'استطلاعات' }
+              ] as { id: MessageSearchFilter; label: string }[]
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setInChatFilterType(opt.id)}
+                className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                  inChatFilterType === opt.id
+                    ? 'bg-[var(--wa-accent)] text-white font-semibold'
+                    : 'bg-[#F0F2F5] dark:bg-[#202C33] text-[#54656F] dark:text-[#8696A0]'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Highlighted External Jump Banner */}
+      {!showInChatSearch && highlightedMessageId && (
+        <div className="px-4 py-1.5 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-800/60 flex items-center justify-between text-xs text-amber-900 dark:text-amber-200 shrink-0">
+          <span>
+            {externalSearchQuery
+              ? `تم الانتقال إلى الرسالة المطابقة لـ «${externalSearchQuery}»`
+              : 'تم الانتقال إلى الرسالة المحددة'}
+          </span>
+          <button
+            type="button"
+            onClick={() => onClearExternalHighlight?.()}
+            className="font-bold underline cursor-pointer"
+          >
+            إخفاء التحديد
+          </button>
+        </div>
+      )}
+
       {/* Messages Canvas */}
       <div className={`flex-1 min-w-0 overflow-y-auto overflow-x-hidden wa-wallpaper-${omarSettings.wallpaper} px-3 sm:px-4 md:px-10 py-4 space-y-2.5`}>
         {/* E2EE Encryption Notice Banner */}
@@ -756,26 +965,34 @@ export function ChatWindow({
           </button>
         </div>
 
-        {filterExpiredDisappearingMessages(messages, chat.disappearingSeconds).map((msg) => {
+        {visibleMessages.map((msg) => {
           const isMine = msg.senderId === myUid;
           const isStarred = msg.starredBy.includes(myUid);
           const totalPollVotes =
             msg.payload.pollOptions?.reduce((sum, o) => sum + o.voterIds.length, 0) || 0;
           const reactionEntries = Object.entries(msg.reactions).filter(([, users]) => users.length > 0);
           const showPreservedDeleted = msg.isDeleted && omarSettings.antiDeleteMessages && Boolean(msg.payload.text);
+          const isFocusedHighlight = focusedMatchId === msg.id;
 
           return (
             <div
               key={msg.id}
+              ref={(el) => {
+                msgRefsMap.current[msg.id] = el;
+              }}
               className={`flex flex-col ${isMine ? 'items-start' : 'items-end'}`}
             >
               <div
-                className={`group relative max-w-[88%] sm:max-w-[70%] md:max-w-[62%] px-3 py-2 shadow-xs ${getBubbleRadiusClass(
+                className={`group relative max-w-[88%] sm:max-w-[70%] md:max-w-[62%] px-3 py-2 shadow-xs transition-all ${getBubbleRadiusClass(
                   isMine
                 )} ${
                   isMine
                     ? 'bg-[var(--wa-outgoing-bg)] text-[#111B21] dark:text-[#E9EDEF]'
                     : 'bg-white dark:bg-[#202C33] text-[#111B21] dark:text-[#E9EDEF]'
+                } ${
+                  isFocusedHighlight
+                    ? 'ring-2 ring-amber-400 dark:ring-amber-300 shadow-lg'
+                    : ''
                 }`}
               >
                 {/* Forwarded Label */}
@@ -821,13 +1038,19 @@ export function ChatWindow({
                 ) : msg.type === 'image' && msg.payload.mediaUrl ? (
                   <div className="space-y-1.5">
                     <img
-                      src={msg.payload.mediaUrl}
+                      src={resolveBundledAssetUrl(msg.payload.mediaUrl)}
                       alt={msg.payload.text || 'صورة مرفقة'}
                       referrerPolicy="no-referrer"
                       className="rounded-lg max-h-72 w-full object-cover bg-black/10"
                     />
                     {msg.payload.text && (
-                      <p className={`${fontSizeClass} leading-relaxed whitespace-pre-wrap`}>{msg.payload.text}</p>
+                      <p className={`${fontSizeClass} leading-relaxed whitespace-pre-wrap`}>
+                        <HighlightText
+                          text={msg.payload.text}
+                          query={activeHighlightQuery}
+                          active={isFocusedHighlight}
+                        />
+                      </p>
                     )}
                   </div>
                 ) : msg.type === 'voice' ? (
@@ -873,7 +1096,13 @@ export function ChatWindow({
                       <FileText className="w-5 h-5" aria-hidden="true" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium truncate">{msg.payload.fileName || msg.payload.text}</p>
+                      <p className="text-sm font-medium truncate">
+                        <HighlightText
+                          text={msg.payload.fileName || msg.payload.text}
+                          query={activeHighlightQuery}
+                          active={isFocusedHighlight}
+                        />
+                      </p>
                       <p className="text-[11px] text-[#54656F] dark:text-[#AEBAC1] font-mono-code">
                         {msg.payload.fileSizeLabel || 'PDF'} · مشفر
                       </p>
@@ -891,7 +1120,13 @@ export function ChatWindow({
                   </div>
                 ) : msg.type === 'poll' && msg.payload.pollOptions ? (
                   <div className="min-w-[240px] space-y-2.5 py-1">
-                    <p className="text-sm font-bold">{msg.payload.pollQuestion}</p>
+                    <p className="text-sm font-bold">
+                      <HighlightText
+                        text={msg.payload.pollQuestion || ''}
+                        query={activeHighlightQuery}
+                        active={isFocusedHighlight}
+                      />
+                    </p>
                     <div className="space-y-2">
                       {msg.payload.pollOptions.map((opt) => {
                         const voted = opt.voterIds.includes(myUid);
@@ -917,7 +1152,13 @@ export function ChatWindow({
                                 >
                                   {voted && <Check className="w-3 h-3" aria-hidden="true" />}
                                 </span>
-                                <span>{opt.text}</span>
+                                <span>
+                                  <HighlightText
+                                    text={opt.text}
+                                    query={activeHighlightQuery}
+                                    active={isFocusedHighlight}
+                                  />
+                                </span>
                               </span>
                               <span className="font-mono-code text-[#54656F] dark:text-[#AEBAC1]">
                                 {opt.voterIds.length}
@@ -936,7 +1177,11 @@ export function ChatWindow({
                   </div>
                 ) : (
                   <p className={`${fontSizeClass} leading-relaxed whitespace-pre-wrap break-words`}>
-                    {msg.payload.text}
+                    <HighlightText
+                      text={msg.payload.text}
+                      query={activeHighlightQuery}
+                      active={isFocusedHighlight}
+                    />
                   </p>
                 )}
 

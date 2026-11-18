@@ -24,7 +24,10 @@ import {
   sortStatusesWithPinned,
   resolveMessageReceiptStatus,
   mergePollVotesMap,
-  filterExpiredDisappearingMessages
+  filterExpiredDisappearingMessages,
+  splitTextByHighlight,
+  searchMessagesInChat,
+  searchAllChatsMessages
 } from './chatLogic';
 import type { ChatRoom, DecryptedMessage, PollOption, StatusItem } from '../types/chat';
 
@@ -392,5 +395,109 @@ test('filterExpiredDisappearingMessages filters old messages when disappearingSe
   assert.equal(filterExpiredDisappearingMessages([baseMsg, recentMsg], 0, now).length, 2);
   const filtered = filterExpiredDisappearingMessages([baseMsg, recentMsg], 86400, now);
   assert.deepEqual(filtered.map((m) => m.id), ['m2']);
+});
+
+test('splitTextByHighlight splits matching text segments including normalized Arabic alef/yeh', () => {
+  const parts = splitTextByHighlight('مرحبا أحمد، هذا اختبار أمني', 'احمد');
+  assert.deepEqual(parts, [
+    { text: 'مرحبا ', match: false },
+    { text: 'أحمد', match: true },
+    { text: '، هذا اختبار أمني', match: false }
+  ]);
+
+  assert.deepEqual(splitTextByHighlight('نص عادي', ''), [{ text: 'نص عادي', match: false }]);
+});
+
+test('searchMessagesInChat and searchAllChatsMessages search message payloads, filenames, polls, and exclude locked/deleted', () => {
+  const baseChat: ChatRoom = {
+    id: 'c_open',
+    type: 'direct',
+    title: 'سارة المنصور',
+    description: '',
+    avatarUrl: '',
+    memberIds: ['me', 'sara'],
+    pinned: false,
+    archived: false,
+    muted: false,
+    favorite: false,
+    unreadCount: 0,
+    disappearingSeconds: 0,
+    lastMessagePreview: 'أهلا',
+    lastMessageType: 'text',
+    lastMessageSenderId: 'me',
+    lastMessageStatus: 'read',
+    lastMessageAtMs: 5000,
+    roomSeed: 'c_open'
+  };
+  const lockedChat: ChatRoom = { ...baseChat, id: 'c_locked', title: 'محادثة خاصة' };
+
+  const mkMsg = (
+    id: string,
+    chatId: string,
+    text: string,
+    createdAtMs: number,
+    overrides: Partial<DecryptedMessage> = {}
+  ): DecryptedMessage => ({
+    id,
+    chatId,
+    senderId: 'me',
+    senderName: 'أنا',
+    type: 'text',
+    payload: { text },
+    ciphertext: 'c',
+    iv: 'i',
+    algorithm: 'AES-GCM-256',
+    reactions: {},
+    reactionsCount: 0,
+    starredBy: [],
+    isDeleted: false,
+    status: 'read',
+    createdAtMs,
+    ...overrides
+  });
+
+  const messagesMap: Record<string, DecryptedMessage[]> = {
+    c_open: [
+      mkMsg('m1', 'c_open', 'موعد المراجعة غداً https://example.com', 1000),
+      mkMsg('m2', 'c_open', 'مستند مهم', 2000, {
+        type: 'file',
+        payload: { text: 'مرفق', fileName: 'Wasil-Whitepaper.pdf' }
+      }),
+      mkMsg('m3', 'c_open', 'تم الحذف', 3000, { isDeleted: true }),
+      mkMsg('m4', 'c_open', 'استطلاع المراجعة', 4000, {
+        type: 'poll',
+        payload: {
+          text: 'متى نجتمع من أجل المراجعة؟',
+          pollQuestion: 'متى نجتمع من أجل المراجعة؟',
+          pollOptions: [{ id: 'o1', text: 'الخميس صباحاً', voterIds: [] }]
+        }
+      })
+    ],
+    c_locked: [mkMsg('m5', 'c_locked', 'كلمة سرية: المراجعة', 5000)]
+  };
+
+  assert.deepEqual(
+    searchMessagesInChat(messagesMap.c_open, 'whitepaper').map((m) => m.id),
+    ['m2']
+  );
+  assert.deepEqual(
+    searchMessagesInChat(messagesMap.c_open, 'الخميس').map((m) => m.id),
+    ['m4']
+  );
+  assert.deepEqual(
+    searchMessagesInChat(messagesMap.c_open, '', 'link').map((m) => m.id),
+    ['m1']
+  );
+
+  const globalResults = searchAllChatsMessages(
+    messagesMap,
+    [baseChat, lockedChat],
+    'المراجعة',
+    ['c_locked']
+  );
+  assert.deepEqual(
+    globalResults.map((r) => r.message.id),
+    ['m4', 'm1']
+  );
 });
 

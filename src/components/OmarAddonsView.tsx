@@ -15,22 +15,26 @@ import {
   KeyRound,
   Unlock
 } from 'lucide-react';
+import { BiometricLockPanel } from './BiometricLockPanel';
 import {
   BUBBLE_STYLES,
   FONT_SIZE_OPTIONS,
   OMAR_THEMES,
   WALLPAPERS
 } from '../lib/omarConfig';
-import type { ChatRoom, OmarSettings, ThemeMode } from '../types/chat';
+import type { ChatRoom, OmarSettings, ThemeMode, UserProfile } from '../types/chat';
 
 interface OmarAddonsViewProps {
   settings: OmarSettings;
   theme: ThemeMode;
   chats: ChatRoom[];
+  currentUser: UserProfile;
   onUpdateSettings: (patch: Partial<OmarSettings>) => void;
   onToggleTheme: () => void;
   onToggleLockChat: (chatId: string) => void;
   onResetDefaults: () => void;
+  onLockAppNow?: () => void;
+  onShowToast?: (message: string) => void;
 }
 
 type AddonSection = 'themes' | 'privacy' | 'lock' | 'autoreply';
@@ -39,10 +43,13 @@ export function OmarAddonsView({
   settings,
   theme,
   chats,
+  currentUser,
   onUpdateSettings,
   onToggleTheme,
   onToggleLockChat,
-  onResetDefaults
+  onResetDefaults,
+  onLockAppNow,
+  onShowToast
 }: OmarAddonsViewProps) {
   const [section, setSection] = useState<AddonSection>('themes');
   const [newTemplate, setNewTemplate] = useState('');
@@ -398,6 +405,15 @@ export function OmarAddonsView({
 
           {section === 'lock' && (
             <div className="space-y-5">
+              {/* Biometric / Face ID / WebAuthn App & Chat Lock */}
+              <BiometricLockPanel
+                settings={settings}
+                currentUser={currentUser}
+                onUpdateSettings={onUpdateSettings}
+                onLockAppNow={onLockAppNow}
+                onShowToast={onShowToast}
+              />
+
               {/* PIN Configuration */}
               <form
                 onSubmit={handleSavePin}

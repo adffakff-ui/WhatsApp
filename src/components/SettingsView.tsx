@@ -16,28 +16,35 @@ import {
   ChevronLeft
 } from 'lucide-react';
 import { Avatar } from './Avatar';
+import { BiometricLockPanel } from './BiometricLockPanel';
 import { PWAInstallButton } from './PWAInstallButton';
+import { PRESET_AVATARS } from '../data/assets';
 import { getVisibilityLabel, validateAvatarUrl, validateProfileInput } from '../lib/chatLogic';
-import type { PrivacySettings, ThemeMode, UserProfile, VisibilityScope } from '../types/chat';
+import type {
+  OmarSettings,
+  PrivacySettings,
+  ThemeMode,
+  UserProfile,
+  VisibilityScope
+} from '../types/chat';
 
 interface SettingsViewProps {
   currentUser: UserProfile;
   privacySettings: PrivacySettings;
   theme: ThemeMode;
   isCloudSynced: boolean;
+  omarSettings?: OmarSettings;
+  onUpdateOmarSettings?: (patch: Partial<OmarSettings>) => void;
+  onLockAppNow?: () => void;
+  onShowToast?: (message: string) => void;
   onToggleTheme: () => void;
   onSaveProfile: (displayName: string, about: string, avatarUrl: string) => Promise<void>;
   onUpdatePrivacy: (nextPrivacy: PrivacySettings) => Promise<void>;
   onSignOut: () => void;
+  isSigningOut?: boolean;
   onGoogleSignIn: () => Promise<void | boolean>;
   onOpenOmarAddons?: () => void;
 }
-
-const PRESET_AVATARS = [
-  '/src/assets/images/avatar_omar_1794759600042.jpg',
-  '/src/assets/images/avatar_sara_1794759599750.jpg',
-  '/src/assets/images/avatar_layla_1794759601411.jpg'
-];
 
 async function compressImageToAvatarDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -74,10 +81,15 @@ export function SettingsView({
   privacySettings,
   theme,
   isCloudSynced,
+  omarSettings,
+  onUpdateOmarSettings,
+  onLockAppNow,
+  onShowToast,
   onToggleTheme,
   onSaveProfile,
   onUpdatePrivacy,
   onSignOut,
+  isSigningOut = false,
   onGoogleSignIn,
   onOpenOmarAddons
 }: SettingsViewProps) {
@@ -160,12 +172,24 @@ export function SettingsView({
     <div className="flex-1 min-w-0 w-full max-w-full overflow-hidden flex flex-col md:flex-row h-full bg-white dark:bg-[#111B21]">
       <div className="w-full max-w-full min-w-0 md:w-[460px] md:shrink-0 border-l border-[#E9EDEF] dark:border-[#222D34] flex flex-col h-full overflow-hidden">
         <header className="h-16 px-3 sm:px-4 flex items-center justify-between gap-2 border-b border-[#F0F2F5] dark:border-[#222D34] shrink-0 min-w-0">
-          <h1 className="font-display text-base sm:text-xl font-bold text-[#111B21] dark:text-[#E9EDEF] min-w-0 truncate">
-            الملف الشخصي والخصوصية
-          </h1>
-          <span className="text-[11px] sm:text-xs text-[var(--wa-accent)] font-medium whitespace-nowrap shrink-0">
-            {isCloudSynced ? 'مزامنة Firebase نشطة' : 'حفظ محلي فوري'}
-          </span>
+          <div className="min-w-0">
+            <h1 className="font-display text-base sm:text-xl font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
+              الملف الشخصي والخصوصية
+            </h1>
+            <span className="text-[11px] text-[var(--wa-accent)] font-medium block truncate">
+              {isCloudSynced ? 'مزامنة Firebase نشطة' : 'حفظ محلي فوري'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onSignOut}
+            disabled={isSigningOut}
+            aria-label="تسجيل الخروج السريع"
+            className="shrink-0 px-2.5 py-1.5 rounded-full border border-red-200 dark:border-red-900/60 text-red-600 dark:text-red-400 text-xs font-semibold flex items-center gap-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-50 transition-colors cursor-pointer"
+          >
+            <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>خروج</span>
+          </button>
         </header>
 
         <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden p-3.5 sm:p-5 space-y-5 sm:space-y-6 pb-24 md:pb-6">
@@ -221,7 +245,7 @@ export function SettingsView({
                   {displayName || currentUser.displayName}
                 </p>
                 <p className="text-xs text-[#54656F] dark:text-[#8696A0] truncate">
-                  {currentUser.email || 'حساب معاينة محلي'}
+                  {currentUser.email || currentUser.phone || 'حساب محلي غير مرتبط بالسحابة'}
                 </p>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <button
@@ -437,6 +461,24 @@ export function SettingsView({
             </div>
           </div>
 
+          {/* Biometric & App Lock Security Section */}
+          {omarSettings && onUpdateOmarSettings && (
+            <div className="space-y-2.5 pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">
+              <h2 className="text-xs font-semibold text-[#54656F] dark:text-[#8696A0] flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
+                <span>قفل التطبيق والمصادقة الحيوية (WebAuthn)</span>
+              </h2>
+              <BiometricLockPanel
+                settings={omarSettings}
+                currentUser={currentUser}
+                onUpdateSettings={onUpdateOmarSettings}
+                onLockAppNow={onLockAppNow}
+                onShowToast={onShowToast}
+                compact
+              />
+            </div>
+          )}
+
           {/* Installation & Mobile Packages */}
           <div className="space-y-2.5 pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">
             <h2 className="text-xs font-semibold text-[#54656F] dark:text-[#8696A0] flex items-center gap-1.5">
@@ -461,10 +503,11 @@ export function SettingsView({
             <button
               type="button"
               onClick={onSignOut}
-              className="w-full py-2.5 px-4 rounded-xl border border-red-200 dark:border-red-900/60 text-red-600 dark:text-red-400 text-sm font-medium flex items-center justify-center gap-2 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors cursor-pointer"
+              disabled={isSigningOut}
+              className="w-full py-2.5 px-4 rounded-xl border border-red-200 dark:border-red-900/60 bg-red-50/50 dark:bg-red-950/20 text-red-600 dark:text-red-400 text-sm font-semibold flex items-center justify-center gap-2 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50 transition-colors cursor-pointer"
             >
               <LogOut className="w-4 h-4" aria-hidden="true" />
-              <span>تسجيل الخروج</span>
+              <span>{isSigningOut ? 'جاري تسجيل الخروج...' : 'تسجيل الخروج'}</span>
             </button>
           </div>
         </div>

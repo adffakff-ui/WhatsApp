@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search,
   MessageSquarePlus,
@@ -19,11 +19,25 @@ import {
   Plus,
   Star,
   Camera,
-  Radio
+  Radio,
+  LogOut,
+  MessageSquareText
 } from 'lucide-react';
 import { Avatar } from './Avatar';
-import { formatWhatsAppTime } from '../lib/chatLogic';
-import type { ChatFilter, ChatRoom, StatusItem, UserProfile } from '../types/chat';
+import { HighlightText } from './HighlightText';
+import { PWAInstallButton, PWAInstallGuideModal } from './PWAInstallButton';
+import {
+  formatWhatsAppTime,
+  searchAllChatsMessages,
+  type MessageSearchFilter
+} from '../lib/chatLogic';
+import type {
+  ChatFilter,
+  ChatRoom,
+  DecryptedMessage,
+  StatusItem,
+  UserProfile
+} from '../types/chat';
 
 interface ChatListPaneProps {
   chats: ChatRoom[];
@@ -58,6 +72,12 @@ interface ChatListPaneProps {
   onToggleFavorite: (chatId: string) => void;
   onToggleLockChat: (chatId: string) => void;
   isCloudSynced: boolean;
+  allChats?: ChatRoom[];
+  messagesMap?: Record<string, DecryptedMessage[]>;
+  unlockedChatIds?: string[];
+  onJumpToMessage?: (chatId: string, messageId: string, highlightQuery?: string) => void;
+  onLockAppNow?: () => void;
+  onSignOut?: () => void;
 }
 
 export function ChatListPane({
@@ -92,11 +112,32 @@ export function ChatListPane({
   onToggleMute,
   onToggleFavorite,
   onToggleLockChat,
-  isCloudSynced
+  isCloudSynced,
+  allChats,
+  messagesMap = {},
+  unlockedChatIds = [],
+  onJumpToMessage,
+  onLockAppNow,
+  onSignOut
 }: ChatListPaneProps) {
   const [menuChatId, setMenuChatId] = useState<string | null>(null);
   const [showHeaderMenu, setShowHeaderMenu] = useState(false);
+  const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [fabOpen, setFabOpen] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [msgFilter, setMsgFilter] = useState<MessageSearchFilter>('all');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const hasSearchQuery = searchQuery.trim().length > 0;
+  const showAdvancedFilters = searchFocused || hasSearchQuery || msgFilter !== 'all';
+
+  const messageSearchResults = useMemo(() => {
+    if (!hasSearchQuery && msgFilter === 'all') return [];
+    const pool = allChats && allChats.length > 0 ? allChats : chats;
+    const unlockedSet = new Set(unlockedChatIds);
+    const hiddenLockedIds = lockedChatIds.filter((id) => !unlockedSet.has(id));
+    return searchAllChatsMessages(messagesMap, pool, searchQuery, hiddenLockedIds, msgFilter, 40);
+  }, [hasSearchQuery, msgFilter, allChats, chats, messagesMap, searchQuery, lockedChatIds, unlockedChatIds]);
 
   useEffect(() => {
     if (!menuChatId && !showHeaderMenu && !fabOpen) return;
@@ -296,6 +337,39 @@ export function ChatListPane({
                   <Palette className="w-4 h-4" aria-hidden="true" />
                   <span>ثيمات وإضافات عمر</span>
                 </button>
+                {onLockAppNow && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setShowHeaderMenu(false);
+                      onLockAppNow();
+                    }}
+                    className="w-full px-4 py-2.5 text-right flex items-center gap-2.5 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] font-medium cursor-pointer"
+                  >
+                    <Lock className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+                    <span>قفل التطبيق الآن</span>
+                  </button>
+                )}
+                <PWAInstallButton
+                  variant="menu"
+                  onAction={() => setShowHeaderMenu(false)}
+                  onOpenGuide={() => setShowInstallGuide(true)}
+                />
+                {onSignOut && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setShowHeaderMenu(false);
+                      onSignOut();
+                    }}
+                    className="w-full px-4 py-2.5 text-right flex items-center gap-2.5 border-t border-[#F0F2F5] dark:border-[#2A3942] mt-1 pt-2.5 hover:bg-red-50 dark:hover:bg-red-950/30 text-red-600 dark:text-red-400 font-semibold cursor-pointer"
+                  >
+                    <LogOut className="w-4 h-4" aria-hidden="true" />
+                    <span>تسجيل الخروج</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -319,29 +393,82 @@ export function ChatListPane({
         </div>
       )}
 
-      {/* Search Bar */}
-      <div className="px-3 pt-2.5 pb-2 shrink-0">
-        <div className="relative flex items-center bg-[#F0F2F5] dark:bg-[#202C33] rounded-xl px-3 h-10">
-          <Search className="w-4 h-4 text-[#54656F] dark:text-[#8696A0] shrink-0 ml-2.5" aria-hidden="true" />
+      {/* Advanced Search Bar (Chats + Deep Message Content) */}
+      <div className="px-3 pt-2.5 pb-2 shrink-0 space-y-2">
+        <div
+          className={`relative flex items-center bg-[#F0F2F5] dark:bg-[#202C33] rounded-xl px-2.5 h-10 border transition-colors ${
+            showAdvancedFilters
+              ? 'border-[var(--wa-accent)]/50'
+              : 'border-transparent'
+          }`}
+        >
+          <button
+            type="button"
+            aria-label="تفعيل البحث المتقدم في الرسائل"
+            title="بحث في المحادثات والرسائل"
+            onClick={() => {
+              setSearchFocused(true);
+              searchInputRef.current?.focus();
+            }}
+            className="p-1.5 rounded-lg text-[#54656F] dark:text-[#8696A0] hover:text-[var(--wa-accent-strong)] shrink-0 cursor-pointer"
+          >
+            <Search className="w-4 h-4" aria-hidden="true" />
+          </button>
           <input
+            ref={searchInputRef}
             type="search"
             value={searchQuery}
+            onFocus={() => setSearchFocused(true)}
             onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="ابحث أو ابدأ دردشة جديدة"
-            aria-label="البحث في المحادثات"
-            className="w-full bg-transparent text-sm text-[#111B21] dark:text-[#E9EDEF] placeholder:text-[#54656F] dark:placeholder:text-[#8696A0] focus:outline-none"
+            placeholder="ابحث في المحادثات أو داخل الرسائل..."
+            aria-label="البحث في المحادثات والرسائل"
+            className="w-full bg-transparent text-sm text-[#111B21] dark:text-[#E9EDEF] placeholder:text-[#54656F] dark:placeholder:text-[#8696A0] focus:outline-none px-1.5"
           />
-          {searchQuery && (
+          {(searchQuery || msgFilter !== 'all' || searchFocused) && (
             <button
               type="button"
               aria-label="مسح البحث"
-              onClick={() => onSearchChange('')}
+              onClick={() => {
+                onSearchChange('');
+                setMsgFilter('all');
+                setSearchFocused(false);
+              }}
               className="p-1 text-[#54656F] dark:text-[#8696A0] hover:text-[#111B21] dark:hover:text-white cursor-pointer"
             >
               <X className="w-4 h-4" aria-hidden="true" />
             </button>
           )}
         </div>
+
+        {showAdvancedFilters && (
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+            {(
+              [
+                { id: 'all', label: 'الكل' },
+                { id: 'text', label: 'نص وصور' },
+                { id: 'link', label: 'روابط' },
+                { id: 'file', label: 'ملفات' },
+                { id: 'poll', label: 'استطلاعات' }
+              ] as { id: MessageSearchFilter; label: string }[]
+            ).map((opt) => {
+              const active = msgFilter === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setMsgFilter(opt.id)}
+                  className={`px-2.5 py-1 rounded-full text-[11px] font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                    active
+                      ? 'bg-[var(--wa-accent)] text-white font-semibold'
+                      : 'bg-[#F0F2F5] dark:bg-[#202C33] text-[#54656F] dark:text-[#8696A0] hover:bg-[#E9EDEF] dark:hover:bg-[#2A3942]'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Omar Stories Tray (Instagram/WhatsApp Omar Style) */}
@@ -437,24 +564,46 @@ export function ChatListPane({
         </button>
       )}
 
-      {/* Chat List */}
+      {/* Chat List & Deep Message Search Results */}
       <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden pb-24 md:pb-16">
-        {chats.length === 0 ? (
+        {chats.length === 0 && messageSearchResults.length === 0 ? (
           <div className="px-6 py-14 text-center">
             <p className="text-sm font-medium text-[#54656F] dark:text-[#8696A0]">
-              {filter === 'locked'
-                ? 'لا توجد محادثات مقفلة حالياً'
-                : 'لا توجد محادثات مطابقة للفلتر الحالي'}
+              {hasSearchQuery || msgFilter !== 'all'
+                ? 'لا توجد محادثات أو رسائل مطابقة لبحثك'
+                : filter === 'locked'
+                  ? 'لا توجد محادثات مقفلة حالياً'
+                  : 'لا توجد محادثات مطابقة للفلتر الحالي'}
             </p>
             <button
               type="button"
-              onClick={filter === 'locked' ? () => onChangeFilter('all') : onOpenNewChat}
+              onClick={
+                hasSearchQuery || msgFilter !== 'all'
+                  ? () => {
+                      onSearchChange('');
+                      setMsgFilter('all');
+                    }
+                  : filter === 'locked'
+                    ? () => onChangeFilter('all')
+                    : onOpenNewChat
+              }
               className="mt-4 px-4 py-2 rounded-full bg-[var(--wa-accent)] text-white text-xs font-semibold hover:brightness-95 transition-all cursor-pointer"
             >
-              {filter === 'locked' ? 'عرض جميع الدردشات' : 'بدء محادثة مشفرة جديدة'}
+              {hasSearchQuery || msgFilter !== 'all'
+                ? 'إعادة ضبط البحث'
+                : filter === 'locked'
+                  ? 'عرض جميع الدردشات'
+                  : 'بدء محادثة مشفرة جديدة'}
             </button>
           </div>
         ) : (
+          <>
+            {(hasSearchQuery || msgFilter !== 'all') && chats.length > 0 && (
+              <div className="px-4 py-1.5 bg-[#F8FAFB] dark:bg-[#182229] border-y border-[#F0F2F5] dark:border-[#222D34] text-[11px] font-bold text-[#54656F] dark:text-[#8696A0]">
+                المحادثات ({chats.length})
+              </div>
+            )}
+            {chats.length > 0 && (
           <ul className="divide-y divide-[#F0F2F5] dark:divide-[#222D34]/60">
             {chats.map((chat) => {
               const isSelected = selectedChatId === chat.id;
@@ -489,7 +638,9 @@ export function ChatListPane({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-[15px] font-semibold text-[#111B21] dark:text-[#E9EDEF] truncate flex items-center gap-1.5">
-                          <span className="truncate">{chat.title}</span>
+                          <span className="truncate">
+                            <HighlightText text={chat.title} query={searchQuery} />
+                          </span>
                           {isLocked && (
                             <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" aria-label="محادثة مقفلة" />
                           )}
@@ -524,7 +675,7 @@ export function ChatListPane({
                             ) : chat.isTyping ? (
                               <span className="text-[var(--wa-accent)] font-medium">يكتب الآن...</span>
                             ) : (
-                              chat.lastMessagePreview
+                              <HighlightText text={chat.lastMessagePreview} query={searchQuery} />
                             )}
                           </span>
                         </div>
@@ -641,7 +792,68 @@ export function ChatListPane({
                 </li>
               );
             })}
-          </ul>
+            </ul>
+            )}
+
+            {/* Deep Message Content Results */}
+            {(hasSearchQuery || msgFilter !== 'all') && (
+              <div className="mt-1">
+                <div className="px-4 py-1.5 bg-[#F8FAFB] dark:bg-[#182229] border-y border-[#F0F2F5] dark:border-[#222D34] flex items-center justify-between text-[11px] font-bold text-[var(--wa-accent-strong)]">
+                  <span className="flex items-center gap-1.5">
+                    <MessageSquareText className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>الرسائل المطابقة ({messageSearchResults.length})</span>
+                  </span>
+                </div>
+                {messageSearchResults.length === 0 ? (
+                  <p className="px-4 py-5 text-center text-xs text-[#667781] dark:text-[#8696A0]">
+                    لا توجد رسائل مطابقة لهذا البحث.
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-[#F0F2F5] dark:divide-[#222D34]/60">
+                    {messageSearchResults.map((res) => (
+                      <li key={`${res.chatId}_${res.message.id}`}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMenuChatId(null);
+                            if (onJumpToMessage) {
+                              onJumpToMessage(res.chatId, res.message.id, searchQuery);
+                            } else {
+                              onSelectChat(res.chatId);
+                            }
+                          }}
+                          className="w-full px-3.5 py-2.5 flex items-start gap-3 text-right hover:bg-[#F5F6F6] dark:hover:bg-[#202C33] transition-colors cursor-pointer"
+                        >
+                          <Avatar
+                            src={res.chatAvatar}
+                            name={res.chatTitle}
+                            size="md"
+                            isGroup={res.isGroup}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
+                                {res.chatTitle}
+                              </span>
+                              <span className="text-[10px] font-mono-code text-[#667781] dark:text-[#8696A0] shrink-0">
+                                {formatWhatsAppTime(res.message.createdAtMs)}
+                              </span>
+                            </div>
+                            <p className="mt-0.5 text-xs text-[#54656F] dark:text-[#AEBAC1] line-clamp-2 break-words">
+                              <span className="font-semibold text-[#111B21] dark:text-[#E9EDEF]">
+                                {res.message.senderId === myUid ? 'أنت' : res.message.senderName}:{' '}
+                              </span>
+                              <HighlightText text={res.snippet} query={searchQuery} />
+                            </p>
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -729,6 +941,11 @@ export function ChatListPane({
           />
         </button>
       </div>
+
+      <PWAInstallGuideModal
+        open={showInstallGuide}
+        onClose={() => setShowInstallGuide(false)}
+      />
     </section>
   );
 }

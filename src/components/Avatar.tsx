@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Users } from 'lucide-react';
+import { resolveBundledAssetUrl } from '../data/assets';
 
 interface AvatarProps {
   src?: string;
@@ -18,6 +19,7 @@ const SIZE_CLASSES: Record<NonNullable<AvatarProps['size']>, string> = {
 
 export function Avatar({ src, name, size = 'md', isOnline, isGroup }: AvatarProps) {
   const [imgFailed, setImgFailed] = useState(false);
+  const resolvedSrc = resolveBundledAssetUrl(src);
   const initials = name
     .trim()
     .split(/\s+/)
@@ -27,9 +29,9 @@ export function Avatar({ src, name, size = 'md', isOnline, isGroup }: AvatarProp
 
   return (
     <div className={`relative shrink-0 rounded-full ${SIZE_CLASSES[size]}`}>
-      {src && !imgFailed ? (
+      {resolvedSrc && !imgFailed ? (
         <img
-          src={src}
+          src={resolvedSrc}
           alt={name}
           referrerPolicy="no-referrer"
           onError={() => setImgFailed(true)}

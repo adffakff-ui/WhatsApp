@@ -13,6 +13,7 @@ import {
   Radio
 } from 'lucide-react';
 import { Avatar } from './Avatar';
+import { GROUP_ICON_PRESETS } from '../data/assets';
 import { validateAvatarUrl } from '../lib/chatLogic';
 import type { UserProfile } from '../types/chat';
 
@@ -34,12 +35,6 @@ interface NewChatModalProps {
   onLookupPeerByUid?: (uid: string) => Promise<UserProfile | null>;
   onImportGoogleContacts?: () => Promise<void>;
 }
-
-const GROUP_ICON_PRESETS = [
-  '/src/assets/images/avatar_tech_group_1794759600547.jpg',
-  '/src/assets/images/avatar_sara_1794759599750.jpg',
-  '/src/assets/images/avatar_omar_1794759600042.jpg'
-];
 
 async function compressGroupIcon(file: File): Promise<string> {
   return new Promise((resolve, reject) => {

@@ -133,7 +133,7 @@ export function mapFirebaseAuthErrorToArabic(error: unknown): string {
     return 'صيغة البريد الإلكتروني غير صحيحة.';
   }
   if (combined.includes('auth/popup-blocked')) {
-    return 'تم حظر النافذة المنبثقة من المتصفح. اسمح بالنوافذ المنبثقة أو استخدم البريد أو المعاينة.';
+    return 'تم حظر النافذة المنبثقة من المتصفح. اسمح بالنوافذ المنبثقة أو استخدم الدخول بالبريد الإلكتروني أو رقم الهاتف.';
   }
   if (combined.includes('auth/popup-closed-by-user')) {
     return 'تم إغلاق نافذة المصادقة قبل إتمام تسجيل الدخول.';
@@ -151,10 +151,10 @@ export function mapFirebaseAuthErrorToArabic(error: unknown): string {
     return 'رقم الهاتف غير صالح. تأكد من اختيار رمز الدولة الصحيح وإدخال الرقم كاملاً.';
   }
   if (combined.includes('auth/operation-not-allowed')) {
-    return 'طريقة الدخول هذه غير مفعّلة في إعدادات مشروع Firebase حالياً. يمكنك الدخول عبر Google أو البريد أو المعاينة الفورية.';
+    return 'طريقة الدخول هذه غير مفعّلة في إعدادات مشروع Firebase حالياً. يمكنك الدخول عبر Google أو البريد الإلكتروني.';
   }
   if (combined.includes('auth/captcha-check-failed') || combined.includes('recaptcha')) {
-    return 'تعذر إتمام التحقق الأمني (reCAPTCHA) في هذا النطاق. استخدم تسجيل الدخول عبر Google أو البريد أو المعاينة الفورية.';
+    return 'تعذر إتمام التحقق الأمني (reCAPTCHA) في هذا النطاق. استخدم تسجيل الدخول عبر Google أو البريد الإلكتروني.';
   }
   if (combined.includes('auth/network-request-failed')) {
     return 'تعذر الاتصال بالخادم. تحقق من اتصال الإنترنت وحاول مرة أخرى.';
