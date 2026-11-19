@@ -236,7 +236,6 @@ export function CallOverlay({
     let unsubCallDoc: (() => void) | null = null;
     let unsubIce: (() => void) | null = null;
     let statsTimer: number | null = null;
-    let demoConnectTimer: number | null = null;
     let ringTimeoutTimer: number | null = null;
     let restartAttempts = 0;
 
@@ -245,7 +244,6 @@ export function CallOverlay({
       unsubCallDoc?.();
       unsubIce?.();
       if (statsTimer) window.clearInterval(statsTimer);
-      if (demoConnectTimer) window.clearTimeout(demoConnectTimer);
       if (ringTimeoutTimer) window.clearTimeout(ringTimeoutTimer);
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
       remoteStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -511,16 +509,13 @@ export function CallOverlay({
           }
         });
       } else {
-        // Local preview call (demo / offline contact)
-        if (isCloudSynced) {
-          void saveCallRecordToFirestore(activeCall).catch(() => {});
-        }
-        demoConnectTimer = window.setTimeout(() => {
-          if (!cancelled) {
-            setCallState('connected');
-            setIceStatusLabel('متصل · جودة HD محلية');
+        setIceStatusLabel('تعذر بدء الاتصال السحابي بالطرف الآخر');
+        ringTimeoutTimer = window.setTimeout(() => {
+          if (!cancelled && !finishedRef.current) {
+            finishedRef.current = true;
+            onEndCall(0, 'missed', true);
           }
-        }, 1200);
+        }, 3000);
       }
 
       return pc;

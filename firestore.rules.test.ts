@@ -52,5 +52,10 @@ test('Dirty Dozen security invariants are enforced in firestore.rules', () => {
   assert.match(rulesContent, /'lastMessageDeliveredToIds'/);
   assert.match(rulesContent, /'lastMessageReadByIds'/);
   assert.match(rulesContent, /'isTyping'/);
+
+  // 13. Multi-device session isolation & owner-only E2EE key sync
+  assert.match(rulesContent, /match \/users\/\{userId\}\/devices\/\{deviceId\}/);
+  assert.match(rulesContent, /isValidDeviceSession/);
+  assert.match(rulesContent, /'identityPrivateKeyJwk'/);
 });
 

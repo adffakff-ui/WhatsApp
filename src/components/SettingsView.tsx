@@ -13,14 +13,27 @@ import {
   UserCheck,
   Download,
   Palette,
-  ChevronLeft
+  ChevronLeft,
+  Edit3,
+  Smartphone,
+  Laptop,
+  RefreshCw
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { BiometricLockPanel } from './BiometricLockPanel';
 import { PWAInstallButton } from './PWAInstallButton';
 import { PRESET_AVATARS } from '../data/assets';
-import { getVisibilityLabel, validateAvatarUrl, validateProfileInput } from '../lib/chatLogic';
+import {
+  getVisibilityLabel,
+  normalizeWasilId,
+  validateAvatarUrl,
+  validateProfileInput,
+  validateWasilId
+} from '../lib/chatLogic';
+import { formatDeviceLastActive, isDeviceSessionActive } from '../lib/deviceSession';
+import { checkWasilIdAvailability } from '../services/firestoreSync';
 import type {
+  DeviceSession,
   OmarSettings,
   PrivacySettings,
   ThemeMode,
@@ -33,12 +46,16 @@ interface SettingsViewProps {
   privacySettings: PrivacySettings;
   theme: ThemeMode;
   isCloudSynced: boolean;
+  linkedDevices?: DeviceSession[];
+  currentDeviceId?: string;
+  onRevokeDevice?: (deviceId: string) => Promise<void>;
   omarSettings?: OmarSettings;
   onUpdateOmarSettings?: (patch: Partial<OmarSettings>) => void;
   onLockAppNow?: () => void;
   onShowToast?: (message: string) => void;
   onToggleTheme: () => void;
   onSaveProfile: (displayName: string, about: string, avatarUrl: string) => Promise<void>;
+  onUpdateWasilId?: (newWasilId: string) => Promise<void>;
   onUpdatePrivacy: (nextPrivacy: PrivacySettings) => Promise<void>;
   onSignOut: () => void;
   isSigningOut?: boolean;
@@ -83,12 +100,16 @@ export function SettingsView({
   privacySettings,
   theme,
   isCloudSynced,
+  linkedDevices = [],
+  currentDeviceId,
+  onRevokeDevice,
   omarSettings,
   onUpdateOmarSettings,
   onLockAppNow,
   onShowToast,
   onToggleTheme,
   onSaveProfile,
+  onUpdateWasilId,
   onUpdatePrivacy,
   onSignOut,
   isSigningOut = false,
@@ -106,6 +127,11 @@ export function SettingsView({
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copiedUid, setCopiedUid] = useState(false);
+  const [editingWasilId, setEditingWasilId] = useState(false);
+  const [wasilIdInput, setWasilIdInput] = useState(currentUser.wasilId || '');
+  const [wasilIdError, setWasilIdError] = useState<string | null>(null);
+  const [savingWasilId, setSavingWasilId] = useState(false);
+  const [revokingDeviceId, setRevokingDeviceId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -113,7 +139,10 @@ export function SettingsView({
     setDisplayName(currentUser.displayName);
     setAbout(currentUser.about);
     setAvatarUrl(currentUser.avatarUrl);
-  }, [currentUser.displayName, currentUser.about, currentUser.avatarUrl]);
+    if (!editingWasilId) {
+      setWasilIdInput(currentUser.wasilId || '');
+    }
+  }, [currentUser.displayName, currentUser.about, currentUser.avatarUrl, currentUser.wasilId, editingWasilId]);
 
   useEffect(() => {
     setPrivacy(privacySettings);
@@ -164,6 +193,31 @@ export function SettingsView({
     await onUpdatePrivacy(next);
     setPrivacySavedNotice(true);
     window.setTimeout(() => setPrivacySavedNotice(false), 2000);
+  };
+
+  const handleSaveWasilId = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onUpdateWasilId) return;
+    const validation = validateWasilId(wasilIdInput);
+    if (!validation.valid) {
+      setWasilIdError(validation.error || 'معرّف غير صالح.');
+      return;
+    }
+    setWasilIdError(null);
+    setSavingWasilId(true);
+    try {
+      const check = await checkWasilIdAvailability(validation.normalized, currentUser.uid);
+      if (!check.available) {
+        setWasilIdError(check.error || 'هذا المعرف محجوز لمستخدم آخر بالفعل.');
+        return;
+      }
+      await onUpdateWasilId(validation.normalized);
+      setEditingWasilId(false);
+    } catch (err) {
+      setWasilIdError(err instanceof Error ? err.message : 'تعذر تحديث المعرف.');
+    } finally {
+      setSavingWasilId(false);
+    }
   };
 
   const visibilityOptions: { value: VisibilityScope; label: string }[] = [
@@ -487,40 +541,204 @@ export function SettingsView({
           <div className="space-y-2 pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">
             <h2 className="text-xs font-semibold text-[#54656F] dark:text-[#8696A0] flex items-center gap-1.5">
               <Shield className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
-              <span>معرّف أكرم الخاص بك (Wasil ID)</span>
+              <span>معرّفك الخاص للمراسلة (Wasil ID)</span>
             </h2>
-            <div className="p-3.5 rounded-2xl bg-[#F0F2F5] dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#374248] flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <span dir="ltr" className="block font-mono-code text-sm font-bold text-[var(--wa-accent-strong)] truncate">
-                  {currentUser.wasilId || '@akram_user'}
-                </span>
-                <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] mt-0.5">
-                  شارك هذا المعرف مع الآخرين لبدء محادثات مشفرة فورية.
-                </p>
+            <div className="p-3.5 rounded-2xl bg-[#F0F2F5] dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#374248] space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <span dir="ltr" className="block font-mono-code text-sm font-bold text-[var(--wa-accent-strong)] truncate">
+                    {currentUser.wasilId || currentUser.uid}
+                  </span>
+                  <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] mt-0.5">
+                    شارك هذا المعرف مع الآخرين للبحث عنك وبدء محادثات مشفرة فورية.
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {onUpdateWasilId && !editingWasilId && (
+                    <button
+                      type="button"
+                      aria-label="تعديل المعرف الخاص"
+                      onClick={() => {
+                        setWasilIdInput(currentUser.wasilId || '');
+                        setWasilIdError(null);
+                        setEditingWasilId(true);
+                      }}
+                      className="px-2.5 py-2 rounded-xl bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#374248] text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>تعديل</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const idToCopy = currentUser.wasilId || currentUser.uid;
+                      void navigator.clipboard?.writeText(idToCopy);
+                      setCopiedUid(true);
+                      window.setTimeout(() => setCopiedUid(false), 1800);
+                    }}
+                    className="px-3 py-2 rounded-xl bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#374248] text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {copiedUid ? (
+                      <>
+                        <Check className="w-4 h-4 text-emerald-500" />
+                        <span>تم النسخ</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-4 h-4" />
+                        <span>نسخ</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  void navigator.clipboard?.writeText(currentUser.wasilId || '@akram_user');
-                  setCopiedUid(true);
-                  window.setTimeout(() => setCopiedUid(false), 1800);
-                }}
-                className="shrink-0 px-3 py-2 rounded-xl bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#374248] text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-              >
-                {copiedUid ? (
-                  <>
-                    <Check className="w-4 h-4 text-emerald-500" />
-                    <span>تم النسخ</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-4 h-4" />
-                    <span>نسخ</span>
-                  </>
-                )}
-              </button>
+
+              {editingWasilId && onUpdateWasilId && (
+                <form onSubmit={(e) => void handleSaveWasilId(e)} className="pt-2 border-t border-[#E9EDEF] dark:border-[#374248] space-y-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      dir="ltr"
+                      maxLength={32}
+                      value={wasilIdInput}
+                      onChange={(e) => {
+                        setWasilIdError(null);
+                        const v = e.target.value;
+                        setWasilIdInput(v.startsWith('@') ? v : `@${v.replace(/^@+/, '')}`);
+                      }}
+                      onBlur={() => {
+                        if (wasilIdInput.trim()) {
+                          const norm = normalizeWasilId(wasilIdInput);
+                          if (norm) setWasilIdInput(norm);
+                        }
+                      }}
+                      placeholder="@new_handle"
+                      className="flex-1 min-w-0 rounded-lg bg-white dark:bg-[#111B21] border border-[#D1D7DB] dark:border-[#374248] px-3 py-2 font-mono-code text-xs font-semibold text-[#111B21] dark:text-[#E9EDEF] focus:outline-none focus:ring-2 focus:ring-[var(--wa-accent)]"
+                    />
+                    <button
+                      type="submit"
+                      disabled={savingWasilId}
+                      className="px-3 py-2 rounded-lg bg-[var(--wa-accent)] text-white text-xs font-bold hover:brightness-95 disabled:opacity-60 cursor-pointer shrink-0"
+                    >
+                      {savingWasilId ? '...' : 'حفظ'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingWasilId(false);
+                        setWasilIdError(null);
+                      }}
+                      className="px-2.5 py-2 rounded-lg text-xs font-medium text-[#54656F] dark:text-[#AEBAC1] cursor-pointer shrink-0"
+                    >
+                      إلغاء
+                    </button>
+                  </div>
+                  {wasilIdError && (
+                    <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">
+                      {wasilIdError}
+                    </p>
+                  )}
+                </form>
+              )}
             </div>
           </div>
+
+          {/* Multi-Device Linked Sessions & Real-Time Sync */}
+          {isCloudSynced && (
+            <div className="space-y-2.5 pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-xs font-semibold text-[#54656F] dark:text-[#8696A0] flex items-center gap-1.5">
+                  <Smartphone className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
+                  <span>الأجهزة المرتبطة والمزامنة اللحظية ({linkedDevices.length})</span>
+                </h2>
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                  <RefreshCw className="w-3 h-3" aria-hidden="true" />
+                  <span>مزامنة لحظية مفعلة</span>
+                </span>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-[#F0F2F5] dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#374248] space-y-2.5">
+                <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] leading-relaxed">
+                  يمكنك تسجيل الدخول بنفس الحساب على عدة أجهزة في آنٍ واحد مع مزامنة مفاتيح التشفير والرسائل لحظياً عبر السحابة.
+                </p>
+
+                {linkedDevices.length === 0 ? (
+                  <p className="text-xs text-[#667781] dark:text-[#8696A0] py-2 text-center">
+                    جاري مزامنة سجل الأجهزة النشطة...
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {linkedDevices.map((dev) => {
+                      const isSelf = Boolean(currentDeviceId && dev.deviceId === currentDeviceId);
+                      const isMobile =
+                        dev.platform === 'Android' || dev.platform === 'iPhone' || dev.platform === 'iPad';
+                      const activeNow = dev.isOnline && isDeviceSessionActive(dev.lastActiveAtMs);
+                      return (
+                        <li
+                          key={dev.deviceId}
+                          className="p-2.5 rounded-xl bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#2A3942] flex items-center justify-between gap-2.5"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="relative w-9 h-9 rounded-lg bg-[var(--wa-accent-soft)] dark:bg-[#202C33] text-[var(--wa-accent-strong)] flex items-center justify-center shrink-0">
+                              {isMobile ? (
+                                <Smartphone className="w-4 h-4" aria-hidden="true" />
+                              ) : (
+                                <Laptop className="w-4 h-4" aria-hidden="true" />
+                              )}
+                              {activeNow && (
+                                <span
+                                  aria-label="متصل الآن"
+                                  className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-[#111B21]"
+                                />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
+                                  {dev.deviceName}
+                                </span>
+                                {isSelf && (
+                                  <span className="px-1.5 py-0.5 rounded bg-[var(--wa-accent-soft)] text-[var(--wa-accent-strong)] text-[10px] font-bold">
+                                    هذا الجهاز
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate">
+                                {formatDeviceLastActive(dev.lastActiveAtMs, dev.isOnline)}
+                              </p>
+                            </div>
+                          </div>
+
+                          {!isSelf && onRevokeDevice && (
+                            <button
+                              type="button"
+                              disabled={revokingDeviceId === dev.deviceId}
+                              onClick={() => {
+                                setRevokingDeviceId(dev.deviceId);
+                                void onRevokeDevice(dev.deviceId)
+                                  .catch(() => {
+                                    onShowToast?.('تعذر فصل الجهاز حالياً، يرجى المحاولة مجدداً.');
+                                  })
+                                  .finally(() => {
+                                    setRevokingDeviceId((curr) =>
+                                      curr === dev.deviceId ? null : curr
+                                    );
+                                  });
+                              }}
+                              className="shrink-0 px-2.5 py-1.5 rounded-lg border border-red-200 dark:border-red-900/60 text-red-600 dark:text-red-400 text-[11px] font-semibold hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-50 cursor-pointer"
+                            >
+                              {revokingDeviceId === dev.deviceId ? 'جاري الفصل...' : 'فصل الجهاز'}
+                            </button>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Cloud & Local Backup & Restore */}
           <div className="space-y-2.5 pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">

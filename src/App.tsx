@@ -42,20 +42,19 @@ import {
   filterAndSortChats,
   isRemoteFirebaseUid,
   isStatusExpired,
-  sortStatusesWithPinned,
-  STATUS_TTL_MS
+  sortStatusesWithPinned
 } from './lib/chatLogic';
 import { deleteMediaBlob } from './lib/mediaStorage';
 import { DEFAULT_OMAR_SETTINGS } from './lib/omarConfig';
 import {
-  createInitialCalls,
-  createInitialChats,
-  createInitialMessagesMap,
-  createInitialStatuses,
-  DEMO_CONTACTS
-} from './data/seedData';
+  detectClientDeviceInfo,
+  getOrCreateLocalDeviceId
+} from './lib/deviceSession';
 import {
+  backupUserDataToFirestore,
+  claimCustomWasilId,
   createChatInFirestore,
+  createMultiChatMessageSyncController,
   deleteChatInFirestore,
   deleteStatusFromFirestore,
   editEncryptedMessageInFirestore,
@@ -67,16 +66,21 @@ import {
   markChatMessagesReadInFirestore,
   markStatusViewedInFirestore,
   publishStatusToFirestore,
+  registerOrHeartbeatDeviceInFirestore,
+  removeDeviceSessionInFirestore,
   removeMemberFromGroupInFirestore,
+  restoreUserDataFromFirestore,
   saveChatPrefToFirestore,
   sendEncryptedMessageToFirestore,
   setUserPresenceInFirestore,
   softDeleteMessageInFirestore,
   subscribeCallsFromFirestore,
-  subscribeChatMessagesFromFirestore,
   subscribeIncomingCallsFromFirestore,
+  subscribeOwnPrivateInfoFromFirestore,
+  subscribeOwnPublicProfileFromFirestore,
   subscribeStatusesFromFirestore,
   subscribeUserChatsFromFirestore,
+  subscribeUserDevicesFromFirestore,
   syncUserProfileToFirestore,
   togglePinStatusInFirestore,
   toggleStarMessageInFirestore,
@@ -89,7 +93,8 @@ import {
   votePollInFirestore,
   scheduleMessageInFirestore,
   deleteScheduledMessageFromFirestore,
-  subscribeScheduledMessagesFromFirestore
+  subscribeScheduledMessagesFromFirestore,
+  type MultiChatMessageSyncController
 } from './services/firestoreSync';
 import { AuthScreen, type OnboardingCompletionPayload } from './components/AuthScreen';
 import { NavRail } from './components/NavRail';
@@ -112,6 +117,7 @@ import type {
   ChatFilter,
   ChatRoom,
   DecryptedMessage,
+  DeviceSession,
   MessagePayload,
   MessageType,
   NavTab,
@@ -128,13 +134,13 @@ const STORAGE_KEYS = {
   KEYS: 'wasil_identity_keys_v1',
   THEME: 'wasil_theme_v1',
   OMAR: 'wasil_omar_settings_v1',
-  CHATS: 'wasil_demo_chats_v1',
-  MESSAGES: 'wasil_demo_messages_v1',
-  STATUSES: 'wasil_demo_statuses_v1',
+  CHATS: 'wasil_chats_v1',
+  MESSAGES: 'wasil_messages_v1',
+  STATUSES: 'wasil_statuses_v1',
   PINNED_STATUSES: 'wasil_pinned_statuses_v1',
-  CALLS: 'wasil_demo_calls_v1',
-  PROFILE: 'wasil_demo_profile_v1',
-  PRIVACY: 'wasil_demo_privacy_v1',
+  CALLS: 'wasil_calls_v1',
+  PROFILE: 'wasil_profile_v1',
+  PRIVACY: 'wasil_privacy_v1',
   ENTERED: 'wasil_entered_v1'
 };
 
@@ -189,7 +195,7 @@ export default function App() {
   const [biometricChatBusy, setBiometricChatBusy] = useState(false);
   const [biometricChatError, setBiometricChatError] = useState<string | null>(null);
   const holdEntryForProfileStep = useRef(false);
-  const demoReceiptTimersRef = useRef<number[]>([]);
+  const pendingOnboardingRef = useRef<OnboardingCompletionPayload | null>(null);
   const deliveredSummaryAckedRef = useRef<Set<string>>(new Set());
   const deliveredMsgAckedRef = useRef<Set<string>>(new Set());
   const readMsgAckedRef = useRef<Set<string>>(new Set());
@@ -199,14 +205,30 @@ export default function App() {
   const [identityKeys, setIdentityKeys] = useState<IdentityKeys | null>(() =>
     readJsonStorage<IdentityKeys>(STORAGE_KEYS.KEYS)
   );
+  const [linkedDevices, setLinkedDevices] = useState<DeviceSession[]>([]);
+  const localDeviceMeta = useMemo(
+    () => ({
+      deviceId: getOrCreateLocalDeviceId(),
+      ...detectClientDeviceInfo()
+    }),
+    []
+  );
+  const identityKeysRef = useRef<IdentityKeys | null>(identityKeys);
+  const msgSyncControllerRef = useRef<MultiChatMessageSyncController | null>(null);
+  const deviceRegisteredRef = useRef(false);
+  const remoteRevokeHandlerRef = useRef<() => void>(() => {});
 
+  useEffect(() => {
+    identityKeysRef.current = identityKeys;
+  }, [identityKeys]);
 
   const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
     const saved = readJsonStorage<UserProfile>(STORAGE_KEYS.PROFILE);
+    const validSaved = saved && isRemoteFirebaseUid(saved.uid) ? saved : null;
     return (
-      saved || {
-        uid: 'demo_user_me',
-        displayName: 'أحمد العتيبي',
+      validSaved || {
+        uid: '',
+        displayName: 'مستخدم تواصل',
         about: 'متاح · رسائلي مشفرة تماماً',
         avatarUrl: '',
         publicKeyJwk: '',
@@ -217,7 +239,7 @@ export default function App() {
     );
   });
 
-  const uid = currentUser?.uid || 'demo_user_me';
+  const uid = currentUser?.uid || 'guest';
   const userKeys = useMemo(() => ({
     CHATS: `${uid}_wasil_chats_v1`,
     MESSAGES: `${uid}_wasil_messages_v1`,
@@ -230,30 +252,35 @@ export default function App() {
   }), [uid]);
 
   const [privacySettings, setPrivacySettings] = useState<PrivacySettings>(() => {
-    return readJsonStorage<PrivacySettings>(userKeys.PRIVACY) || readJsonStorage<PrivacySettings>(STORAGE_KEYS.PRIVACY) || DEFAULT_PRIVACY;
+    return (
+      (isRemoteFirebaseUid(uid) ? readJsonStorage<PrivacySettings>(userKeys.PRIVACY) : null) ||
+      readJsonStorage<PrivacySettings>(STORAGE_KEYS.PRIVACY) ||
+      DEFAULT_PRIVACY
+    );
   });
 
-  const [chats, setChats] = useState<ChatRoom[]>(() => {
-    const saved = readJsonStorage<ChatRoom[]>(userKeys.CHATS) || readJsonStorage<ChatRoom[]>(STORAGE_KEYS.CHATS);
-    return saved || [];
-  });
-
-  const [messagesMap, setMessagesMap] = useState<Record<string, DecryptedMessage[]>>(
-    () => readJsonStorage<Record<string, DecryptedMessage[]>>(userKeys.MESSAGES) || readJsonStorage<Record<string, DecryptedMessage[]>>(STORAGE_KEYS.MESSAGES) || {}
+  const [chats, setChats] = useState<ChatRoom[]>(() =>
+    isRemoteFirebaseUid(uid) ? readJsonStorage<ChatRoom[]>(userKeys.CHATS) || [] : []
   );
 
-  const [statuses, setStatuses] = useState<StatusItem[]>(() => {
-    const saved = readJsonStorage<StatusItem[]>(userKeys.STATUSES) || readJsonStorage<StatusItem[]>(STORAGE_KEYS.STATUSES);
-    return filterActiveStatuses(saved || []);
-  });
-  const [pinnedStatusIds, setPinnedStatusIds] = useState<string[]>(
-    () => readJsonStorage<string[]>(userKeys.PINNED_STATUSES) || readJsonStorage<string[]>(STORAGE_KEYS.PINNED_STATUSES) || []
+  const [messagesMap, setMessagesMap] = useState<Record<string, DecryptedMessage[]>>(() =>
+    isRemoteFirebaseUid(uid)
+      ? readJsonStorage<Record<string, DecryptedMessage[]>>(userKeys.MESSAGES) || {}
+      : {}
   );
 
-  const [calls, setCalls] = useState<CallRecord[]>(() => {
-    const saved = readJsonStorage<CallRecord[]>(userKeys.CALLS) || readJsonStorage<CallRecord[]>(STORAGE_KEYS.CALLS);
-    return saved || [];
-  });
+  const [statuses, setStatuses] = useState<StatusItem[]>(() =>
+    isRemoteFirebaseUid(uid)
+      ? filterActiveStatuses(readJsonStorage<StatusItem[]>(userKeys.STATUSES) || [])
+      : []
+  );
+  const [pinnedStatusIds, setPinnedStatusIds] = useState<string[]>(() =>
+    isRemoteFirebaseUid(uid) ? readJsonStorage<string[]>(userKeys.PINNED_STATUSES) || [] : []
+  );
+
+  const [calls, setCalls] = useState<CallRecord[]>(() =>
+    isRemoteFirebaseUid(uid) ? readJsonStorage<CallRecord[]>(userKeys.CALLS) || [] : []
+  );
 
   const [scheduledMessages, setScheduledMessages] = useState<ScheduledMessage[]>([]);
 
@@ -293,7 +320,7 @@ export default function App() {
   const [chatFilter, setChatFilter] = useState<ChatFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
-  const [selectedChatId, setSelectedChatId] = useState<string | null>('chat_sara');
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [mobileChatOpen, setMobileChatOpen] = useState(false);
   const [rightPanelMode, setRightPanelMode] = useState<RightPanelMode>('none');
   const [inspectMessageId, setInspectMessageId] = useState<string | null>(null);
@@ -416,31 +443,47 @@ export default function App() {
     };
   }, []);
 
-  // Persist user-scoped data locally when not cloud-synced
+  // One-time cleanup of any legacy demo/guest localStorage keys on mount
   useEffect(() => {
-    if (!isCloudSynced) {
+    try {
+      for (const k of Object.keys(localStorage)) {
+        if (k.startsWith('wasil_demo_') || k.startsWith('local_user_') || k.startsWith('guest_wasil_')) {
+          localStorage.removeItem(k);
+        }
+      }
+    } catch {
+      // Ignore storage access restriction
+    }
+  }, []);
+
+  // Persist user-scoped cache only for verified Firebase accounts
+  useEffect(() => {
+    if (isRemoteFirebaseUid(currentUser.uid)) {
       localStorage.setItem(userKeys.CHATS, JSON.stringify(chats));
     }
-  }, [chats, isCloudSynced, userKeys.CHATS]);
+  }, [chats, currentUser.uid, userKeys.CHATS]);
 
   useEffect(() => {
-    if (!isCloudSynced && Object.keys(messagesMap).length > 0) {
+    if (isRemoteFirebaseUid(currentUser.uid) && Object.keys(messagesMap).length > 0) {
       localStorage.setItem(userKeys.MESSAGES, JSON.stringify(messagesMap));
     }
-  }, [messagesMap, isCloudSynced, userKeys.MESSAGES]);
+  }, [messagesMap, currentUser.uid, userKeys.MESSAGES]);
 
   useEffect(() => {
-    localStorage.setItem(userKeys.PINNED_STATUSES, JSON.stringify(pinnedStatusIds));
-  }, [pinnedStatusIds, userKeys.PINNED_STATUSES]);
+    if (isRemoteFirebaseUid(currentUser.uid)) {
+      localStorage.setItem(userKeys.PINNED_STATUSES, JSON.stringify(pinnedStatusIds));
+    }
+  }, [pinnedStatusIds, currentUser.uid, userKeys.PINNED_STATUSES]);
 
   useEffect(() => {
-    if (!isCloudSynced) {
+    if (isRemoteFirebaseUid(currentUser.uid)) {
       localStorage.setItem(userKeys.STATUSES, JSON.stringify(statuses));
       localStorage.setItem(userKeys.CALLS, JSON.stringify(calls));
       localStorage.setItem(userKeys.PROFILE, JSON.stringify(currentUser));
+      localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(currentUser));
       localStorage.setItem(userKeys.PRIVACY, JSON.stringify(privacySettings));
     }
-  }, [statuses, calls, currentUser, privacySettings, isCloudSynced, userKeys]);
+  }, [statuses, calls, currentUser, privacySettings, userKeys]);
 
   // Periodically prune expired 24-hour statuses from state and Firestore
   useEffect(() => {
@@ -462,12 +505,15 @@ export default function App() {
     return () => window.clearInterval(interval);
   }, [isCloudSynced, currentUser.uid]);
 
-  // Real Firebase Auth + Firestore Subscriptions
+  // Real Firebase Auth + Multi-Device Firestore Subscriptions
   useEffect(() => {
     let unsubChats: (() => void) | null = null;
     let unsubStatuses: (() => void) | null = null;
     let unsubCalls: (() => void) | null = null;
     let unsubIncomingCalls: (() => void) | null = null;
+    let unsubOwnPublic: (() => void) | null = null;
+    let unsubOwnPrivate: (() => void) | null = null;
+    let unsubDevices: (() => void) | null = null;
 
     const cleanupDataSubscriptions = () => {
       unsubChats?.();
@@ -478,21 +524,54 @@ export default function App() {
       unsubCalls = null;
       unsubIncomingCalls?.();
       unsubIncomingCalls = null;
+      unsubOwnPublic?.();
+      unsubOwnPublic = null;
+      unsubOwnPrivate?.();
+      unsubOwnPrivate = null;
+      unsubDevices?.();
+      unsubDevices = null;
     };
 
     const unsubAuth = onAuthStateChanged(auth, async (fbUser) => {
       cleanupDataSubscriptions();
 
       if (!fbUser) {
+        msgSyncControllerRef.current?.dispose();
+        msgSyncControllerRef.current = null;
+        deviceRegisteredRef.current = false;
+        localStorage.removeItem(STORAGE_KEYS.ENTERED);
+        localStorage.removeItem(STORAGE_KEYS.PROFILE);
         setIsCloudSynced(false);
         setNeedsEmailVerification(false);
+        setIsEntered(false);
+        setChats([]);
+        setMessagesMap({});
+        setStatuses([]);
+        setCalls([]);
+        setScheduledMessages([]);
+        setLinkedDevices([]);
+        setSelectedChatId(null);
+        setAppLockedOnLaunch(false);
+        setCurrentUser((prev) => ({
+          ...prev,
+          uid: '',
+          wasilId: undefined,
+          email: undefined,
+          phone: undefined
+        }));
         return;
       }
 
       const isPasswordProvider = fbUser.providerData.some((p) => p.providerId === 'password');
       setNeedsEmailVerification(Boolean(isPasswordProvider && !fbUser.emailVerified));
 
-      const keys = identityKeys || (await generateIdentityKeyPair());
+      const keys = identityKeysRef.current || (await generateIdentityKeyPair());
+      if (!identityKeysRef.current) {
+        identityKeysRef.current = keys;
+        localStorage.setItem(STORAGE_KEYS.KEYS, JSON.stringify(keys));
+        setIdentityKeys(keys);
+      }
+
       const profile: UserProfile = {
         uid: fbUser.uid,
         displayName:
@@ -507,57 +586,25 @@ export default function App() {
         lastSeenMs: Date.now()
       };
 
-      setCurrentUser(profile);
+      setCurrentUser((prev) => ({
+        ...profile,
+        ...(prev.uid === fbUser.uid && prev.wasilId ? { wasilId: prev.wasilId } : {})
+      }));
       setIsCloudSynced(true);
       if (!holdEntryForProfileStep.current) {
         localStorage.setItem(STORAGE_KEYS.ENTERED, 'true');
         setIsEntered(true);
       }
-      setSelectedChatId((curr) =>
-        curr && ['chat_sara', 'chat_tech_group', 'chat_omar', 'chat_layla', 'chat_community_security'].includes(curr)
-          ? null
-          : curr
-      );
 
-      try {
-        const hydrated = await syncUserProfileToFirestore(
-          fbUser,
-          keys.publicKeyJwk,
-          keys.safetyCode,
-          profile.about,
-          theme
-        );
-        setCurrentUser({
-          ...profile,
-          wasilId: hydrated.wasilId,
-          displayName: hydrated.displayName,
-          about: hydrated.about,
-          avatarUrl: hydrated.avatarUrl
-        });
-        setPrivacySettings(hydrated.privacy);
-        setTheme(hydrated.theme);
-      } catch (syncErr) {
-        console.warn('Sync profile fallback to local state:', syncErr);
-      }
-
+      // Subscribe immediately in parallel with profile hydration for faster multi-device sync
       unsubChats = subscribeUserChatsFromFirestore(fbUser.uid, (cloudChats) => {
+        setChats(cloudChats);
         if (cloudChats.length > 0) {
-          setChats(cloudChats);
           setSelectedChatId((curr) =>
             curr && cloudChats.some((c) => c.id === curr) ? curr : cloudChats[0].id
           );
         } else {
-          const starterChatId = `welcome_${fbUser.uid.slice(0, 12)}`;
-          setSelectedChatId(starterChatId);
-          void createChatInFirestore(
-            starterChatId,
-            'direct',
-            'مفكرة تواصل المشفرة',
-            'مساحتك السحابية المشفرة عبر Firebase',
-            BUNDLED_ASSETS.avatarTechGroup,
-            profile,
-            'أهلاً بك! تم تفعيل المزامنة السحابية والتشفير التام بين الطرفين على حسابك 🔐'
-          );
+          setSelectedChatId(null);
         }
       });
 
@@ -566,44 +613,130 @@ export default function App() {
       });
 
       unsubCalls = subscribeCallsFromFirestore(fbUser.uid, (cloudCalls) => {
-        if (cloudCalls.length > 0) setCalls(cloudCalls);
+        setCalls(cloudCalls);
       });
 
       unsubIncomingCalls = subscribeIncomingCallsFromFirestore(fbUser.uid, (incoming) => {
         if (incoming) {
           setActiveCall((curr) => (curr ? curr : incoming));
+        } else {
+          setActiveCall((curr) =>
+            curr && curr.direction === 'incoming' && curr.status === 'ringing' ? null : curr
+          );
         }
       });
+
+      unsubOwnPublic = subscribeOwnPublicProfileFromFirestore(fbUser.uid, (pubPatch) => {
+        setCurrentUser((curr) => {
+          if (curr.uid !== fbUser.uid) return curr;
+          return {
+            ...curr,
+            ...(pubPatch.wasilId ? { wasilId: pubPatch.wasilId } : {}),
+            displayName: pubPatch.displayName || curr.displayName,
+            about: pubPatch.about,
+            avatarUrl: pubPatch.avatarUrl,
+            ...(pubPatch.publicKeyJwk ? { publicKeyJwk: pubPatch.publicKeyJwk } : {}),
+            ...(pubPatch.safetyCode ? { safetyCode: pubPatch.safetyCode } : {})
+          };
+        });
+      });
+
+      unsubOwnPrivate = subscribeOwnPrivateInfoFromFirestore(fbUser.uid, (privPatch) => {
+        setPrivacySettings(privPatch.privacy);
+        setTheme(privPatch.theme);
+        if (privPatch.wasilId) {
+          setCurrentUser((curr) =>
+            curr.uid === fbUser.uid ? { ...curr, wasilId: privPatch.wasilId } : curr
+          );
+        }
+        if (
+          privPatch.identityKeys &&
+          privPatch.identityKeys.publicKeyJwk !== identityKeysRef.current?.publicKeyJwk
+        ) {
+          identityKeysRef.current = privPatch.identityKeys;
+          localStorage.setItem(STORAGE_KEYS.KEYS, JSON.stringify(privPatch.identityKeys));
+          setIdentityKeys(privPatch.identityKeys);
+          setCurrentUser((curr) =>
+            curr.uid === fbUser.uid
+              ? {
+                  ...curr,
+                  publicKeyJwk: privPatch.identityKeys!.publicKeyJwk,
+                  safetyCode: privPatch.identityKeys!.safetyCode
+                }
+              : curr
+          );
+          msgSyncControllerRef.current?.resubscribeAll();
+        }
+      });
+
+      unsubDevices = subscribeUserDevicesFromFirestore(fbUser.uid, (devices) => {
+        setLinkedDevices(devices);
+        const hasSelf = devices.some((d) => d.deviceId === localDeviceMeta.deviceId);
+        if (hasSelf) {
+          deviceRegisteredRef.current = true;
+        } else if (deviceRegisteredRef.current && auth.currentUser?.uid === fbUser.uid) {
+          deviceRegisteredRef.current = false;
+          remoteRevokeHandlerRef.current();
+        }
+      });
+
+      try {
+        const currentTheme: ThemeMode =
+          localStorage.getItem(STORAGE_KEYS.THEME) === 'dark' ? 'dark' : 'light';
+        const hydrated = await syncUserProfileToFirestore(
+          fbUser,
+          keys.publicKeyJwk,
+          keys.safetyCode,
+          profile.about,
+          currentTheme,
+          pendingOnboardingRef.current?.wasilId,
+          keys.privateKeyJwk
+        );
+        const resolvedKeys = hydrated.identityKeys || keys;
+        const keysChanged = resolvedKeys.publicKeyJwk !== keys.publicKeyJwk;
+        if (keysChanged) {
+          identityKeysRef.current = resolvedKeys;
+          localStorage.setItem(STORAGE_KEYS.KEYS, JSON.stringify(resolvedKeys));
+          setIdentityKeys(resolvedKeys);
+          msgSyncControllerRef.current?.resubscribeAll();
+        }
+        const pending = pendingOnboardingRef.current;
+        setCurrentUser((curr) => ({
+          ...profile,
+          publicKeyJwk: resolvedKeys.publicKeyJwk,
+          safetyCode: resolvedKeys.safetyCode,
+          wasilId: pending?.wasilId || hydrated.wasilId,
+          displayName: pending?.displayName || hydrated.displayName,
+          about: pending?.about ?? hydrated.about,
+          avatarUrl: pending?.avatarUrl || hydrated.avatarUrl,
+          ...(curr.uid === fbUser.uid && curr.phone ? { phone: curr.phone } : {})
+        }));
+        setPrivacySettings(hydrated.privacy);
+        setTheme(hydrated.theme);
+      } catch (syncErr) {
+        console.warn('Sync profile fallback to local state:', syncErr);
+      }
     });
 
     return () => {
       cleanupDataSubscriptions();
       unsubAuth();
     };
-  }, [identityKeys]);
+  }, [localDeviceMeta.deviceId]);
 
-  // Subscribe to messages of the currently selected Firestore chat when cloud synced
+  // Persistent multi-chat real-time message synchronization controller (no teardown on chats state updates)
   useEffect(() => {
-    if (!isCloudSynced || !selectedChatId) return;
-    const isDemoChat = [
-      'chat_sara',
-      'chat_tech_group',
-      'chat_omar',
-      'chat_layla',
-      'chat_community_security'
-    ].includes(selectedChatId);
-    if (isDemoChat) return;
+    if (!isCloudSynced || !isRemoteFirebaseUid(currentUser.uid)) {
+      msgSyncControllerRef.current?.dispose();
+      msgSyncControllerRef.current = null;
+      return;
+    }
 
-    const targetChat = chats.find((c) => c.id === selectedChatId);
-    if (!targetChat || !targetChat.memberIds?.includes(currentUser.uid)) return;
-
-    const unsub = subscribeChatMessagesFromFirestore(
-      selectedChatId,
-      targetChat.roomSeed || selectedChatId,
+    const controller = createMultiChatMessageSyncController(
       currentUser.uid,
-      (cloudMsgs) => {
+      (chatId, cloudMsgs) => {
         setMessagesMap((prev) => {
-          const existingLocal = prev[selectedChatId] || [];
+          const existingLocal = prev[chatId] || [];
           const cloudIds = new Set(cloudMsgs.map((m) => m.id));
           const pendingOrFailed = existingLocal.filter(
             (m) => (m.status === 'sending' || m.status === 'failed') && !cloudIds.has(m.id)
@@ -612,23 +745,56 @@ export default function App() {
             pendingOrFailed.length > 0
               ? [...cloudMsgs, ...pendingOrFailed].sort((a, b) => a.createdAtMs - b.createdAtMs)
               : cloudMsgs;
-          return { ...prev, [selectedChatId]: merged };
+          return { ...prev, [chatId]: merged };
         });
       }
     );
-    return () => unsub();
-  }, [isCloudSynced, selectedChatId, currentUser.uid, chats]);
+    msgSyncControllerRef.current = controller;
 
-  // Real-time online/lastSeen presence synchronization
+    return () => {
+      controller.dispose();
+      if (msgSyncControllerRef.current === controller) {
+        msgSyncControllerRef.current = null;
+      }
+    };
+  }, [isCloudSynced, currentUser.uid]);
+
   useEffect(() => {
-    if (!isCloudSynced || !currentUser.uid || currentUser.uid.startsWith('demo_')) return;
+    if (!isCloudSynced || !isRemoteFirebaseUid(currentUser.uid) || !msgSyncControllerRef.current) {
+      return;
+    }
+    const targets = chats
+      .filter((c) => c.memberIds?.includes(currentUser.uid))
+      .map((c) => ({
+        id: c.id,
+        roomSeed: c.roomSeed || c.id,
+        lastMessageAtMs: c.lastMessageAtMs || 0
+      }));
+    msgSyncControllerRef.current.syncTargets(targets, selectedChatId);
+  }, [isCloudSynced, currentUser.uid, selectedChatId, chats]);
+
+  // Real-time multi-device online/lastSeen presence synchronization + periodic device heartbeat
+  useEffect(() => {
+    if (!isCloudSynced || !isRemoteFirebaseUid(currentUser.uid)) return;
 
     const pushPresence = (online: boolean) => {
-      if (omarSettings.freezeLastSeen) return;
-      void setUserPresenceInFirestore(currentUser.uid, online);
+      if (omarSettings.freezeLastSeen) {
+        void registerOrHeartbeatDeviceInFirestore(currentUser.uid, {
+          ...localDeviceMeta,
+          isOnline: online
+        });
+        return;
+      }
+      void setUserPresenceInFirestore(currentUser.uid, online, localDeviceMeta);
     };
 
     pushPresence(document.visibilityState === 'visible');
+
+    const heartbeatId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        pushPresence(true);
+      }
+    }, 120_000);
 
     const handleVisibility = () => {
       pushPresence(document.visibilityState === 'visible');
@@ -640,10 +806,11 @@ export default function App() {
     document.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener('pagehide', handlePageHide);
     return () => {
+      window.clearInterval(heartbeatId);
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('pagehide', handlePageHide);
     };
-  }, [isCloudSynced, currentUser.uid, omarSettings.freezeLastSeen]);
+  }, [isCloudSynced, currentUser.uid, omarSettings.freezeLastSeen, localDeviceMeta]);
 
   // Acknowledge delivery on incoming cloud chat summaries even before opening each chat
   useEffect(() => {
@@ -658,11 +825,9 @@ export default function App() {
     }
   }, [isCloudSynced, chats, currentUser.uid]);
 
-  // Cleanup pending demo receipt timers on unmount
+  // Cleanup pending typing timeout on unmount
   useEffect(() => {
     return () => {
-      demoReceiptTimersRef.current.forEach((t) => window.clearTimeout(t));
-      demoReceiptTimersRef.current = [];
       if (typingTimeoutRef.current !== null) {
         window.clearTimeout(typingTimeoutRef.current);
       }
@@ -714,7 +879,7 @@ export default function App() {
     holdEntryForProfileStep.current = deferEntryForProfileSetup;
     try {
       const cred = await createUserWithEmailAndPassword(auth, email, password);
-      await updateProfile(cred.user, { displayName });
+      void updateProfile(cred.user, { displayName }).catch(() => {});
       setCurrentUser((prev) => ({
         ...prev,
         uid: cred.user.uid,
@@ -758,8 +923,11 @@ export default function App() {
 
   const handleCompleteOnboarding = async (payload: OnboardingCompletionPayload) => {
     holdEntryForProfileStep.current = false;
+    pendingOnboardingRef.current = payload;
+    const normalizedWasilId = payload.wasilId.trim().toLowerCase();
     const updatedUser: UserProfile = {
       ...currentUser,
+      wasilId: normalizedWasilId,
       displayName: payload.displayName,
       about: payload.about,
       avatarUrl: payload.avatarUrl,
@@ -771,27 +939,55 @@ export default function App() {
       appLockOnLaunch: payload.appLockOnLaunch
     });
 
+    // Enter workspace immediately so UI never stalls on slow/offline Firestore writes
+    localStorage.setItem(STORAGE_KEYS.ENTERED, 'true');
+    setIsEntered(true);
+    showToast(`أهلاً بك ${payload.displayName} (${normalizedWasilId}) في تواصل!`);
+
     if (auth.currentUser) {
       void updateProfile(auth.currentUser, {
         displayName: payload.displayName
       }).catch(() => {});
     }
 
-    if (isCloudSynced) {
-      try {
-        await updateProfileInFirestore(updatedUser.uid, updatedUser, {
-          displayName: payload.displayName,
-          about: payload.about,
-          avatarUrl: payload.avatarUrl
-        });
-      } catch {
-        // Fallback to local profile state when unverified
-      }
-    }
+    const targetUid = auth.currentUser?.uid || updatedUser.uid;
+    if (isRemoteFirebaseUid(targetUid)) {
+      void (async () => {
+        let finalWasilId = normalizedWasilId;
+        try {
+          finalWasilId = await claimCustomWasilId(
+            targetUid,
+            payload.displayName,
+            normalizedWasilId,
+            currentUser.wasilId
+          );
+          if (finalWasilId !== normalizedWasilId) {
+            setCurrentUser((prev) => ({ ...prev, wasilId: finalWasilId }));
+          }
+        } catch (err) {
+          showToast(
+            err instanceof Error
+              ? err.message
+              : 'تعذر حجز هذا المعرّف في السحابة، يمكنك تعديله لاحقاً من الإعدادات.'
+          );
+        }
 
-    localStorage.setItem(STORAGE_KEYS.ENTERED, 'true');
-    setIsEntered(true);
-    showToast(`أهلاً بك ${payload.displayName} في تواصل!`);
+        try {
+          await updateProfileInFirestore(
+            targetUid,
+            { ...updatedUser, uid: targetUid, wasilId: finalWasilId },
+            {
+              displayName: payload.displayName,
+              wasilId: finalWasilId,
+              about: payload.about,
+              avatarUrl: payload.avatarUrl
+            }
+          );
+        } catch {
+          // Offline cache handles queued persistence when connection stabilizes
+        }
+      })();
+    }
   };
 
   const handleRestoreBackupJson = async (rawJson: string) => {
@@ -837,16 +1033,31 @@ export default function App() {
     setShowSignOutConfirm(true);
   };
 
-  const handleSignOut = () => {
+  const executeSignOut = (
+    toastMsg = 'تم تسجيل الخروج بنجاح',
+    removeDeviceSession = true
+  ) => {
     if (isSigningOut) return;
     setIsSigningOut(true);
     holdEntryForProfileStep.current = false;
+    pendingOnboardingRef.current = null;
+    deviceRegisteredRef.current = false;
+
+    const activeUid = currentUser.uid;
 
     // Immediately reset local state and close modals/spinners
     deliveredSummaryAckedRef.current.clear();
     deliveredMsgAckedRef.current.clear();
     readMsgAckedRef.current.clear();
+    msgSyncControllerRef.current?.dispose();
+    msgSyncControllerRef.current = null;
     localStorage.removeItem(STORAGE_KEYS.ENTERED);
+    setChats([]);
+    setMessagesMap({});
+    setStatuses([]);
+    setCalls([]);
+    setLinkedDevices([]);
+    setSelectedChatId(null);
     setActiveCall(null);
     setShowSignOutConfirm(false);
     setAppLockedOnLaunch(false);
@@ -858,27 +1069,50 @@ export default function App() {
     setIsCloudSynced(false);
     setIsEntered(false);
     setIsSigningOut(false);
-    showToast('تم تسجيل الخروج بنجاح');
+    showToast(toastMsg);
 
-    // Run network cleanup and auth sign out in background without blocking UI
+    // Run network cleanup (this device only) and auth sign out without blocking UI
     setTimeout(() => {
-      try {
-        if (currentUser.uid && !currentUser.uid.startsWith('demo_')) {
-          if (lastTypingSentRef.current?.active) {
-            void updateChatTypingInFirestore(
-              lastTypingSentRef.current.chatId,
-              currentUser.uid,
-              false
-            ).catch(() => {});
-            lastTypingSentRef.current = null;
+      void (async () => {
+        try {
+          if (isRemoteFirebaseUid(activeUid)) {
+            if (lastTypingSentRef.current?.active) {
+              await updateChatTypingInFirestore(
+                lastTypingSentRef.current.chatId,
+                activeUid,
+                false
+              ).catch(() => {});
+              lastTypingSentRef.current = null;
+            }
+            if (removeDeviceSession) {
+              await removeDeviceSessionInFirestore(activeUid, localDeviceMeta.deviceId).catch(
+                () => {}
+              );
+            }
           }
-          void setUserPresenceInFirestore(currentUser.uid, false).catch(() => {});
+          await signOut(auth).catch(() => {});
+        } catch (err) {
+          console.warn('Background sign out cleanup error:', err);
         }
-        void signOut(auth).catch(() => {});
-      } catch (err) {
-        console.warn('Background sign out cleanup error:', err);
-      }
+      })();
     }, 10);
+  };
+
+  const handleSignOut = () => {
+    executeSignOut('تم تسجيل الخروج بنجاح', true);
+  };
+
+  useEffect(() => {
+    remoteRevokeHandlerRef.current = () => {
+      executeSignOut('تم إنهاء جلسة هذا الجهاز من جهاز آخر', false);
+    };
+  });
+
+  const handleRevokeOtherDevice = async (deviceId: string) => {
+    if (!isCloudSynced || !isRemoteFirebaseUid(currentUser.uid)) return;
+    await removeDeviceSessionInFirestore(currentUser.uid, deviceId);
+    setLinkedDevices((prev) => prev.filter((d) => d.deviceId !== deviceId));
+    showToast('تم فصل الجهاز وإنهاء جلسته السحابية');
   };
 
   const handleToggleTheme = () => {
@@ -890,7 +1124,7 @@ export default function App() {
   };
 
   const contactsList = useMemo(
-    () => [...extractContactsFromChats(chats, DEMO_CONTACTS, currentUser.uid), ...googleContacts],
+    () => [...extractContactsFromChats(chats, [], currentUser.uid), ...googleContacts],
     [chats, currentUser.uid, googleContacts]
   );
 
@@ -989,6 +1223,16 @@ export default function App() {
             unreadIds,
             needLastRead
           );
+          if (selectedChat.unreadCount > 0) {
+            void saveChatPrefToFirestore(currentUser.uid, selectedChatId, {
+              pinned: selectedChat.pinned,
+              archived: selectedChat.archived,
+              muted: selectedChat.muted,
+              favorite: selectedChat.favorite,
+              unreadCount: 0,
+              disappearingSeconds: selectedChat.disappearingSeconds
+            }).catch(() => {});
+          }
         }
       }
     };
@@ -1018,8 +1262,8 @@ export default function App() {
           setActiveSafetyCode(currentUser.safetyCode);
           return;
         }
-        const peer = DEMO_CONTACTS.find((c) => c.uid === selectedChat.peerUid);
-        if (peer && currentUser.publicKeyJwk) {
+        const peer = contactsList.find((c) => c.uid === selectedChat.peerUid);
+        if (peer && peer.publicKeyJwk && currentUser.publicKeyJwk) {
           const code = await computeSafetyNumber(currentUser.publicKeyJwk, peer.publicKeyJwk);
           setActiveSafetyCode(code);
         } else {
@@ -1030,7 +1274,7 @@ export default function App() {
       }
     }
     void computePairCode();
-  }, [selectedChat?.id, selectedChat?.peerUid, currentUser.publicKeyJwk, currentUser.safetyCode]);
+  }, [selectedChat?.id, selectedChat?.peerUid, contactsList, currentUser.publicKeyJwk, currentUser.safetyCode]);
 
   const persistChatPrefsIfCloud = (nextChat: ChatRoom) => {
     if (!isCloudSynced) return;
@@ -1239,6 +1483,11 @@ export default function App() {
     replyToId?: string,
     existingFailedMsgId?: string
   ) => {
+    if (!isCloudSynced || !auth.currentUser || !isRemoteFirebaseUid(currentUser.uid)) {
+      showToast('يجب تسجيل الدخول عبر Firebase لإرسال الرسائل');
+      return;
+    }
+
     const msgId =
       existingFailedMsgId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const key = await deriveRoomKeyFromSeed(targetChat.roomSeed);
@@ -1262,7 +1511,7 @@ export default function App() {
       reactionsCount: 0,
       starredBy: [],
       isDeleted: false,
-      status: isCloudSynced ? 'sending' : 'sent',
+      status: 'sending',
       createdAtMs: nowMs
     };
 
@@ -1295,126 +1544,65 @@ export default function App() {
       )
     );
 
-    if (isCloudSynced) {
-      if (lastTypingSentRef.current?.chatId === targetChat.id && lastTypingSentRef.current.active) {
-        lastTypingSentRef.current = { chatId: targetChat.id, active: false };
-        void updateChatTypingInFirestore(targetChat.id, currentUser.uid, false);
-      }
-
-      try {
-        await sendEncryptedMessageToFirestore(
-          targetChat.id,
-          targetChat.roomSeed,
-          currentUser,
-          type,
-          payload,
-          targetChat.memberIds,
-          replyToId,
-          msgId
-        );
-
-        setMessagesMap((prev) => ({
-          ...prev,
-          [targetChat.id]: (prev[targetChat.id] || []).map((m) =>
-            m.id === msgId && m.status === 'sending' ? { ...m, status: 'sent' } : m
-          )
-        }));
-        setChats((prev) =>
-          prev.map((c) =>
-            c.id === targetChat.id && c.lastMessageSenderId === currentUser.uid
-              ? { ...c, lastMessageStatus: 'sent' }
-              : c
-          )
-        );
-
-        // If "blue ticks after reply" is enabled, replying flushes withheld read acks for peer messages
-        if (omarSettings.hideReadTicks && privacySettings.readReceipts) {
-          const pendingUnreadIds = (messagesMap[targetChat.id] || [])
-            .filter(
-              (m) =>
-                m.senderId !== currentUser.uid &&
-                !m.readByIds?.includes(currentUser.uid) &&
-                !readMsgAckedRef.current.has(m.id)
-            )
-            .map((m) => m.id);
-          if (pendingUnreadIds.length > 0) {
-            pendingUnreadIds.forEach((id) => readMsgAckedRef.current.add(id));
-            void markChatMessagesReadInFirestore(
-              targetChat.id,
-              currentUser.uid,
-              pendingUnreadIds,
-              false
-            );
-          }
-        }
-      } catch {
-        setMessagesMap((prev) => ({
-          ...prev,
-          [targetChat.id]: (prev[targetChat.id] || []).map((m) =>
-            m.id === msgId ? { ...m, status: 'failed' } : m
-          )
-        }));
-        showToast('تعذر تسليم الرسالة الآن. اضغط إعادة للمحاولة.');
-      }
-      return;
+    if (lastTypingSentRef.current?.chatId === targetChat.id && lastTypingSentRef.current.active) {
+      lastTypingSentRef.current = { chatId: targetChat.id, active: false };
+      void updateChatTypingInFirestore(targetChat.id, currentUser.uid, false);
     }
 
-    // Demo mode realistic receipt lifecycle:
-    // Offline direct peer or DND stays at 1 gray checkmark ('sent');
-    // Online peer transitions 'sent' -> 'delivered' (2 gray) -> 'read' (2 blue if readReceipts enabled).
-    const peerCanReceive =
-      !omarSettings.dndMode && (targetChat.type !== 'direct' || targetChat.isOnline !== false);
+    try {
+      await sendEncryptedMessageToFirestore(
+        targetChat.id,
+        targetChat.roomSeed,
+        currentUser,
+        type,
+        payload,
+        targetChat.memberIds,
+        replyToId,
+        msgId
+      );
 
-    if (peerCanReceive) {
-      const deliveredTimer = window.setTimeout(() => {
-        setMessagesMap((prev) => {
-          const list = prev[targetChat.id];
-          if (!list || !list.some((m) => m.id === msgId)) return prev;
-          return {
-            ...prev,
-            [targetChat.id]: list.map((m) =>
-              m.id === msgId && m.status === 'sent' ? { ...m, status: 'delivered' } : m
-            )
-          };
-        });
-        setChats((prev) =>
-          prev.map((c) =>
-            c.id === targetChat.id &&
-            c.lastMessageSenderId === currentUser.uid &&
-            c.lastMessageStatus === 'sent'
-              ? { ...c, lastMessageStatus: 'delivered' }
-              : c
+      setMessagesMap((prev) => ({
+        ...prev,
+        [targetChat.id]: (prev[targetChat.id] || []).map((m) =>
+          m.id === msgId && m.status === 'sending' ? { ...m, status: 'sent' } : m
+        )
+      }));
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === targetChat.id && c.lastMessageSenderId === currentUser.uid
+            ? { ...c, lastMessageStatus: 'sent' }
+            : c
+        )
+      );
+
+      // If "blue ticks after reply" is enabled, replying flushes withheld read acks for peer messages
+      if (omarSettings.hideReadTicks && privacySettings.readReceipts) {
+        const pendingUnreadIds = (messagesMap[targetChat.id] || [])
+          .filter(
+            (m) =>
+              m.senderId !== currentUser.uid &&
+              !m.readByIds?.includes(currentUser.uid) &&
+              !readMsgAckedRef.current.has(m.id)
           )
-        );
-      }, 550);
-      demoReceiptTimersRef.current.push(deliveredTimer);
-
-      if (privacySettings.readReceipts) {
-        const readTimer = window.setTimeout(() => {
-          setMessagesMap((prev) => {
-            const list = prev[targetChat.id];
-            if (!list || !list.some((m) => m.id === msgId)) return prev;
-            return {
-              ...prev,
-              [targetChat.id]: list.map((m) =>
-                m.id === msgId && (m.status === 'sent' || m.status === 'delivered')
-                  ? { ...m, status: 'read' }
-                  : m
-              )
-            };
-          });
-          setChats((prev) =>
-            prev.map((c) =>
-              c.id === targetChat.id &&
-              c.lastMessageSenderId === currentUser.uid &&
-              (c.lastMessageStatus === 'sent' || c.lastMessageStatus === 'delivered')
-                ? { ...c, lastMessageStatus: 'read' }
-                : c
-            )
+          .map((m) => m.id);
+        if (pendingUnreadIds.length > 0) {
+          pendingUnreadIds.forEach((id) => readMsgAckedRef.current.add(id));
+          void markChatMessagesReadInFirestore(
+            targetChat.id,
+            currentUser.uid,
+            pendingUnreadIds,
+            false
           );
-        }, 1550);
-        demoReceiptTimersRef.current.push(readTimer);
+        }
       }
+    } catch {
+      setMessagesMap((prev) => ({
+        ...prev,
+        [targetChat.id]: (prev[targetChat.id] || []).map((m) =>
+          m.id === msgId ? { ...m, status: 'failed' } : m
+        )
+      }));
+      showToast('تعذر تسليم الرسالة الآن. اضغط إعادة للمحاولة.');
     }
   };
 
@@ -1429,6 +1617,11 @@ export default function App() {
 
   const handleScheduleMessage = async (chatId: string, sendAtMs: number, text: string) => {
     if (!text.trim()) return;
+    if (!isCloudSynced || !auth.currentUser || !isRemoteFirebaseUid(currentUser.uid)) {
+      showToast('يجب تسجيل الدخول عبر Firebase لجدولة الرسائل');
+      return;
+    }
+
     const msgId = 'sch_' + Math.random().toString(36).substring(2, 11);
     const payload: MessagePayload = { text: text.trim() };
     const newScheduled: ScheduledMessage = {
@@ -1444,16 +1637,13 @@ export default function App() {
     };
 
     setScheduledMessages((prev) => [...prev, newScheduled]);
-    if (isCloudSynced) {
-      try {
-        await scheduleMessageInFirestore(newScheduled);
-        showToast('تم جدولة الرسالة بنجاح');
-      } catch (err) {
-        console.error('Failed to schedule message in Firestore:', err);
-        showToast('تعذر حفظ الجدولة في السحابة');
-      }
-    } else {
-      showToast('تم جدولة الرسالة محلياً');
+    try {
+      await scheduleMessageInFirestore(newScheduled);
+      showToast('تم جدولة الرسالة بنجاح');
+    } catch (err) {
+      console.error('Failed to schedule message in Firestore:', err);
+      setScheduledMessages((prev) => prev.filter((m) => m.id !== msgId));
+      showToast('تعذر حفظ الجدولة في السحابة');
     }
   };
 
@@ -1744,7 +1934,7 @@ export default function App() {
       setMobileChatOpen(false);
     }
 
-    if (isCloudSynced && currentUser.uid && !currentUser.uid.startsWith('demo_')) {
+    if (isCloudSynced && isRemoteFirebaseUid(currentUser.uid)) {
       void deleteChatInFirestore(chatId, currentUser.uid, isCreator);
     }
 
@@ -1767,7 +1957,7 @@ export default function App() {
       setMobileChatOpen(false);
     }
 
-    if (isCloudSynced && currentUser.uid && !currentUser.uid.startsWith('demo_')) {
+    if (isCloudSynced && isRemoteFirebaseUid(currentUser.uid)) {
       for (const chatId of chatIds) {
         const targetChat = chats.find((c) => c.id === chatId);
         const isCreator = targetChat?.createdBy === currentUser.uid;
@@ -1779,6 +1969,15 @@ export default function App() {
   };
 
   const handleStartCallForChat = async (chat: ChatRoom, callType: 'audio' | 'video') => {
+    if (!isCloudSynced || !auth.currentUser || !isRemoteFirebaseUid(currentUser.uid)) {
+      showToast('يجب تسجيل الدخول عبر Firebase لإجراء المكالمات');
+      return;
+    }
+    if (!chat.peerUid || !isRemoteFirebaseUid(chat.peerUid)) {
+      showToast('المكالمات المباشرة متاحة فقط مع جهات اتصال مسجلة عبر Firebase');
+      return;
+    }
+
     const safeCallerAvatar =
       currentUser.avatarUrl.startsWith('data:') && currentUser.avatarUrl.length > 500
         ? ''
@@ -1793,7 +1992,7 @@ export default function App() {
       callerId: currentUser.uid,
       callerName: currentUser.displayName,
       callerAvatar: safeCallerAvatar,
-      calleeId: chat.peerUid || chat.id,
+      calleeId: chat.peerUid,
       calleeName: chat.title,
       calleeAvatar: safeCalleeAvatar,
       callType,
@@ -1826,6 +2025,11 @@ export default function App() {
   };
 
   const handleCreateDirectChat = async (name: string, peerUid?: string) => {
+    if (!isCloudSynced || !auth.currentUser || !isRemoteFirebaseUid(currentUser.uid)) {
+      showToast('يجب تسجيل الدخول عبر Firebase لبدء محادثة جديدة');
+      return;
+    }
+
     const existingByPeer = peerUid
       ? chats.find((c) => c.type === 'direct' && (c.peerUid === peerUid || c.memberIds.includes(peerUid)))
       : undefined;
@@ -1836,89 +2040,30 @@ export default function App() {
       return;
     }
 
-    const demoContact = DEMO_CONTACTS.find((c) => c.uid === peerUid);
-    const deterministicId =
-      isCloudSynced && isRemoteFirebaseUid(peerUid) && peerUid
-        ? buildDirectChatId(currentUser.uid, peerUid)
-        : `chat_${Date.now()}`;
-
-    if (isCloudSynced) {
-      let peerProfile: UserProfile | null = null;
-      if (peerUid && isRemoteFirebaseUid(peerUid)) {
-        try {
-          peerProfile = await fetchPublicProfileByUid(peerUid);
-        } catch {
-          peerProfile = null;
-        }
-      }
-      const invited = peerProfile ? [peerProfile] : [];
-      const resolvedTitle = peerProfile?.displayName || name;
-      await createChatInFirestore(
-        deterministicId,
-        'direct',
-        resolvedTitle,
-        peerProfile?.about || demoContact?.about || 'محادثة مشفرة بين الطرفين P2P',
-        peerProfile?.avatarUrl || demoContact?.avatarUrl || '',
-        currentUser,
-        `تم بدء قناة مراسلة مشفرة مع ${resolvedTitle} 🔒`,
-        invited
-      );
-      setSelectedChatId(deterministicId);
-      setMobileChatOpen(true);
-      setActiveTab('chats');
+    if (!peerUid || !isRemoteFirebaseUid(peerUid)) {
+      showToast('يجب البحث عن مستخدم مسجّل عبر معرّف تواصل (Wasil ID) لبدء محادثة');
       return;
     }
 
-    const newRoom: ChatRoom = {
-      id: deterministicId,
-      type: 'direct',
-      title: name,
-      description: demoContact?.about || 'متاح',
-      avatarUrl: demoContact?.avatarUrl || '',
-      peerUid: peerUid || `peer_${Date.now()}`,
-      isOnline: demoContact?.isOnline ?? true,
-      memberIds: [currentUser.uid, peerUid || 'peer'],
-      pinned: false,
-      archived: false,
-      muted: false,
-      favorite: false,
-      unreadCount: 0,
-      disappearingSeconds: 0,
-      lastMessagePreview: `تم بدء محادثة مشفرة مع ${name}`,
-      lastMessageType: 'text',
-      lastMessageSenderId: currentUser.uid,
-      lastMessageStatus: 'read',
-      lastMessageAtMs: Date.now(),
-      roomSeed: deterministicId
-    };
-
-    const key = await deriveRoomKeyFromSeed(deterministicId);
-    const welcomeText = `تم إنشاء قناة اتصال مشفرة تماماً مع ${name} 🔒`;
-    const env = await encryptPayload(JSON.stringify({ text: welcomeText }), key);
-
-    setChats((prev) => [newRoom, ...prev]);
-    setMessagesMap((prev) => ({
-      ...prev,
-      [deterministicId]: [
-        {
-          id: `msg_init_${Date.now()}`,
-          chatId: deterministicId,
-          senderId: currentUser.uid,
-          senderName: currentUser.displayName,
-          type: 'text',
-          payload: { text: welcomeText },
-          ciphertext: env.ciphertext,
-          iv: env.iv,
-          algorithm: env.algorithm,
-          reactions: {},
-          reactionsCount: 0,
-          starredBy: [],
-          isDeleted: false,
-          status: 'read',
-          createdAtMs: Date.now()
-        }
-      ]
-    }));
+    const deterministicId = buildDirectChatId(currentUser.uid, peerUid);
+    let peerProfile: UserProfile | null = null;
+    try {
+      peerProfile = await fetchPublicProfileByUid(peerUid);
+    } catch {
+      peerProfile = null;
+    }
+    const invited = peerProfile ? [peerProfile] : [];
+    const resolvedTitle = peerProfile?.displayName || name;
+    await createChatInFirestore(
+      deterministicId,
+      'direct',
+      resolvedTitle,
+      peerProfile?.about || 'محادثة مشفرة بين الطرفين P2P',
+      peerProfile?.avatarUrl || '',
+      currentUser,
+      `تم بدء قناة مراسلة مشفرة مع ${resolvedTitle} 🔒`,
+      invited
+    );
     setSelectedChatId(deterministicId);
     setMobileChatOpen(true);
     setActiveTab('chats');
@@ -1932,88 +2077,53 @@ export default function App() {
     roomType: 'group' | 'community' = 'group',
     adminOnlyPost = false
   ) => {
+    if (!isCloudSynced || !auth.currentUser || !isRemoteFirebaseUid(currentUser.uid)) {
+      showToast('يجب تسجيل الدخول عبر Firebase لإنشاء مجموعة أو قناة جديدة');
+      return;
+    }
+
     const chatId = `${roomType === 'community' ? 'comm' : 'group'}_${Date.now()}`;
     const inviteCode = buildChannelInviteCode(chatId);
-    const invitedContacts = contactsList.filter((c) => memberUids.includes(c.uid));
+    const knownMap = new Map(contactsList.map((c) => [c.uid, c]));
+    const missingUids = memberUids.filter((id) => !knownMap.has(id) && isRemoteFirebaseUid(id));
+    if (missingUids.length > 0) {
+      const fetched = await Promise.all(
+        missingUids.map((uidToFetch) => fetchPublicProfileByUid(uidToFetch).catch(() => null))
+      );
+      fetched.forEach((p) => {
+        if (p) knownMap.set(p.uid, p);
+      });
+    }
+    const invitedContacts = memberUids
+      .map((id) => knownMap.get(id))
+      .filter((c): c is UserProfile => Boolean(c));
     const welcomeText =
       roomType === 'community'
         ? `تم إنشاء قناة "${title}" ${adminOnlyPost ? '(بث المشرفين فقط)' : ''} بتشفير تام 🔒`
         : `تم إنشاء المجموعة "${title}" بتشفير تام بين الأعضاء 🔒`;
 
-    if (isCloudSynced) {
-      await createChatInFirestore(
-        chatId,
-        roomType,
-        title,
-        description || (roomType === 'community' ? 'قناة تواصل ومجتمع' : 'مجموعة مشفرة تماماً'),
-        avatarUrl,
-        currentUser,
-        welcomeText,
-        invitedContacts,
-        { adminOnlyPost, inviteCode }
-      );
-      setSelectedChatId(chatId);
-      setMobileChatOpen(true);
-      setActiveTab('chats');
-      return;
-    }
-
-    const newGroup: ChatRoom = {
-      id: chatId,
-      type: roomType,
+    await createChatInFirestore(
+      chatId,
+      roomType,
       title,
-      description:
-        description || (roomType === 'community' ? 'قناة إخبارية ومجتمع مشفر' : 'مجموعة تواصل مشفرة'),
+      description || (roomType === 'community' ? 'قناة تواصل ومجتمع' : 'مجموعة مشفرة تماماً'),
       avatarUrl,
-      isOnline: true,
-      memberIds: Array.from(new Set([currentUser.uid, ...memberUids])),
-      pinned: false,
-      archived: false,
-      muted: false,
-      favorite: false,
-      unreadCount: 0,
-      disappearingSeconds: 0,
-      adminOnlyPost,
-      inviteCode,
-      lastMessagePreview: welcomeText,
-      lastMessageType: 'text',
-      lastMessageSenderId: currentUser.uid,
-      lastMessageStatus: 'read',
-      lastMessageAtMs: Date.now(),
-      roomSeed: chatId
-    };
-    const key = await deriveRoomKeyFromSeed(chatId);
-    const env = await encryptPayload(JSON.stringify({ text: welcomeText }), key);
-
-    setChats((prev) => [newGroup, ...prev]);
-    setMessagesMap((prev) => ({
-      ...prev,
-      [chatId]: [
-        {
-          id: `msg_grp_init_${Date.now()}`,
-          chatId,
-          senderId: currentUser.uid,
-          senderName: currentUser.displayName,
-          type: 'text',
-          payload: { text: welcomeText },
-          ciphertext: env.ciphertext,
-          iv: env.iv,
-          algorithm: env.algorithm,
-          reactions: {},
-          reactionsCount: 0,
-          starredBy: [],
-          isDeleted: false,
-          status: 'read',
-          createdAtMs: Date.now()
-        }
-      ]
-    }));
+      currentUser,
+      welcomeText,
+      invitedContacts,
+      { adminOnlyPost, inviteCode }
+    );
     setSelectedChatId(chatId);
     setMobileChatOpen(true);
     setActiveTab('chats');
   };
 
   const handleJoinSuggestedChannel = async (channel: SuggestedChannelItem) => {
+    if (!isCloudSynced || !auth.currentUser || !isRemoteFirebaseUid(currentUser.uid)) {
+      showToast('يجب تسجيل الدخول عبر Firebase لمتابعة القنوات');
+      return;
+    }
+
     const existing = chats.find((c) => c.id === channel.id);
     if (existing) {
       setSelectedChatId(existing.id);
@@ -2025,71 +2135,17 @@ export default function App() {
     const inviteCode = buildChannelInviteCode(channel.id);
     const welcomeText = `مرحباً بك في ${channel.title} · ${channel.description}`;
 
-    if (isCloudSynced) {
-      await createChatInFirestore(
-        channel.id,
-        'community',
-        channel.title,
-        channel.description,
-        channel.avatarUrl,
-        currentUser,
-        welcomeText,
-        [],
-        { adminOnlyPost: true, inviteCode }
-      );
-      showToast(`تمت متابعة ${channel.title}`);
-      return;
-    }
-
-    const room: ChatRoom = {
-      id: channel.id,
-      type: 'community',
-      title: channel.title,
-      description: channel.description,
-      avatarUrl: channel.avatarUrl,
-      isOnline: true,
-      memberIds: [currentUser.uid],
-      pinned: false,
-      archived: false,
-      muted: false,
-      favorite: false,
-      unreadCount: 1,
-      disappearingSeconds: 0,
-      adminOnlyPost: true,
-      inviteCode,
-      lastMessagePreview: welcomeText,
-      lastMessageType: 'text',
-      lastMessageSenderId: channel.id,
-      lastMessageStatus: 'read',
-      lastMessageAtMs: Date.now(),
-      roomSeed: channel.id
-    };
-    const key = await deriveRoomKeyFromSeed(channel.id);
-    const env = await encryptPayload(JSON.stringify({ text: welcomeText }), key);
-
-    setChats((prev) => [room, ...prev]);
-    setMessagesMap((prev) => ({
-      ...prev,
-      [channel.id]: [
-        {
-          id: `msg_ch_${Date.now()}`,
-          chatId: channel.id,
-          senderId: channel.id,
-          senderName: channel.title,
-          type: 'text',
-          payload: { text: welcomeText },
-          ciphertext: env.ciphertext,
-          iv: env.iv,
-          algorithm: env.algorithm,
-          reactions: {},
-          reactionsCount: 0,
-          starredBy: [],
-          isDeleted: false,
-          status: 'read',
-          createdAtMs: Date.now()
-        }
-      ]
-    }));
+    await createChatInFirestore(
+      channel.id,
+      'community',
+      channel.title,
+      channel.description,
+      channel.avatarUrl,
+      currentUser,
+      welcomeText,
+      [],
+      { adminOnlyPost: true, inviteCode }
+    );
     showToast(`تمت متابعة ${channel.title}`);
   };
 
@@ -2100,6 +2156,7 @@ export default function App() {
     avatarUrl: string,
     adminOnlyPost?: boolean
   ) => {
+    if (!isCloudSynced || !isRemoteFirebaseUid(currentUser.uid)) return;
     setChats((prev) =>
       prev.map((c) =>
         c.id === chatId
@@ -2113,12 +2170,14 @@ export default function App() {
           : c
       )
     );
-    if (isCloudSynced) {
-      await updateGroupSettingsInFirestore(chatId, title, description, avatarUrl, adminOnlyPost);
-    }
+    await updateGroupSettingsInFirestore(chatId, title, description, avatarUrl, adminOnlyPost);
   };
 
   const handleInviteMemberToGroup = async (chatId: string, contact: UserProfile) => {
+    if (!isCloudSynced || !auth.currentUser || !isRemoteFirebaseUid(currentUser.uid)) {
+      showToast('يجب تسجيل الدخول عبر Firebase لدعوة أعضاء');
+      return;
+    }
     const target = chats.find((c) => c.id === chatId);
     if (!target || target.memberIds.includes(contact.uid)) return;
     const nextMembers = Array.from(new Set([...target.memberIds, contact.uid])).slice(0, 50);
@@ -2127,88 +2186,37 @@ export default function App() {
       prev.map((c) => (c.id === chatId ? { ...c, memberIds: nextMembers } : c))
     );
 
-    if (isCloudSynced) {
-      await inviteMemberToGroupInFirestore(chatId, contact, nextMembers);
-      await sendEncryptedMessageToFirestore(
-        chatId,
-        target.roomSeed,
-        currentUser,
-        'text',
-        { text: `تمت دعوة ${contact.displayName} إلى المجموعة بتشفير تام 🔐` },
-        nextMembers
-      );
-      return;
-    }
-
-    const key = await deriveRoomKeyFromSeed(target.roomSeed);
-    const noticeText = `تمت دعوة ${contact.displayName} إلى المجموعة بتشفير تام 🔐`;
-    const env = await encryptPayload(JSON.stringify({ text: noticeText }), key);
-    const noticeMsg: DecryptedMessage = {
-      id: `msg_inv_${Date.now()}`,
+    await inviteMemberToGroupInFirestore(chatId, contact, nextMembers);
+    await sendEncryptedMessageToFirestore(
       chatId,
-      senderId: currentUser.uid,
-      senderName: currentUser.displayName,
-      type: 'text',
-      payload: { text: noticeText },
-      ciphertext: env.ciphertext,
-      iv: env.iv,
-      algorithm: env.algorithm,
-      reactions: {},
-      reactionsCount: 0,
-      starredBy: [],
-      isDeleted: false,
-      status: 'read',
-      createdAtMs: Date.now()
-    };
-    setMessagesMap((prev) => ({
-      ...prev,
-      [chatId]: [...(prev[chatId] || []), noticeMsg]
-    }));
+      target.roomSeed,
+      currentUser,
+      'text',
+      { text: `تمت دعوة ${contact.displayName} إلى المجموعة بتشفير تام 🔐` },
+      nextMembers
+    );
   };
 
   const handleRemoveMemberFromGroup = async (chatId: string, memberUid: string) => {
+    if (!isCloudSynced || !isRemoteFirebaseUid(currentUser.uid)) return;
     const target = chats.find((c) => c.id === chatId);
     if (!target || memberUid === currentUser.uid) return;
     const nextMembers = target.memberIds.filter((id) => id !== memberUid);
     setChats((prev) =>
       prev.map((c) => (c.id === chatId ? { ...c, memberIds: nextMembers } : c))
     );
-    if (isCloudSynced) {
-      await removeMemberFromGroupInFirestore(chatId, memberUid, nextMembers);
-    }
+    await removeMemberFromGroupInFirestore(chatId, memberUid, nextMembers);
   };
 
   const handlePublishStatus = async (payload: PublishStatusPayload) => {
-    if (isCloudSynced) {
-      const created = await publishStatusToFirestore(currentUser, payload);
-      setStatuses((prev) =>
-        filterActiveStatuses([created, ...prev.filter((s) => s.id !== created.id)])
-      );
-      showToast('تم نشر الحالة بنجاح');
+    if (!isCloudSynced || !auth.currentUser || !isRemoteFirebaseUid(currentUser.uid)) {
+      showToast('يجب تسجيل الدخول عبر Firebase لنشر الحالات');
       return;
     }
-    const nowMs = Date.now();
-    const newStatus: StatusItem = {
-      id: payload.id || `st_${nowMs}_${Math.random().toString(36).slice(2, 5)}`,
-      authorId: currentUser.uid,
-      authorName: currentUser.displayName,
-      authorAvatar: currentUser.avatarUrl,
-      type: payload.type,
-      content: payload.content,
-      backgroundColor: payload.backgroundColor,
-      fontStyle: payload.fontStyle,
-      ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
-      ...(payload.posterUrl ? { posterUrl: payload.posterUrl } : {}),
-      ...(typeof payload.durationSec === 'number' ? { durationSec: payload.durationSec } : {}),
-      pinned: false,
-      viewerIds: payload.viewerIds,
-      viewedByIds: [],
-      viewCount: 0,
-      viewedByMe: true,
-      createdAtMs: nowMs,
-      expiresAtMs: nowMs + STATUS_TTL_MS
-    };
-    setStatuses((prev) => filterActiveStatuses([newStatus, ...prev]));
+    const created = await publishStatusToFirestore(currentUser, payload);
+    setStatuses((prev) =>
+      filterActiveStatuses([created, ...prev.filter((s) => s.id !== created.id)])
+    );
     showToast('تم نشر الحالة بنجاح');
   };
 
@@ -2276,6 +2284,11 @@ export default function App() {
     replyText: string,
     statusPreview: string
   ) => {
+    if (!isCloudSynced || !auth.currentUser || !isRemoteFirebaseUid(currentUser.uid)) {
+      showToast('يجب تسجيل الدخول عبر Firebase للرد على الحالة');
+      return;
+    }
+
     const existing = chats.find(
       (c) => c.type === 'direct' && (c.peerUid === authorId || c.memberIds.includes(authorId))
     );
@@ -2292,9 +2305,15 @@ export default function App() {
       return;
     }
 
+    if (!isRemoteFirebaseUid(authorId)) {
+      showToast('تعذر فتح محادثة مع صاحب هذه الحالة');
+      return;
+    }
+
     await handleCreateDirectChat(authorName, authorId);
-    const fallbackRoom: ChatRoom = {
-      id: `chat_${authorId}`,
+    const directId = buildDirectChatId(currentUser.uid, authorId);
+    const targetRoom: ChatRoom = {
+      id: directId,
       type: 'direct',
       title: authorName,
       description: 'محادثة مشفرة',
@@ -2311,12 +2330,12 @@ export default function App() {
       lastMessagePreview: replyText,
       lastMessageType: 'text',
       lastMessageSenderId: currentUser.uid,
-      lastMessageStatus: 'read',
+      lastMessageStatus: 'sent',
       lastMessageAtMs: Date.now(),
-      roomSeed: `chat_${authorId}`
+      roomSeed: directId
     };
     showToast(`تم فتح المحادثة مع ${authorName}`);
-    void sendMessageToTargetChat(fallbackRoom, 'text', {
+    void sendMessageToTargetChat(targetRoom, 'text', {
       text: replyText,
       replyToSender: authorName,
       replyToText: statusPreview
@@ -2326,9 +2345,79 @@ export default function App() {
   const handleSaveProfile = async (displayName: string, about: string, avatarUrl: string) => {
     const updated = { ...currentUser, displayName, about, avatarUrl };
     setCurrentUser(updated);
-    if (isCloudSynced) {
+    if (isCloudSynced && isRemoteFirebaseUid(currentUser.uid)) {
       await updateProfileInFirestore(currentUser.uid, updated, { displayName, about, avatarUrl });
     }
+  };
+
+  const handleUpdateWasilId = async (newWasilId: string) => {
+    if (!isCloudSynced || !isRemoteFirebaseUid(currentUser.uid)) {
+      showToast('يجب تسجيل الدخول عبر Firebase لتحديث المعرّف الخاص');
+      return;
+    }
+    const claimed = await claimCustomWasilId(
+      currentUser.uid,
+      currentUser.displayName,
+      newWasilId,
+      currentUser.wasilId
+    );
+    setCurrentUser((prev) => ({ ...prev, wasilId: claimed }));
+    showToast(`تم حجز وتحديث معرّفك الخاص (${claimed}) بنجاح`);
+  };
+
+  const handleBackupUserData = async () => {
+    const backupPayload = {
+      version: 1,
+      exportedAtMs: Date.now(),
+      profile: currentUser,
+      privacySettings,
+      omarSettings,
+      chats,
+      messages: messagesMap,
+      statuses,
+      calls
+    };
+    if (isCloudSynced && isRemoteFirebaseUid(currentUser.uid)) {
+      await backupUserDataToFirestore(currentUser.uid, backupPayload);
+      showToast('تم حفظ النسخة الاحتياطية في السحابة بنجاح');
+    } else {
+      showToast('قم بتسجيل الدخول أولاً لحفظ النسخة الاحتياطية في السحابة');
+    }
+  };
+
+  const handleRestoreUserData = async () => {
+    if (!isCloudSynced || !isRemoteFirebaseUid(currentUser.uid)) {
+      showToast('قم بتسجيل الدخول أولاً للاستعادة من السحابة');
+      return;
+    }
+    const restored = await restoreUserDataFromFirestore(currentUser.uid);
+    if (!restored) {
+      showToast('لا توجد نسخة احتياطية محفوظة في السحابة لهذا الحساب');
+      return;
+    }
+    if (restored.omarSettings) {
+      setOmarSettings((prev) => ({ ...prev, ...restored.omarSettings }));
+    }
+    if (restored.privacySettings) {
+      setPrivacySettings((prev) => ({ ...prev, ...restored.privacySettings }));
+    }
+    if (restored.profile) {
+      setCurrentUser((prev) => ({ ...prev, ...restored.profile }));
+    }
+    if (Array.isArray(restored.chats)) {
+      setChats(restored.chats);
+      if (restored.chats.length > 0) setSelectedChatId(restored.chats[0].id);
+    }
+    if (restored.messages && typeof restored.messages === 'object') {
+      setMessagesMap(restored.messages);
+    }
+    if (Array.isArray(restored.statuses)) {
+      setStatuses(filterActiveStatuses(restored.statuses));
+    }
+    if (Array.isArray(restored.calls)) {
+      setCalls(restored.calls);
+    }
+    showToast('تمت استعادة بياناتك من النسخة الاحتياطية السحابية بنجاح');
   };
 
   const handleUpdatePrivacy = async (nextPrivacy: PrivacySettings) => {
@@ -2746,17 +2835,23 @@ export default function App() {
             privacySettings={privacySettings}
             theme={theme}
             isCloudSynced={isCloudSynced}
+            linkedDevices={linkedDevices}
+            currentDeviceId={localDeviceMeta.deviceId}
+            onRevokeDevice={handleRevokeOtherDevice}
             omarSettings={omarSettings}
             onUpdateOmarSettings={handleUpdateOmarSettings}
             onLockAppNow={handleLockAppNow}
             onShowToast={showToast}
             onToggleTheme={handleToggleTheme}
             onSaveProfile={handleSaveProfile}
+            onUpdateWasilId={handleUpdateWasilId}
             onUpdatePrivacy={handleUpdatePrivacy}
             onSignOut={handleRequestSignOut}
             isSigningOut={isSigningOut}
             onGoogleSignIn={handleGoogleSignIn}
             onOpenOmarAddons={() => setActiveTab('omar')}
+            onBackupData={handleBackupUserData}
+            onRestoreData={handleRestoreUserData}
           />
         )}
       </div>
@@ -2765,6 +2860,7 @@ export default function App() {
       <NewChatModal
         mode={newChatModalMode}
         myUid={currentUser.uid}
+        currentUser={currentUser}
         isCloudSynced={isCloudSynced}
         contacts={contactsList}
         onClose={() => setNewChatModalMode(null)}
@@ -2791,12 +2887,12 @@ export default function App() {
                 تسجيل الخروج من الحساب؟
               </h3>
               <p className="text-xs text-[#54656F] dark:text-[#8696A0] mt-1.5 leading-relaxed">
-                {currentUser.displayName} ({currentUser.email || currentUser.phone || 'حساب محلي غير مرتبط بالسحابة'})
+                {currentUser.displayName} ({currentUser.email || currentUser.phone || currentUser.wasilId || 'حساب تواصل'})
               </p>
               <p className="text-[11px] text-[#667781] dark:text-[#8696A0] mt-1">
                 {isCloudSynced
-                  ? 'المزامنة السحابية مفعّلة: ستبقى محادثاتك ورسائلك محفوظة سحابياً عند العودة.'
-                  : 'الوضع المحلي نشط: يمكنك تسجيل الدخول بحساب Google أو البريد لمزامنة محادثاتك سحابياً.'}
+                  ? 'المزامنة السحابية مفعّلة: ستبقى محادثاتك ورسائلك محفوظة في Firebase عند العودة.'
+                  : 'سيتم إغلاق الجلسة الحالية والعودة إلى شاشة تسجيل الدخول.'}
               </p>
             </div>
             <div className="flex items-center justify-end gap-2 pt-2">

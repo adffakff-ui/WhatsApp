@@ -15,7 +15,6 @@ import {
   Radio,
   Sparkles
 } from 'lucide-react';
-import { BUNDLED_ASSETS } from '../data/assets';
 import { Avatar } from './Avatar';
 import { buildChannelInviteCode, formatWhatsAppTime } from '../lib/chatLogic';
 import type { ChatRoom } from '../types/chat';
@@ -28,22 +27,7 @@ export interface SuggestedChannelItem {
   avatarUrl: string;
 }
 
-const SUGGESTED_CHANNELS: SuggestedChannelItem[] = [
-  {
-    id: 'channel_wasil_updates',
-    title: 'قناة تحديثات تواصل الرسمية',
-    description: 'أخبار التطوير، ميزات الخصوصية الجديدة، وإصدارات الأمان الفورية.',
-    followersLabel: '48.2K متابع',
-    avatarUrl: BUNDLED_ASSETS.avatarTechGroup
-  },
-  {
-    id: 'channel_cyber_alerts',
-    title: 'قناة الأمن السيبراني والتشفير',
-    description: 'تنبيهات حماية الحسابات وأفضل الممارسات للتواصل المشفر.',
-    followersLabel: '19.5K متابع',
-    avatarUrl: BUNDLED_ASSETS.avatarOmar
-  }
-];
+const SUGGESTED_CHANNELS: SuggestedChannelItem[] = [];
 
 interface CommunitiesViewProps {
   communities: ChatRoom[];

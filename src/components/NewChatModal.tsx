@@ -89,6 +89,10 @@ export function NewChatModal({
   const [isImporting, setIsImporting] = useState(false);
   const [isSearchingUid, setIsSearchingUid] = useState(false);
   const [foundRemoteUser, setFoundRemoteUser] = useState<UserProfile | null>(null);
+  const [groupPeerQuery, setGroupPeerQuery] = useState('');
+  const [groupFoundPeer, setGroupFoundPeer] = useState<UserProfile | null>(null);
+  const [extraGroupPeers, setExtraGroupPeers] = useState<UserProfile[]>([]);
+  const [searchingGroupPeer, setSearchingGroupPeer] = useState(false);
   const [copiedUid, setCopiedUid] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const iconInputRef = useRef<HTMLInputElement>(null);
@@ -102,7 +106,58 @@ export function NewChatModal({
       setAdminOnlyPost(false);
     }
     setErrorMsg(null);
+    setFoundRemoteUser(null);
+    setGroupFoundPeer(null);
+    setGroupPeerQuery('');
   }, [mode]);
+
+  // Automatic debounced lookup as user types a Wasil ID (@handle or bare handle >= 3 chars)
+  useEffect(() => {
+    if (mode !== 'direct' || !isCloudSynced || !onLookupPeerByUid) return;
+    const cleaned = contactInput.trim();
+    const bare = cleaned.replace(/^@+/, '').toLowerCase();
+    const looksSearchable =
+      (cleaned.startsWith('@') && bare.length >= 3) ||
+      (/^[a-z0-9_]{3,28}$/i.test(cleaned)) ||
+      (/^[a-zA-Z0-9_-]{20,128}$/.test(cleaned));
+    if (!looksSearchable) {
+      setIsSearchingUid(false);
+      return;
+    }
+
+    const matchesOwnWasil =
+      Boolean(currentUser?.wasilId) &&
+      bare === currentUser!.wasilId!.replace(/^@+/, '').toLowerCase();
+    if (cleaned === myUid || matchesOwnWasil) {
+      setFoundRemoteUser(null);
+      setIsSearchingUid(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsSearchingUid(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const peer = await onLookupPeerByUid(cleaned);
+        if (cancelled) return;
+        if (peer && peer.uid !== myUid) {
+          setFoundRemoteUser(peer);
+          setErrorMsg(null);
+        } else {
+          setFoundRemoteUser(null);
+        }
+      } catch {
+        if (!cancelled) setFoundRemoteUser(null);
+      } finally {
+        if (!cancelled) setIsSearchingUid(false);
+      }
+    }, 360);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [mode, contactInput, isCloudSynced, onLookupPeerByUid, myUid, currentUser?.wasilId]);
 
   useEffect(() => {
     if (!mode) return;
@@ -147,7 +202,10 @@ export function NewChatModal({
     if (!cleaned || !onLookupPeerByUid) return;
     setErrorMsg(null);
     setFoundRemoteUser(null);
-    if (cleaned === myUid) {
+    const matchesOwnWasil =
+      Boolean(currentUser?.wasilId) &&
+      cleaned.replace(/^@+/, '').toLowerCase() === currentUser!.wasilId!.replace(/^@+/, '').toLowerCase();
+    if (cleaned === myUid || matchesOwnWasil) {
       setErrorMsg('لا يمكنك إدخال معرف حسابك الخاص هنا.');
       return;
     }
@@ -155,7 +213,9 @@ export function NewChatModal({
     try {
       const peer = await onLookupPeerByUid(cleaned);
       if (!peer) {
-        setErrorMsg('لم يتم العثور على مستخدم سحابي بهذا المعرف (UID). تأكد من تسجيل دخول الطرف الآخر أولاً.');
+        setErrorMsg('لم يتم العثور على مستخدم مسجّل بهذا المعرف (@) أو UID. تأكد من صحة المعرف.');
+      } else if (peer.uid === myUid) {
+        setErrorMsg('لا يمكنك بدء محادثة مع معرف حسابك الخاص هنا.');
       } else {
         setFoundRemoteUser(peer);
       }
@@ -168,16 +228,45 @@ export function NewChatModal({
 
   const handleSubmitDirect = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!contactInput.trim()) return;
+    const trimmed = contactInput.trim();
+    if (!trimmed) return;
+    setErrorMsg(null);
     setIsSubmitting(true);
     try {
       if (foundRemoteUser) {
         await onCreateDirectChat(foundRemoteUser.displayName, foundRemoteUser.uid);
-      } else {
-        const trimmed = contactInput.trim();
-        const looksLikeUid = isCloudSynced && /^[a-zA-Z0-9_-]{20,64}$/.test(trimmed);
-        await onCreateDirectChat(trimmed, looksLikeUid ? trimmed : undefined);
+        setContactInput('');
+        setFoundRemoteUser(null);
+        onClose();
+        return;
       }
+
+      if (isCloudSynced && onLookupPeerByUid) {
+        const matchesOwnWasil =
+          Boolean(currentUser?.wasilId) &&
+          trimmed.replace(/^@+/, '').toLowerCase() === currentUser!.wasilId!.replace(/^@+/, '').toLowerCase();
+        if (trimmed === myUid || matchesOwnWasil) {
+          setErrorMsg('لا يمكنك إدخال معرف حسابك الخاص هنا.');
+          return;
+        }
+        const peer = await onLookupPeerByUid(trimmed);
+        if (!peer) {
+          setErrorMsg('لم يتم العثور على مستخدم مسجّل بهذا المعرف (@) أو UID. تأكد من صحة المعرف.');
+          return;
+        }
+        if (peer.uid === myUid) {
+          setErrorMsg('لا يمكنك بدء محادثة مع معرف حسابك الخاص هنا.');
+          return;
+        }
+        await onCreateDirectChat(peer.displayName, peer.uid);
+        setContactInput('');
+        setFoundRemoteUser(null);
+        onClose();
+        return;
+      }
+
+      const looksLikeUid = /^[a-zA-Z0-9_-]{20,64}$/.test(trimmed);
+      await onCreateDirectChat(trimmed, looksLikeUid ? trimmed : undefined);
       setContactInput('');
       setFoundRemoteUser(null);
       onClose();
@@ -271,16 +360,16 @@ export function NewChatModal({
                 <div className="p-3 rounded-xl bg-[#F7F8FA] dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#2A3942] flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <span className="block text-[10px] font-semibold text-[#54656F] dark:text-[#8696A0]">
-                      معرّف أكرم الخاص بك (Wasil ID):
+                      معرّفك الخاص للمشاركة (Wasil ID):
                     </span>
                     <span dir="ltr" className="block font-mono-code text-xs font-bold text-[var(--wa-accent)] truncate">
-                      {currentUser?.wasilId || '@akram_user'}
+                      {currentUser?.wasilId || myUid}
                     </span>
                   </div>
                   <button
                     type="button"
                     onClick={() => {
-                      void navigator.clipboard?.writeText(currentUser?.wasilId || '@akram_user');
+                      void navigator.clipboard?.writeText(currentUser?.wasilId || myUid);
                       setCopiedUid(true);
                       window.setTimeout(() => setCopiedUid(false), 1800);
                     }}
@@ -304,12 +393,13 @@ export function NewChatModal({
 
             <div>
               <label htmlFor="new-chat-name" className="block text-xs font-medium text-[#54656F] dark:text-[#8696A0] mb-1.5">
-                اسم جهة الاتصال أو معرف المستخدم السحابي (UID)
+                البحث بالمعرّف الخاص (Wasil ID مثل @user) أو UID
               </label>
               <div className="flex items-stretch gap-2">
                 <input
                   id="new-chat-name"
                   type="text"
+                  dir="auto"
                   required
                   value={contactInput}
                   onChange={(e) => {
@@ -317,7 +407,7 @@ export function NewChatModal({
                     setFoundRemoteUser(null);
                     setErrorMsg(null);
                   }}
-                  placeholder="أدخل الاسم أو الصق معرف UID للطرف الآخر..."
+                  placeholder="مثال: @sara_dev أو الصق معرّف الحساب..."
                   className="flex-1 min-w-0 rounded-lg bg-[#F0F2F5] dark:bg-[#2A3942] px-3 py-2.5 text-sm text-[#111B21] dark:text-[#E9EDEF] focus:outline-none focus:ring-2 focus:ring-[var(--wa-accent)]"
                 />
                 {isCloudSynced && onLookupPeerByUid && (
@@ -329,10 +419,15 @@ export function NewChatModal({
                     className="px-3 rounded-lg bg-[var(--wa-accent-soft)] text-[var(--wa-accent-strong)] font-bold text-xs flex items-center gap-1 disabled:opacity-50 cursor-pointer shrink-0"
                   >
                     <Search className="w-4 h-4" aria-hidden="true" />
-                    <span>{isSearchingUid ? '...' : 'تحقق'}</span>
+                    <span>{isSearchingUid ? '...' : 'بحث'}</span>
                   </button>
                 )}
               </div>
+              {isSearchingUid && (
+                <p className="mt-1.5 text-[11px] text-[var(--wa-accent-strong)] dark:text-[var(--wa-accent)]">
+                  جاري التحقق والبحث عن المعرّف في Firebase...
+                </p>
+              )}
             </div>
 
             {errorMsg && (
@@ -347,16 +442,31 @@ export function NewChatModal({
                 onClick={() => {
                   void onCreateDirectChat(foundRemoteUser.displayName, foundRemoteUser.uid).then(onClose);
                 }}
-                className="w-full p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 flex items-center justify-between gap-3 text-right cursor-pointer"
+                className="w-full p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 flex items-center justify-between gap-3 text-right cursor-pointer hover:brightness-95 transition-all"
               >
                 <div className="flex items-center gap-3 min-w-0">
-                  <Avatar src={foundRemoteUser.avatarUrl} name={foundRemoteUser.displayName} size="sm" isOnline />
+                  <Avatar
+                    src={foundRemoteUser.avatarUrl}
+                    name={foundRemoteUser.displayName}
+                    size="sm"
+                    isOnline={foundRemoteUser.isOnline}
+                  />
                   <div className="min-w-0">
-                    <p className="text-sm font-bold text-[#111B21] dark:text-white truncate">
-                      {foundRemoteUser.displayName}
-                    </p>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <p className="text-sm font-bold text-[#111B21] dark:text-white truncate">
+                        {foundRemoteUser.displayName}
+                      </p>
+                      {foundRemoteUser.wasilId && (
+                        <span
+                          dir="ltr"
+                          className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-500/15 font-mono-code text-[10px] font-bold text-emerald-700 dark:text-emerald-300"
+                        >
+                          {foundRemoteUser.wasilId}
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[11px] text-emerald-700 dark:text-emerald-300 truncate">
-                      حساب موثّق جاهز للمحادثة والمكالمات P2P
+                      {foundRemoteUser.about || 'حساب موثّق جاهز للمحادثة والمكالمات P2P'}
                     </p>
                   </div>
                 </div>
@@ -378,32 +488,64 @@ export function NewChatModal({
               </button>
             )}
 
-            <div>
-              <p className="text-xs font-semibold text-[var(--wa-accent-strong)] mb-2">
-                جهات الاتصال المتاحة
-              </p>
-              <ul className="space-y-1 max-h-40 overflow-y-auto">
-                {contacts.map((c) => (
-                  <li key={c.uid}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void onCreateDirectChat(c.displayName, c.uid).then(onClose);
-                      }}
-                      className="w-full p-2 rounded-xl flex items-center gap-3 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-right cursor-pointer"
-                    >
-                      <Avatar src={c.avatarUrl} name={c.displayName} size="sm" isOnline={c.isOnline} />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-[#111B21] dark:text-[#E9EDEF] truncate">
-                          {c.displayName}
-                        </p>
-                        <p className="text-xs text-[#54656F] dark:text-[#8696A0] truncate">{c.about}</p>
-                      </div>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
+            {(() => {
+              const q = contactInput.trim().toLowerCase();
+              const filteredContacts = q
+                ? contacts.filter(
+                    (c) =>
+                      c.displayName.toLowerCase().includes(q) ||
+                      (c.wasilId && c.wasilId.toLowerCase().includes(q)) ||
+                      c.uid.toLowerCase().includes(q)
+                  )
+                : contacts;
+
+              return (
+                <div>
+                  <p className="text-xs font-semibold text-[var(--wa-accent-strong)] mb-2">
+                    جهات الاتصال المتاحة ({filteredContacts.length})
+                  </p>
+                  {filteredContacts.length === 0 ? (
+                    <p className="p-3 rounded-xl bg-[#F7F8FA] dark:bg-[#111B21] text-[11px] text-[#54656F] dark:text-[#8696A0] text-center">
+                      {contacts.length === 0
+                        ? 'لا توجد جهات اتصال محفوظة بعد — ابحث بالمعرف @ الخاص بالطرف الآخر لبدء محادثة مشفرة.'
+                        : 'لا توجد جهة اتصال محلية مطابقة — اضغط «بحث» للبحث في سحابة Firebase عبر Wasil ID.'}
+                    </p>
+                  ) : (
+                    <ul className="space-y-1 max-h-40 overflow-y-auto">
+                      {filteredContacts.map((c) => (
+                        <li key={c.uid}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void onCreateDirectChat(c.displayName, c.uid).then(onClose);
+                            }}
+                            className="w-full p-2 rounded-xl flex items-center gap-3 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-right cursor-pointer"
+                          >
+                            <Avatar src={c.avatarUrl} name={c.displayName} size="sm" isOnline={c.isOnline} />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <p className="text-sm font-semibold text-[#111B21] dark:text-[#E9EDEF] truncate">
+                                  {c.displayName}
+                                </p>
+                                {c.wasilId && (
+                                  <span
+                                    dir="ltr"
+                                    className="font-mono-code text-[10px] font-semibold text-[var(--wa-accent)] shrink-0"
+                                  >
+                                    {c.wasilId}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-[#54656F] dark:text-[#8696A0] truncate">{c.about}</p>
+                            </div>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              );
+            })()}
 
             <div className="flex items-center justify-between pt-2">
               <span className="text-[11px] text-[#54656F] dark:text-[#8696A0] flex items-center gap-1">
@@ -565,33 +707,133 @@ export function NewChatModal({
               />
             </label>
 
-            <div>
-              <p className="text-xs font-semibold text-[var(--wa-accent-strong)] mb-2">
-                {isChannel ? `دعوة متابعين (${selectedUids.length})` : `دعوة جهات الاتصال (${selectedUids.length})`}
+            <div className="space-y-2.5">
+              <p className="text-xs font-semibold text-[var(--wa-accent-strong)]">
+                {isChannel ? `دعوة متابعين (${selectedUids.length})` : `دعوة جهات الاتصال بالمعرف (${selectedUids.length})`}
               </p>
-              <ul className="space-y-1 max-h-40 overflow-y-auto">
-                {contacts.map((c) => {
-                  const checked = selectedUids.includes(c.uid);
-                  return (
-                    <li key={c.uid}>
-                      <label className="w-full p-2 rounded-xl flex items-center justify-between gap-3 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <Avatar src={c.avatarUrl} name={c.displayName} size="sm" />
-                          <span className="text-sm font-medium text-[#111B21] dark:text-[#E9EDEF] truncate">
-                            {c.displayName}
-                          </span>
+              {isCloudSynced && onLookupPeerByUid && (
+                <div className="space-y-2">
+                  <div className="flex items-stretch gap-2">
+                    <input
+                      type="text"
+                      dir="auto"
+                      value={groupPeerQuery}
+                      onChange={(e) => {
+                        setGroupPeerQuery(e.target.value);
+                        setGroupFoundPeer(null);
+                      }}
+                      placeholder="إضافة عضو عبر @wasilId..."
+                      className="flex-1 min-w-0 rounded-lg bg-[#F0F2F5] dark:bg-[#2A3942] px-3 py-1.5 text-xs text-[#111B21] dark:text-[#E9EDEF] focus:outline-none focus:ring-2 focus:ring-[var(--wa-accent)]"
+                    />
+                    <button
+                      type="button"
+                      disabled={searchingGroupPeer || !groupPeerQuery.trim()}
+                      onClick={async () => {
+                        const q = groupPeerQuery.trim();
+                        if (!q || !onLookupPeerByUid) return;
+                        setSearchingGroupPeer(true);
+                        setErrorMsg(null);
+                        try {
+                          const peer = await onLookupPeerByUid(q);
+                          if (!peer) {
+                            setErrorMsg('لم يتم العثور على مستخدم بهذا المعرف.');
+                            setGroupFoundPeer(null);
+                          } else if (peer.uid === myUid) {
+                            setErrorMsg('حسابك مضاف تلقائياً بصفتك المنشئ.');
+                            setGroupFoundPeer(null);
+                          } else {
+                            setGroupFoundPeer(peer);
+                          }
+                        } finally {
+                          setSearchingGroupPeer(false);
+                        }
+                      }}
+                      className="px-3 rounded-lg bg-[var(--wa-accent-soft)] text-[var(--wa-accent-strong)] font-bold text-xs flex items-center gap-1 disabled:opacity-50 cursor-pointer shrink-0"
+                    >
+                      <Search className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>{searchingGroupPeer ? '...' : 'بحث'}</span>
+                    </button>
+                  </div>
+                  {groupFoundPeer && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExtraGroupPeers((prev) =>
+                          prev.some((p) => p.uid === groupFoundPeer.uid) ? prev : [groupFoundPeer, ...prev]
+                        );
+                        setSelectedUids((prev) =>
+                          prev.includes(groupFoundPeer.uid) ? prev : [...prev, groupFoundPeer.uid]
+                        );
+                        setGroupFoundPeer(null);
+                        setGroupPeerQuery('');
+                      }}
+                      className="w-full p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 flex items-center justify-between gap-2 text-right cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <Avatar src={groupFoundPeer.avatarUrl} name={groupFoundPeer.displayName} size="sm" />
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-[#111B21] dark:text-white truncate">
+                            {groupFoundPeer.displayName}
+                          </p>
+                          {groupFoundPeer.wasilId && (
+                            <p dir="ltr" className="font-mono-code text-[10px] text-emerald-700 dark:text-emerald-300 truncate">
+                              {groupFoundPeer.wasilId}
+                            </p>
+                          )}
                         </div>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => toggleMember(c.uid)}
-                          className="w-4 h-4 accent-[var(--wa-accent)]"
-                        />
-                      </label>
-                    </li>
+                      </div>
+                      <span className="px-2.5 py-1 rounded-lg bg-[var(--wa-accent)] text-white text-[11px] font-bold shrink-0">
+                        إضافة
+                      </span>
+                    </button>
+                  )}
+                </div>
+              )}
+              {(() => {
+                const combinedPeers = [
+                  ...extraGroupPeers,
+                  ...contacts.filter((c) => !extraGroupPeers.some((e) => e.uid === c.uid))
+                ];
+                if (combinedPeers.length === 0) {
+                  return (
+                    <p className="p-2.5 rounded-xl bg-[#F7F8FA] dark:bg-[#111B21] text-[11px] text-[#54656F] dark:text-[#8696A0] text-center">
+                      ابحث بالمعرّف @ لإضافة أعضاء جدد، أو أنشئ المجموعة وأضف الأعضاء لاحقاً.
+                    </p>
                   );
-                })}
-              </ul>
+                }
+                return (
+                  <ul className="space-y-1 max-h-40 overflow-y-auto">
+                    {combinedPeers.map((c) => {
+                      const checked = selectedUids.includes(c.uid);
+                      return (
+                        <li key={c.uid}>
+                          <label className="w-full p-2 rounded-xl flex items-center justify-between gap-3 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <Avatar src={c.avatarUrl} name={c.displayName} size="sm" />
+                              <div className="min-w-0">
+                                <span className="block text-sm font-medium text-[#111B21] dark:text-[#E9EDEF] truncate">
+                                  {c.displayName}
+                                </span>
+                                {c.wasilId && (
+                                  <span dir="ltr" className="block font-mono-code text-[10px] text-[#54656F] dark:text-[#8696A0] truncate">
+                                    {c.wasilId}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleMember(c.uid)}
+                              className="w-4 h-4 accent-[var(--wa-accent)]"
+                            />
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                );
+              })()}
             </div>
 
             <div className="flex items-center justify-between gap-2 pt-2">

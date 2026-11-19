@@ -191,3 +191,14 @@ export interface ScheduledMessage {
   status: 'pending' | 'sent' | 'cancelled';
   createdAtMs: number;
 }
+
+export interface DeviceSession {
+  deviceId: string;
+  uid: string;
+  deviceName: string;
+  platform: string;
+  isOnline: boolean;
+  lastActiveAtMs: number;
+  createdAtMs: number;
+}
+

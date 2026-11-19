@@ -25,7 +25,11 @@ service cloud.firestore {
     }
 
     function isVerifiedUser() {
-      return isSignedIn() && request.auth.token.email_verified == true;
+      return isSignedIn() && (
+        request.auth.token.email_verified == true ||
+        request.auth.token.firebase.sign_in_provider == 'phone' ||
+        request.auth.token.firebase.sign_in_provider == 'password'
+      );
     }
 
     function isOwner(userId) {
@@ -54,11 +58,16 @@ service cloud.firestore {
         getAfter(/databases/$(database)/documents/chats/$(chatId)/members/$(request.auth.uid)).data.role == 'admin';
     }
 
+    function isValidWasilId(id) {
+      return id is string && id.size() >= 3 && id.size() <= 36 && id.matches('^@?[a-zA-Z0-9_\\-]+$');
+    }
+
     // Validation blueprints
     function isValidPublicProfile(data) {
-      return data.keys().hasAll(['uid', 'displayName', 'about', 'avatarUrl', 'publicKeyJwk', 'safetyCode', 'isOnline', 'lastSeen', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'displayName', 'about', 'avatarUrl', 'publicKeyJwk', 'safetyCode', 'isOnline', 'lastSeen', 'updatedAt'])
+      return data.keys().hasAll(['uid', 'wasilId', 'displayName', 'about', 'avatarUrl', 'publicKeyJwk', 'safetyCode', 'isOnline', 'lastSeen', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'wasilId', 'displayName', 'about', 'avatarUrl', 'publicKeyJwk', 'safetyCode', 'isOnline', 'lastSeen', 'updatedAt'])
         && isValidId(data.uid)
+        && isValidWasilId(data.wasilId)
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
         && data.about is string && data.about.size() <= 200
         && data.avatarUrl is string && data.avatarUrl.size() <= 65536
@@ -71,8 +80,9 @@ service cloud.firestore {
 
     function isValidPrivateInfo(data) {
       return data.keys().hasAll(['uid', 'email', 'theme', 'readReceipts', 'lastSeenVisible', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'email', 'phone', 'theme', 'readReceipts', 'lastSeenVisible', 'lastSeenMode', 'profilePhotoVisibility', 'bioVisibility', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'wasilId', 'email', 'phone', 'theme', 'readReceipts', 'lastSeenVisible', 'lastSeenMode', 'profilePhotoVisibility', 'bioVisibility', 'identityPublicKeyJwk', 'identityPrivateKeyJwk', 'identitySafetyCode', 'createdAt', 'updatedAt'])
         && isValidId(data.uid)
+        && (!('wasilId' in data) || isValidWasilId(data.wasilId))
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
         && (!('phone' in data) || (data.phone is string && data.phone.size() <= 32))
         && data.theme in ['light', 'dark']
@@ -81,6 +91,22 @@ service cloud.firestore {
         && (!('lastSeenMode' in data) || data.lastSeenMode in ['everyone', 'contacts', 'nobody'])
         && (!('profilePhotoVisibility' in data) || data.profilePhotoVisibility in ['everyone', 'contacts', 'nobody'])
         && (!('bioVisibility' in data) || data.bioVisibility in ['everyone', 'contacts', 'nobody'])
+        && (!('identityPublicKeyJwk' in data) || (data.identityPublicKeyJwk is string && data.identityPublicKeyJwk.size() >= 10 && data.identityPublicKeyJwk.size() <= 1024))
+        && (!('identityPrivateKeyJwk' in data) || (data.identityPrivateKeyJwk is string && data.identityPrivateKeyJwk.size() >= 20 && data.identityPrivateKeyJwk.size() <= 1024))
+        && (!('identitySafetyCode' in data) || (data.identitySafetyCode is string && data.identitySafetyCode.size() >= 10 && data.identitySafetyCode.size() <= 120))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDeviceSession(data) {
+      return data.keys().hasAll(['deviceId', 'uid', 'deviceName', 'platform', 'isOnline', 'lastActiveAt', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['deviceId', 'uid', 'deviceName', 'platform', 'isOnline', 'lastActiveAt', 'createdAt', 'updatedAt'])
+        && isValidId(data.deviceId)
+        && isValidId(data.uid)
+        && data.deviceName is string && data.deviceName.size() >= 1 && data.deviceName.size() <= 100
+        && data.platform is string && data.platform.size() >= 1 && data.platform.size() <= 40
+        && data.isOnline is bool
+        && data.lastActiveAt is timestamp
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -228,46 +254,85 @@ service cloud.firestore {
     // Split User Profiles (PII Isolation)
     match /users/{userId}/public/{docId} {
       allow get: if isSignedIn() && isValidId(userId) && docId == 'profile';
-      allow create: if isVerifiedOwner(userId) && isValidId(userId) && docId == 'profile'
+      allow create: if isOwner(userId) && isValidId(userId) && docId == 'profile'
         && isValidPublicProfile(incoming())
         && incoming().uid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/wasil_registry/$(incoming().wasilId)).data.uid == request.auth.uid
         && incoming().updatedAt == request.time;
-      allow update: if isVerifiedOwner(userId) && isValidId(userId) && docId == 'profile'
+      allow update: if isOwner(userId) && isValidId(userId) && docId == 'profile'
         && isValidPublicProfile(incoming())
         && incoming().uid == existing().uid
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'about', 'avatarUrl', 'publicKeyJwk', 'safetyCode', 'isOnline', 'lastSeen', 'updatedAt']);
+        && ((('wasilId' in existing()) && incoming().wasilId == existing().wasilId)
+          || getAfter(/databases/$(database)/documents/wasil_registry/$(incoming().wasilId)).data.uid == request.auth.uid)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['wasilId', 'displayName', 'about', 'avatarUrl', 'publicKeyJwk', 'safetyCode', 'isOnline', 'lastSeen', 'updatedAt']);
       allow delete: if false;
     }
 
     match /users/{userId}/private/{docId} {
       allow get: if isOwner(userId) && isValidId(userId) && docId == 'info';
-      allow create: if isVerifiedOwner(userId) && isValidId(userId) && docId == 'info'
+      allow create: if isOwner(userId) && isValidId(userId) && docId == 'info'
         && isValidPrivateInfo(incoming())
         && incoming().uid == request.auth.uid
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
-      allow update: if isVerifiedOwner(userId) && isValidId(userId) && docId == 'info'
+      allow update: if isOwner(userId) && isValidId(userId) && docId == 'info'
         && isValidPrivateInfo(incoming())
         && incoming().uid == existing().uid
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['wasilId', 'phone', 'theme', 'readReceipts', 'lastSeenVisible', 'lastSeenMode', 'profilePhotoVisibility', 'bioVisibility', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['wasilId', 'phone', 'theme', 'readReceipts', 'lastSeenVisible', 'lastSeenMode', 'profilePhotoVisibility', 'bioVisibility', 'identityPublicKeyJwk', 'identityPrivateKeyJwk', 'identitySafetyCode', 'updatedAt']);
       allow delete: if false;
     }
 
-    function isValidWasilId(id) {
-      return id is string && id.size() >= 2 && id.size() <= 64 && id.matches('^@?[a-zA-Z0-9_\\-]+$');
+    match /users/{userId}/devices/{deviceId} {
+      allow get: if isOwner(userId) && isValidId(userId) && isValidId(deviceId);
+      allow list: if isOwner(userId) && resource.data.uid == request.auth.uid;
+      allow create: if isOwner(userId) && isValidId(userId) && isValidId(deviceId)
+        && isValidDeviceSession(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().deviceId == deviceId
+        && incoming().lastActiveAt == request.time
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isOwner(userId) && isValidId(userId) && isValidId(deviceId)
+        && isValidDeviceSession(incoming())
+        && incoming().uid == existing().uid
+        && incoming().deviceId == existing().deviceId
+        && incoming().createdAt == existing().createdAt
+        && incoming().lastActiveAt == request.time
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['deviceName', 'platform', 'isOnline', 'lastActiveAt', 'updatedAt']);
+      allow delete: if isOwner(userId) && isValidId(userId) && isValidId(deviceId);
     }
 
     match /wasil_registry/{wasilId} {
       allow get: if isSignedIn() && isValidWasilId(wasilId);
-      allow create, update: if isSignedIn() && isValidWasilId(wasilId) && incoming().uid == request.auth.uid;
-      allow delete: if false;
+      allow create: if isSignedIn() && isValidWasilId(wasilId)
+        && incoming().keys().hasAll(['uid', 'displayName', 'updatedAt'])
+        && incoming().keys().hasOnly(['uid', 'wasilId', 'displayName', 'updatedAt'])
+        && incoming().uid == request.auth.uid
+        && incoming().displayName is string && incoming().displayName.size() >= 1 && incoming().displayName.size() <= 80
+        && (!('wasilId' in incoming()) || isValidWasilId(incoming().wasilId))
+        && incoming().updatedAt == request.time;
+      allow update: if isSignedIn() && isValidWasilId(wasilId)
+        && existing().uid == request.auth.uid
+        && incoming().uid == existing().uid
+        && incoming().keys().hasOnly(['uid', 'wasilId', 'displayName', 'updatedAt'])
+        && incoming().displayName is string && incoming().displayName.size() >= 1 && incoming().displayName.size() <= 80
+        && (!('wasilId' in incoming()) || isValidWasilId(incoming().wasilId))
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['wasilId', 'displayName', 'updatedAt']);
+      allow delete: if isSignedIn() && isValidWasilId(wasilId) && existing().uid == request.auth.uid;
     }
 
     match /users/{userId}/backups/{docId} {
-      allow get, list, create, update: if isOwner(userId) && isValidId(userId);
+      allow get, list: if isOwner(userId) && isValidId(userId);
+      allow create, update: if isOwner(userId) && isValidId(userId) && isValidId(docId)
+        && incoming().keys().hasAll(['payloadJson', 'updatedAt'])
+        && incoming().keys().hasOnly(['payloadJson', 'updatedAt'])
+        && incoming().payloadJson is string && incoming().payloadJson.size() >= 2 && incoming().payloadJson.size() <= 900000
+        && incoming().updatedAt == request.time;
       allow delete: if isOwner(userId) && isValidId(userId);
     }
 

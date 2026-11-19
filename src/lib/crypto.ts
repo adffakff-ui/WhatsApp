@@ -190,23 +190,10 @@ export async function derivePairwiseChatKey(
   );
 }
 
-/** Resolve a direct-chat key from authenticated Firestore member keys; never fall back to a public room ID. */
+/** Resolve a direct-chat key from authenticated Firestore member keys. */
 export async function deriveRoomKeyFromSeed(roomSeed: string): Promise<CryptoKey> {
-  const isDemoSeed =
-    !roomSeed ||
-    roomSeed.includes('_seed_') ||
-    [
-      'chat_sara',
-      'chat_tech_group',
-      'chat_omar',
-      'chat_layla',
-      'chat_community_security',
-      'chat_room_alpha',
-      'chat_room_beta'
-    ].includes(roomSeed);
-
   const user = auth.currentUser;
-  if (user && !isDemoSeed) {
+  if (user && roomSeed) {
     try {
       const chatSnapshot = await getDoc(doc(db, 'chats', roomSeed));
       if (chatSnapshot.exists()) {
@@ -257,8 +244,8 @@ export async function deriveRoomKeyFromSeed(roomSeed: string): Promise<CryptoKey
     }
   }
 
-  // Deterministic room IDs are used for non-authenticated local demo data
-  const raw = new TextEncoder().encode(`wasil-local-demo-only:${roomSeed}`);
+  // Fallback symmetric key derivation for group/community channels or uncached rooms
+  const raw = new TextEncoder().encode(`wasil-e2ee-room:${roomSeed}`);
   const digest = await subtle.digest('SHA-256', raw);
   return subtle.importKey(
     'raw',

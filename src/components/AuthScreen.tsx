@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { RecaptchaVerifier, signInWithPhoneNumber, type ConfirmationResult } from 'firebase/auth';
 import {
+  AlertCircle,
   ArrowLeft,
   ArrowRight,
+  AtSign,
   Camera,
   Check,
   CheckCircle2,
@@ -19,6 +21,7 @@ import {
   Palette,
   Phone,
   QrCode,
+  RefreshCw,
   Shield,
   ShieldCheck,
   Sun,
@@ -36,6 +39,12 @@ import {
   validateEmailAddress,
   validatePasswordStrength
 } from '../lib/authHelpers';
+import {
+  normalizeWasilId,
+  suggestWasilIdFromName,
+  validateWasilId
+} from '../lib/chatLogic';
+import { checkWasilIdAvailability } from '../services/firestoreSync';
 import { OMAR_THEMES } from '../lib/omarConfig';
 import { CountryPickerModal } from './CountryPickerModal';
 import { PWAInstallButton } from './PWAInstallButton';
@@ -47,6 +56,7 @@ export type EmailSubMode = 'login' | 'register' | 'reset';
 
 export interface OnboardingCompletionPayload {
   displayName: string;
+  wasilId: string;
   about: string;
   avatarUrl: string;
   phone?: string;
@@ -139,8 +149,16 @@ export function AuthScreen({
   const [showPassword, setShowPassword] = useState(false);
   const [emailBusy, setEmailBusy] = useState(false);
 
-  // Step 3: Profile & Security setup
-  const [profileName, setProfileName] = useState(currentUser.displayName || 'مستخدم تواصل');
+  // Step 3: Profile, Custom Wasil ID & Security setup
+  const [profileName, setProfileName] = useState(
+    currentUser.displayName && currentUser.displayName !== 'أحمد العتيبي'
+      ? currentUser.displayName
+      : 'مستخدم تواصل'
+  );
+  const [profileWasilId, setProfileWasilId] = useState(currentUser.wasilId || '');
+  const [wasilIdStatus, setWasilIdStatus] = useState<'idle' | 'checking' | 'available' | 'taken' | 'invalid'>('idle');
+  const [wasilIdMsg, setWasilIdMsg] = useState('');
+  const wasilIdTouchedRef = useRef(false);
   const [profileAbout, setProfileAbout] = useState(currentUser.about || BIO_PRESETS[0]);
   const [profileAvatar, setProfileAvatar] = useState(currentUser.avatarUrl || '');
   const [enableAppPin, setEnableAppPin] = useState(Boolean(omarSettings.appLockOnLaunch));
@@ -185,6 +203,60 @@ export function AuthScreen({
       }
     };
   }, []);
+
+  // Auto-suggest a unique Wasil ID when entering Step 3
+  useEffect(() => {
+    if (step !== 'profile') return;
+    if (!wasilIdTouchedRef.current && !profileWasilId) {
+      const uidSuffix = (auth.currentUser?.uid || currentUser.uid || '').slice(-4);
+      const suggested =
+        currentUser.wasilId && currentUser.wasilId.startsWith('@')
+          ? currentUser.wasilId
+          : suggestWasilIdFromName(profileName || registerName, uidSuffix);
+      setProfileWasilId(suggested);
+    }
+  }, [step, profileName, registerName, profileWasilId, currentUser.wasilId, currentUser.uid]);
+
+  // Debounced live availability check for the chosen @wasilId
+  useEffect(() => {
+    if (step !== 'profile') return;
+    const raw = profileWasilId.trim();
+    if (!raw) {
+      setWasilIdStatus('idle');
+      setWasilIdMsg('');
+      return;
+    }
+    const validation = validateWasilId(raw);
+    if (!validation.valid) {
+      setWasilIdStatus('invalid');
+      setWasilIdMsg(validation.error || 'معرّف غير صالح.');
+      return;
+    }
+
+    let cancelled = false;
+    setWasilIdStatus('checking');
+    setWasilIdMsg('جاري التحقق من توفر المعرف...');
+    const timer = window.setTimeout(async () => {
+      const activeUid = auth.currentUser?.uid || currentUser.uid;
+      const res = await checkWasilIdAvailability(validation.normalized, activeUid);
+      if (cancelled) return;
+      if (res.available) {
+        setWasilIdStatus('available');
+        setWasilIdMsg(`المعرف ${res.normalized} متاح وجاهز للحجز ✓`);
+      } else if (res.uncertain) {
+        setWasilIdStatus('available');
+        setWasilIdMsg(`سيتم حجز المعرف ${res.normalized} والتحقق من تفرّده فور الاتصال بالسحابة`);
+      } else {
+        setWasilIdStatus('taken');
+        setWasilIdMsg(res.error || 'هذا المعرف محجوز لمستخدم آخر بالفعل.');
+      }
+    }, 320);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [step, profileWasilId, currentUser.uid]);
 
   const clearNotices = () => {
     setLocalError(null);
@@ -398,15 +470,46 @@ export function AuthScreen({
       setLocalError('يرجى إدخال اسم ظاهر من حرفين على الأقل.');
       return;
     }
+
+    const idToCheck =
+      profileWasilId.trim() ||
+      suggestWasilIdFromName(cleanedName, (auth.currentUser?.uid || currentUser.uid || '').slice(-4));
+    const idValidation = validateWasilId(idToCheck);
+    if (!idValidation.valid) {
+      setLocalError(idValidation.error || 'يرجى إدخال معرّف خاص صالح.');
+      return;
+    }
+    if (wasilIdStatus === 'taken') {
+      setLocalError('هذا المعرف محجوز لمستخدم آخر بالفعل، اختر معرفاً آخر.');
+      return;
+    }
+
     const cleanPin = setupPin.replace(/\D/g, '').slice(0, 4);
     if (enableAppPin && cleanPin.length !== 4) {
       setLocalError('رمز قفل التطبيق يجب أن يتكون من ٤ أرقام.');
       return;
     }
+
     setCompletingProfile(true);
     try {
+      // Bounded quick availability verification (never hangs on slow/offline network)
+      const activeUid = auth.currentUser?.uid || currentUser.uid;
+      const availability = await Promise.race([
+        checkWasilIdAvailability(idValidation.normalized, activeUid),
+        new Promise<{ available: boolean; normalized: string; uncertain?: boolean }>((resolve) =>
+          window.setTimeout(() => resolve({ available: true, normalized: idValidation.normalized }), 1200)
+        )
+      ]);
+      if (!availability.available && !availability.uncertain) {
+        setWasilIdStatus('taken');
+        setWasilIdMsg('هذا المعرف محجوز لمستخدم آخر بالفعل.');
+        setLocalError('هذا المعرف محجوز لمستخدم آخر بالفعل، اختر معرفاً آخر.');
+        return;
+      }
+
       await onCompleteOnboarding({
         displayName: cleanedName,
+        wasilId: idValidation.normalized,
         about: profileAbout.trim() || BIO_PRESETS[0],
         avatarUrl: profileAvatar,
         phone: pendingE164 || currentUser.phone,
@@ -1275,6 +1378,75 @@ export function AuthScreen({
                   />
                 </div>
 
+                {/* Custom Cloud Wasil ID Reservation */}
+                <div>
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <label
+                      htmlFor="onboarding-wasil-id"
+                      className="text-xs font-bold text-[#3B4A54] dark:text-[#D1D7DB] flex items-center gap-1.5"
+                    >
+                      <AtSign className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
+                      <span>معرّفك الخاص والفريد في السحابة (Wasil ID)</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        wasilIdTouchedRef.current = true;
+                        setProfileWasilId(suggestWasilIdFromName(profileName));
+                      }}
+                      className="text-[11px] font-bold text-[var(--wa-accent)] hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <RefreshCw className="w-3 h-3" aria-hidden="true" />
+                      <span>اقتراح معرف</span>
+                    </button>
+                  </div>
+                  <div className="relative">
+                    <input
+                      id="onboarding-wasil-id"
+                      type="text"
+                      dir="ltr"
+                      required
+                      maxLength={32}
+                      value={profileWasilId}
+                      onChange={(e) => {
+                        wasilIdTouchedRef.current = true;
+                        const val = e.target.value;
+                        setProfileWasilId(val.startsWith('@') ? val : `@${val.replace(/^@+/, '')}`);
+                      }}
+                      onBlur={() => {
+                        if (profileWasilId.trim()) {
+                          const norm = normalizeWasilId(profileWasilId);
+                          if (norm) setProfileWasilId(norm);
+                        }
+                      }}
+                      placeholder="@your_handle"
+                      className="w-full min-h-[46px] px-4 rounded-xl bg-[#F7F8FA] dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#2A3942] font-mono-code text-sm font-semibold text-[#111B21] dark:text-[#E9EDEF] focus:outline-none focus:ring-2 focus:ring-[var(--wa-accent)]"
+                    />
+                  </div>
+                  {wasilIdMsg ? (
+                    <p
+                      className={`mt-1.5 text-[11px] font-semibold flex items-center gap-1.5 ${
+                        wasilIdStatus === 'available'
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : wasilIdStatus === 'taken' || wasilIdStatus === 'invalid'
+                            ? 'text-red-600 dark:text-red-400'
+                            : 'text-[#54656F] dark:text-[#8696A0]'
+                      }`}
+                    >
+                      {wasilIdStatus === 'available' ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                      ) : wasilIdStatus === 'taken' || wasilIdStatus === 'invalid' ? (
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                      ) : null}
+                      <span>{wasilIdMsg}</span>
+                    </p>
+                  ) : (
+                    <p className="mt-1.5 text-[11px] text-[#54656F] dark:text-[#8696A0]">
+                      سيُحفظ هذا المعرف في السحابة لتتمكن من مشاركته مع الآخرين والبحث عنك لبدء المحادثات.
+                    </p>
+                  )}
+                </div>
+
                 <div>
                   <label
                     htmlFor="onboarding-about"
@@ -1388,7 +1560,7 @@ export function AuthScreen({
                     </div>
                     <div>
                       <p className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF]">
-                        مجموعة أكرم الملكية
+                        معاينة المحادثة المشفرة
                       </p>
                       <p className="text-[10px] text-[var(--wa-accent)] font-medium">
                         متصل الآن · مشفر تماماً

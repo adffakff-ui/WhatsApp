@@ -677,14 +677,21 @@ export function ChatListPane({
       {/* Chat List & Deep Message Search Results */}
       <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden pb-24 md:pb-16">
         {chats.length === 0 && messageSearchResults.length === 0 ? (
-          <div className="px-6 py-14 text-center">
-            <p className="text-sm font-medium text-[#54656F] dark:text-[#8696A0]">
+          <div className="px-6 py-14 text-center space-y-2">
+            <p className="text-sm font-semibold text-[#111B21] dark:text-[#E9EDEF]">
               {hasSearchQuery || msgFilter !== 'all'
                 ? 'لا توجد محادثات أو رسائل مطابقة لبحثك'
                 : filter === 'locked'
                   ? 'لا توجد محادثات مقفلة حالياً'
-                  : 'لا توجد محادثات مطابقة للفلتر الحالي'}
+                  : filter === 'all' && !showArchived
+                    ? 'لا توجد محادثات بعد'
+                    : 'لا توجد محادثات مطابقة للفلتر الحالي'}
             </p>
+            {!hasSearchQuery && msgFilter === 'all' && filter === 'all' && !showArchived && (
+              <p className="text-xs text-[#54656F] dark:text-[#8696A0] leading-relaxed">
+                ابحث بالمعرّف الخاص (@) للطرف الآخر أو شارك معرفك لبدء محادثة مشفرة فورية.
+              </p>
+            )}
             <button
               type="button"
               onClick={
@@ -697,13 +704,13 @@ export function ChatListPane({
                     ? () => onChangeFilter('all')
                     : onOpenNewChat
               }
-              className="mt-4 px-4 py-2 rounded-full bg-[var(--wa-accent)] text-white text-xs font-semibold hover:brightness-95 transition-all cursor-pointer"
+              className="mt-3 px-4 py-2 rounded-full bg-[var(--wa-accent)] text-white text-xs font-semibold hover:brightness-95 transition-all cursor-pointer"
             >
               {hasSearchQuery || msgFilter !== 'all'
                 ? 'إعادة ضبط البحث'
                 : filter === 'locked'
                   ? 'عرض جميع الدردشات'
-                  : 'بدء محادثة مشفرة جديدة'}
+                  : 'بدء محادثة بالمعرّف @'}
             </button>
           </div>
         ) : (

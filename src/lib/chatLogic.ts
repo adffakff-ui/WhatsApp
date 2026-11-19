@@ -396,7 +396,7 @@ export function buildDirectChatId(uidA: string, uidB: string): string {
 }
 
 export function isRemoteFirebaseUid(uid?: string | null): boolean {
-  if (!uid) return false;
+  if (!uid || uid === 'local_user') return false;
   return (
     !uid.startsWith('demo_') &&
     !uid.startsWith('contact_') &&
@@ -591,3 +591,68 @@ export function searchAllChatsMessages(
     .sort((a, b) => b.message.createdAtMs - a.message.createdAtMs)
     .slice(0, Math.max(1, limit));
 }
+
+export function normalizeWasilId(raw: string): string {
+  const cleaned = raw
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/[^a-z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 28);
+  return cleaned ? `@${cleaned}` : '';
+}
+
+export function validateWasilId(raw: string): {
+  valid: boolean;
+  normalized: string;
+  error?: string;
+} {
+  const trimmed = raw.trim();
+  const bare = (trimmed.startsWith('@') ? trimmed.slice(1) : trimmed).toLowerCase();
+  if (!bare) {
+    return { valid: false, normalized: '', error: 'أدخل المعرّف الخاص بك (بالأحرف الإنجليزية أو الأرقام).' };
+  }
+  if (!/^[a-z0-9_]+$/.test(bare)) {
+    return {
+      valid: false,
+      normalized: normalizeWasilId(trimmed),
+      error: 'يُسمح فقط بالأحرف الإنجليزية (a-z) والأرقام (0-9) والشرطة السفلية (_).'
+    };
+  }
+  if (bare.length < 3) {
+    return {
+      valid: false,
+      normalized: `@${bare}`,
+      error: 'يجب أن يتكون المعرف من ٣ أحرف أو أرقام على الأقل بعد @.'
+    };
+  }
+  if (bare.length > 28) {
+    return {
+      valid: false,
+      normalized: `@${bare.slice(0, 28)}`,
+      error: 'الحد الأقصى للمعرف هو ٢٨ حرفاً.'
+    };
+  }
+  return {
+    valid: true,
+    normalized: `@${bare}`
+  };
+}
+
+export function suggestWasilIdFromName(displayName?: string | null, suffixSeed?: string): string {
+  const asciiBase = (displayName || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 14);
+  const safeBase = asciiBase.length >= 3 ? asciiBase : 'wasil';
+  const cleanSeed = (suffixSeed || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .slice(0, 4);
+  const suffix = cleanSeed.length >= 3 ? cleanSeed : Math.random().toString(36).slice(2, 6);
+  return normalizeWasilId(`${safeBase}_${suffix}`);
+}
+

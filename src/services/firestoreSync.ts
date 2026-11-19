@@ -6,8 +6,10 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   Timestamp,
@@ -16,7 +18,7 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { decryptPayload, deriveRoomKeyFromSeed, encryptPayload } from '../lib/crypto';
+import { decryptPayload, deriveRoomKeyFromSeed, encryptPayload, type IdentityKeys } from '../lib/crypto';
 import {
   buildChannelInviteCode,
   filterActiveStatuses,
@@ -24,13 +26,18 @@ import {
   MAX_STATUS_MEDIA_BYTES,
   MAX_STATUS_VIDEO_SECONDS,
   mergePollVotesMap,
+  normalizeWasilId,
   resolveMessageReceiptStatus,
-  STATUS_TTL_MS
+  STATUS_TTL_MS,
+  suggestWasilIdFromName,
+  validateWasilId
 } from '../lib/chatLogic';
+import { isDeviceSessionActive } from '../lib/deviceSession';
 import type {
   CallRecord,
   ChatRoom,
   DecryptedMessage,
+  DeviceSession,
   MessagePayload,
   MessageType,
   PrivacySettings,
@@ -62,6 +69,122 @@ export interface HydratedUserAccount {
   avatarUrl: string;
   privacy: PrivacySettings;
   theme: ThemeMode;
+  identityKeys?: IdentityKeys;
+}
+
+export async function checkWasilIdAvailability(
+  desiredRaw: string,
+  myUid?: string
+): Promise<{ available: boolean; normalized: string; error?: string; uncertain?: boolean }> {
+  const validation = validateWasilId(desiredRaw);
+  if (!validation.valid) {
+    return {
+      available: false,
+      normalized: validation.normalized,
+      error: validation.error
+    };
+  }
+  const normalized = validation.normalized;
+  const bare = normalized.slice(1);
+  try {
+    const [atSnap, bareSnap] = await Promise.all([
+      getDoc(doc(db, 'wasil_registry', normalized)),
+      getDoc(doc(db, 'wasil_registry', bare))
+    ]);
+    const takenByOther =
+      (atSnap.exists() && Boolean(atSnap.data().uid) && atSnap.data().uid !== myUid) ||
+      (bareSnap.exists() && Boolean(bareSnap.data().uid) && bareSnap.data().uid !== myUid);
+
+    if (takenByOther) {
+      return {
+        available: false,
+        normalized,
+        error: 'هذا المعرّف محجوز لمستخدم آخر بالفعل.'
+      };
+    }
+    return { available: true, normalized };
+  } catch {
+    return {
+      available: false,
+      normalized,
+      uncertain: true,
+      error: 'تعذر التحقق من الخادم الآن بسبب تذبذب الاتصال.'
+    };
+  }
+}
+
+export async function claimCustomWasilId(
+  uid: string,
+  displayName: string,
+  desiredRaw: string,
+  oldWasilId?: string
+): Promise<string> {
+  const validation = validateWasilId(desiredRaw);
+  if (!validation.valid) {
+    throw new Error(validation.error || 'صيغة المعرّف غير صالحة.');
+  }
+
+  const normalized = validation.normalized;
+  const bare = normalized.slice(1);
+  const safeName = (displayName || 'مستخدم تواصل').trim().slice(0, 80) || 'مستخدم تواصل';
+
+  const atRef = doc(db, 'wasil_registry', normalized);
+  const bareRef = doc(db, 'wasil_registry', bare);
+  const pubRef = doc(db, 'users', uid, 'public', 'profile');
+  const privRef = doc(db, 'users', uid, 'private', 'info');
+
+  await runTransaction(db, async (tx) => {
+    const [atSnap, bareSnap, pubSnap, privSnap] = await Promise.all([
+      tx.get(atRef),
+      tx.get(bareRef),
+      tx.get(pubRef),
+      tx.get(privRef)
+    ]);
+
+    const takenByOther =
+      (atSnap.exists() && Boolean(atSnap.data().uid) && atSnap.data().uid !== uid) ||
+      (bareSnap.exists() && Boolean(bareSnap.data().uid) && bareSnap.data().uid !== uid);
+
+    if (takenByOther) {
+      throw new Error('هذا المعرّف محجوز لمستخدم آخر بالفعل. اختر معرّفاً مختلفاً.');
+    }
+
+    const prevWasil =
+      oldWasilId || (pubSnap.exists() ? (pubSnap.data().wasilId as string | undefined) : undefined);
+
+    if (prevWasil && prevWasil.toLowerCase() !== normalized) {
+      const oldNorm = prevWasil.toLowerCase();
+      tx.delete(doc(db, 'wasil_registry', oldNorm));
+      if (oldNorm.startsWith('@')) {
+        tx.delete(doc(db, 'wasil_registry', oldNorm.slice(1)));
+      }
+    }
+
+    const registryData = {
+      uid,
+      wasilId: normalized,
+      displayName: safeName,
+      updatedAt: serverTimestamp()
+    };
+
+    tx.set(atRef, registryData);
+    tx.set(bareRef, registryData);
+
+    if (pubSnap.exists()) {
+      tx.update(pubRef, {
+        wasilId: normalized,
+        updatedAt: serverTimestamp()
+      });
+    }
+    if (privSnap.exists()) {
+      tx.update(privRef, {
+        wasilId: normalized,
+        updatedAt: serverTimestamp()
+      });
+    }
+  });
+
+  return normalized;
 }
 
 export async function syncUserProfileToFirestore(
@@ -75,20 +198,32 @@ export async function syncUserProfileToFirestore(
   publicKeyJwk: string,
   safetyCode: string,
   about = 'متاح · رسائلي مشفرة تماماً',
-  theme: ThemeMode = 'light'
+  theme: ThemeMode = 'light',
+  preferredWasilId?: string,
+  privateKeyJwk?: string
 ): Promise<HydratedUserAccount> {
   const pubRef = doc(db, 'users', user.uid, 'public', 'profile');
   const privRef = doc(db, 'users', user.uid, 'private', 'info');
 
+  const fallbackName = (
+    user.displayName ||
+    user.email?.split('@')[0] ||
+    user.phoneNumber ||
+    'مستخدم تواصل'
+  ).slice(0, 80);
+
+  const preferredValidation = preferredWasilId ? validateWasilId(preferredWasilId) : null;
+  const validPreferredId = preferredValidation?.valid ? preferredValidation.normalized : '';
+
   try {
-    const pubSnap = await getDoc(pubRef);
+    // Parallel reads cut initial login sync latency in half
+    const [pubSnap, privSnap] = await Promise.all([getDoc(pubRef), getDoc(privRef)]);
     const existingPub = pubSnap.exists() ? pubSnap.data() : null;
+    const existingPriv = privSnap.exists() ? privSnap.data() : null;
+
     const displayName = (
       (existingPub?.displayName as string) ||
-      user.displayName ||
-      user.email?.split('@')[0] ||
-      user.phoneNumber ||
-      'مستخدم تواصل'
+      fallbackName
     ).slice(0, 80);
     const resolvedAbout =
       typeof existingPub?.about === 'string' ? existingPub.about.slice(0, 200) : about.slice(0, 200);
@@ -96,32 +231,53 @@ export async function syncUserProfileToFirestore(
       typeof existingPub?.avatarUrl === 'string' ? existingPub.avatarUrl : user.photoURL || ''
     ).slice(0, 65536);
 
-    const safePublicKey = sanitizePublicKeyJwk(publicKeyJwk);
-    if (!safePublicKey) {
+    const safeLocalPublicKey = sanitizePublicKeyJwk(publicKeyJwk);
+    if (!safeLocalPublicKey) {
       throw new Error('Missing publicKeyJwk for authenticated user.');
     }
 
-    await setDoc(
-      pubRef,
-      {
-        uid: user.uid,
-        displayName,
-        about: resolvedAbout,
-        avatarUrl,
-        publicKeyJwk: safePublicKey,
-        safetyCode: safetyCode.slice(0, 120),
-        isOnline: true,
-        lastSeen: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      },
-      { merge: false }
-    );
+    // Multi-device key continuity: if private/info already holds an authoritative E2EE keypair, adopt it
+    const cloudPubKey = sanitizePublicKeyJwk(existingPriv?.identityPublicKeyJwk as string | undefined);
+    const cloudPrivKey =
+      typeof existingPriv?.identityPrivateKeyJwk === 'string' &&
+      existingPriv.identityPrivateKeyJwk.length >= 20
+        ? existingPriv.identityPrivateKeyJwk.slice(0, 1024)
+        : '';
+    const cloudSafetyCode =
+      typeof existingPriv?.identitySafetyCode === 'string' &&
+      existingPriv.identitySafetyCode.length >= 10
+        ? existingPriv.identitySafetyCode.slice(0, 120)
+        : '';
 
-    const privSnap = await getDoc(privRef);
-    let wasilId = privSnap.exists() ? (privSnap.data().wasilId as string) : '';
+    const hasCloudIdentityKeys = Boolean(cloudPubKey && cloudPrivKey && cloudSafetyCode);
+    const safePublicKey = hasCloudIdentityKeys ? cloudPubKey : safeLocalPublicKey;
+    const resolvedPrivateKey = hasCloudIdentityKeys
+      ? cloudPrivKey
+      : (privateKeyJwk || '').slice(0, 1024);
+    const resolvedSafetyCode = hasCloudIdentityKeys
+      ? cloudSafetyCode
+      : safetyCode.slice(0, 120);
+
+    const existingWasilRaw =
+      (existingPriv?.wasilId as string) || (existingPub?.wasilId as string) || '';
+    const existingValid = existingWasilRaw ? validateWasilId(existingWasilRaw) : null;
+
+    let wasilId = validPreferredId || (existingValid?.valid ? existingValid.normalized : '');
     if (!wasilId) {
-      wasilId = `@akram_${Math.random().toString(36).substring(2, 7)}`;
+      let candidate = suggestWasilIdFromName(displayName, user.uid.slice(-4));
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const check = await checkWasilIdAvailability(candidate, user.uid);
+        if (check.available || check.uncertain) {
+          wasilId = check.normalized;
+          break;
+        }
+        candidate = suggestWasilIdFromName(displayName);
+      }
+      if (!wasilId) {
+        wasilId = suggestWasilIdFromName('wasil');
+      }
     }
+    const bareId = wasilId.startsWith('@') ? wasilId.slice(1) : wasilId;
 
     const defaultPrivacy: PrivacySettings = {
       readReceipts: true,
@@ -130,8 +286,36 @@ export async function syncUserProfileToFirestore(
       bioVisibility: 'everyone'
     };
 
+    const registryPayload = {
+      uid: user.uid,
+      wasilId,
+      displayName,
+      updatedAt: serverTimestamp()
+    };
+
+    // Atomic batch commit ensures public profile, private info, and wasil_registry stay synchronized
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'wasil_registry', wasilId), registryPayload);
+    batch.set(doc(db, 'wasil_registry', bareId), registryPayload);
+    batch.set(
+      pubRef,
+      {
+        uid: user.uid,
+        wasilId,
+        displayName,
+        about: resolvedAbout,
+        avatarUrl,
+        publicKeyJwk: safePublicKey,
+        safetyCode: resolvedSafetyCode,
+        isOnline: true,
+        lastSeen: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      },
+      { merge: false }
+    );
+
     if (!privSnap.exists()) {
-      await setDoc(privRef, {
+      batch.set(privRef, {
         uid: user.uid,
         wasilId,
         email: (user.email || `${user.uid}@wasil.app`).slice(0, 160),
@@ -142,40 +326,35 @@ export async function syncUserProfileToFirestore(
         lastSeenMode: defaultPrivacy.lastSeenMode,
         profilePhotoVisibility: defaultPrivacy.profilePhotoVisibility,
         bioVisibility: defaultPrivacy.bioVisibility,
+        identityPublicKeyJwk: safePublicKey,
+        ...(resolvedPrivateKey ? { identityPrivateKeyJwk: resolvedPrivateKey } : {}),
+        identitySafetyCode: resolvedSafetyCode,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
     } else {
-      await updateDoc(privRef, {
-        wasilId,
+      const privUpdates: Record<string, unknown> = {
         updatedAt: serverTimestamp()
-      });
+      };
+      let needsPrivUpdate = false;
+      if (existingPriv?.wasilId !== wasilId) {
+        privUpdates.wasilId = wasilId;
+        needsPrivUpdate = true;
+      }
+      if (!hasCloudIdentityKeys && resolvedPrivateKey) {
+        privUpdates.identityPublicKeyJwk = safePublicKey;
+        privUpdates.identityPrivateKeyJwk = resolvedPrivateKey;
+        privUpdates.identitySafetyCode = resolvedSafetyCode;
+        needsPrivUpdate = true;
+      }
+      if (needsPrivUpdate) {
+        batch.update(privRef, privUpdates);
+      }
     }
 
-    // Register in wasil_registry
-    await setDoc(
-      doc(db, 'wasil_registry', wasilId),
-      {
-        uid: user.uid,
-        displayName,
-        updatedAt: serverTimestamp()
-      },
-      { merge: true }
-    );
-    if (wasilId.startsWith('@')) {
-      const bareId = wasilId.slice(1);
-      await setDoc(
-        doc(db, 'wasil_registry', bareId),
-        {
-          uid: user.uid,
-          displayName,
-          updatedAt: serverTimestamp()
-        },
-        { merge: true }
-      ).catch(() => {});
-    }
+    await batch.commit();
 
-    const privData = privSnap.exists() ? privSnap.data() : {};
+    const privData = existingPriv || {};
     const hydratedPrivacy: PrivacySettings = {
       readReceipts: typeof privData.readReceipts === 'boolean' ? privData.readReceipts : true,
       lastSeenMode: (privData.lastSeenMode as VisibilityScope) || 'everyone',
@@ -183,13 +362,23 @@ export async function syncUserProfileToFirestore(
       bioVisibility: (privData.bioVisibility as VisibilityScope) || 'everyone'
     };
 
+    const hydratedKeys: IdentityKeys | undefined =
+      safePublicKey && resolvedPrivateKey
+        ? {
+            publicKeyJwk: safePublicKey,
+            privateKeyJwk: resolvedPrivateKey,
+            safetyCode: resolvedSafetyCode
+          }
+        : undefined;
+
     return {
       wasilId,
       displayName,
       about: resolvedAbout,
       avatarUrl,
       privacy: hydratedPrivacy,
-      theme: privData.theme === 'dark' ? 'dark' : 'light'
+      theme: privData.theme === 'dark' ? 'dark' : 'light',
+      ...(hydratedKeys ? { identityKeys: hydratedKeys } : {})
     };
   } catch (error) {
     const errStr = error instanceof Error ? error.message : String(error);
@@ -202,8 +391,8 @@ export async function syncUserProfileToFirestore(
     ) {
       console.warn('Firestore local fallback for syncUserProfileToFirestore:', errStr);
       return {
-        wasilId: '@akram_local',
-        displayName: user.displayName || user.email?.split('@')[0] || user.phoneNumber || 'مستخدم تواصل',
+        wasilId: validPreferredId || suggestWasilIdFromName(fallbackName, user.uid.slice(-4)),
+        displayName: fallbackName,
         about: about.slice(0, 200),
         avatarUrl: user.photoURL || '',
         privacy: {
@@ -219,13 +408,85 @@ export async function syncUserProfileToFirestore(
   }
 }
 
+export async function registerOrHeartbeatDeviceInFirestore(
+  uid: string,
+  device: {
+    deviceId: string;
+    deviceName: string;
+    platform: string;
+    isOnline: boolean;
+  }
+): Promise<void> {
+  const deviceRef = doc(db, 'users', uid, 'devices', device.deviceId);
+  const safeName = device.deviceName.slice(0, 100) || 'Web Browser';
+  const safePlatform = device.platform.slice(0, 40) || 'Web';
+
+  try {
+    const existing = await getDoc(deviceRef);
+    if (existing.exists()) {
+      await updateDoc(deviceRef, {
+        deviceName: safeName,
+        platform: safePlatform,
+        isOnline: Boolean(device.isOnline),
+        lastActiveAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+    } else {
+      await setDoc(deviceRef, {
+        deviceId: device.deviceId,
+        uid,
+        deviceName: safeName,
+        platform: safePlatform,
+        isOnline: Boolean(device.isOnline),
+        lastActiveAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+    }
+  } catch {
+    // Non-fatal during transient offline periods
+  }
+}
+
+async function aggregateMultiDeviceOnlineStatus(
+  uid: string,
+  hintOnline: boolean,
+  excludeDeviceId?: string
+): Promise<boolean> {
+  if (hintOnline) return true;
+  try {
+    const snap = await getDocs(
+      query(collection(db, 'users', uid, 'devices'), where('uid', '==', uid))
+    );
+    const nowMs = Date.now();
+    for (const d of snap.docs) {
+      const data = d.data({ serverTimestamps: 'estimate' });
+      if (excludeDeviceId && data.deviceId === excludeDeviceId) continue;
+      if (data.isOnline === true && isDeviceSessionActive(toMillis(data.lastActiveAt), nowMs)) {
+        return true;
+      }
+    }
+  } catch {
+    // Fall back to hintOnline
+  }
+  return false;
+}
+
 export async function setUserPresenceInFirestore(
   uid: string,
-  isOnline: boolean
+  isOnline: boolean,
+  deviceInfo?: { deviceId: string; deviceName: string; platform: string }
 ): Promise<void> {
   try {
+    if (deviceInfo) {
+      await registerOrHeartbeatDeviceInFirestore(uid, {
+        ...deviceInfo,
+        isOnline
+      });
+    }
+    const aggregatedOnline = await aggregateMultiDeviceOnlineStatus(uid, isOnline);
     await updateDoc(doc(db, 'users', uid, 'public', 'profile'), {
-      isOnline,
+      isOnline: aggregatedOnline,
       lastSeen: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
@@ -234,10 +495,135 @@ export async function setUserPresenceInFirestore(
   }
 }
 
+export async function removeDeviceSessionInFirestore(
+  uid: string,
+  deviceId: string
+): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'users', uid, 'devices', deviceId));
+    const stillOnlineElsewhere = await aggregateMultiDeviceOnlineStatus(uid, false, deviceId);
+    await updateDoc(doc(db, 'users', uid, 'public', 'profile'), {
+      isOnline: stillOnlineElsewhere,
+      lastSeen: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    }).catch(() => {});
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `users/${uid}/devices/${deviceId}`);
+  }
+}
+
+export function subscribeUserDevicesFromFirestore(
+  uid: string,
+  onDevices: (devices: DeviceSession[]) => void
+): () => void {
+  const q = query(collection(db, 'users', uid, 'devices'), where('uid', '==', uid));
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const list: DeviceSession[] = snapshot.docs.map((docSnap) => {
+        const d = docSnap.data({ serverTimestamps: 'estimate' });
+        return {
+          deviceId: d.deviceId as string,
+          uid: d.uid as string,
+          deviceName: (d.deviceName as string) || 'جهاز غير معروف',
+          platform: (d.platform as string) || 'Web',
+          isOnline: Boolean(d.isOnline),
+          lastActiveAtMs: toMillis(d.lastActiveAt),
+          createdAtMs: toMillis(d.createdAt)
+        };
+      });
+      list.sort((a, b) => {
+        if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
+        return b.lastActiveAtMs - a.lastActiveAtMs;
+      });
+      onDevices(list);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, `users/${uid}/devices`);
+    }
+  );
+}
+
+export function subscribeOwnPublicProfileFromFirestore(
+  uid: string,
+  onUpdate: (patch: {
+    wasilId?: string;
+    displayName: string;
+    about: string;
+    avatarUrl: string;
+    publicKeyJwk: string;
+    safetyCode: string;
+  }) => void
+): () => void {
+  return onSnapshot(
+    doc(db, 'users', uid, 'public', 'profile'),
+    (snap) => {
+      if (!snap.exists()) return;
+      const d = snap.data({ serverTimestamps: 'estimate' });
+      onUpdate({
+        ...(typeof d.wasilId === 'string' ? { wasilId: d.wasilId } : {}),
+        displayName: (d.displayName as string) || 'مستخدم تواصل',
+        about: (d.about as string) || '',
+        avatarUrl: (d.avatarUrl as string) || '',
+        publicKeyJwk: (d.publicKeyJwk as string) || '',
+        safetyCode: (d.safetyCode as string) || ''
+      });
+    },
+    () => {}
+  );
+}
+
+export function subscribeOwnPrivateInfoFromFirestore(
+  uid: string,
+  onUpdate: (patch: {
+    wasilId?: string;
+    theme: ThemeMode;
+    privacy: PrivacySettings;
+    identityKeys?: IdentityKeys;
+  }) => void
+): () => void {
+  return onSnapshot(
+    doc(db, 'users', uid, 'private', 'info'),
+    (snap) => {
+      if (!snap.exists()) return;
+      const d = snap.data({ serverTimestamps: 'estimate' });
+      const pub = sanitizePublicKeyJwk(d.identityPublicKeyJwk as string | undefined);
+      const priv =
+        typeof d.identityPrivateKeyJwk === 'string' && d.identityPrivateKeyJwk.length >= 20
+          ? d.identityPrivateKeyJwk
+          : '';
+      const code =
+        typeof d.identitySafetyCode === 'string' && d.identitySafetyCode.length >= 10
+          ? d.identitySafetyCode
+          : '';
+      onUpdate({
+        ...(typeof d.wasilId === 'string' ? { wasilId: d.wasilId } : {}),
+        theme: d.theme === 'dark' ? 'dark' : 'light',
+        privacy: {
+          readReceipts: typeof d.readReceipts === 'boolean' ? d.readReceipts : true,
+          lastSeenMode: (d.lastSeenMode as VisibilityScope) || 'everyone',
+          profilePhotoVisibility: (d.profilePhotoVisibility as VisibilityScope) || 'everyone',
+          bioVisibility: (d.bioVisibility as VisibilityScope) || 'everyone'
+        },
+        ...(pub && priv && code
+          ? {
+              identityKeys: {
+                publicKeyJwk: pub,
+                privateKeyJwk: priv,
+                safetyCode: code
+              }
+            }
+          : {})
+      });
+    },
+    () => {}
+  );
+}
+
 export async function updateProfileInFirestore(
   uid: string,
   currentProfile: UserProfile,
-  updates: { displayName: string; about: string; avatarUrl: string }
+  updates: { displayName: string; about: string; avatarUrl: string; wasilId?: string }
 ): Promise<void> {
   const pubRef = doc(db, 'users', uid, 'public', 'profile');
   try {
@@ -246,8 +632,29 @@ export async function updateProfileInFirestore(
       throw new Error('Missing publicKeyJwk for updating user profile.');
     }
 
-    await updateDoc(pubRef, {
-      displayName: updates.displayName.slice(0, 80),
+    const safeName = updates.displayName.slice(0, 80);
+    const rawWasil = updates.wasilId || currentProfile.wasilId || '';
+    const validWasil = rawWasil ? validateWasilId(rawWasil) : null;
+    const normalizedWasil = validWasil?.valid
+      ? validWasil.normalized
+      : suggestWasilIdFromName(safeName, uid.slice(-4));
+    const bare = normalizedWasil.slice(1);
+
+    const regPayload = {
+      uid,
+      wasilId: normalizedWasil,
+      displayName: safeName,
+      updatedAt: serverTimestamp()
+    };
+
+    // Atomic batch commit keeps users/{uid}/public/profile and wasil_registry consistent
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'wasil_registry', normalizedWasil), regPayload);
+    batch.set(doc(db, 'wasil_registry', bare), regPayload);
+    batch.set(pubRef, {
+      uid,
+      wasilId: normalizedWasil,
+      displayName: safeName,
       about: updates.about.slice(0, 200),
       avatarUrl: updates.avatarUrl.slice(0, 65536),
       publicKeyJwk: safePublicKey,
@@ -256,6 +663,7 @@ export async function updateProfileInFirestore(
       lastSeen: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
+    await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `users/${uid}/public/profile`);
   }
@@ -307,6 +715,7 @@ export async function fetchPublicProfileByUid(targetUid: string): Promise<UserPr
     const d = snap.data();
     return {
       uid: d.uid,
+      ...(typeof d.wasilId === 'string' ? { wasilId: d.wasilId } : {}),
       displayName: d.displayName,
       about: d.about,
       avatarUrl: d.avatarUrl,
@@ -878,6 +1287,13 @@ export function subscribeUserChatsFromFirestore(
         'sent'
       );
 
+      const hasUnreadCloud =
+        Boolean(senderId) &&
+        senderId !== uid &&
+        !readIds?.includes(uid);
+      const prefUnread = typeof pref.unreadCount === 'number' ? pref.unreadCount : 0;
+      const resolvedUnread = hasUnreadCloud ? Math.max(1, prefUnread) : 0;
+
       list.push({
         id: chatId,
         type: (c.type as ChatRoom['type']) || 'direct',
@@ -894,7 +1310,7 @@ export function subscribeUserChatsFromFirestore(
         archived: Boolean(pref.archived),
         muted: Boolean(pref.muted),
         favorite: Boolean(pref.favorite),
-        unreadCount: typeof pref.unreadCount === 'number' ? pref.unreadCount : 0,
+        unreadCount: resolvedUnread,
         disappearingSeconds:
           typeof pref.disappearingSeconds === 'number' ? pref.disappearingSeconds : 0,
         ...(typeof c.adminOnlyPost === 'boolean' ? { adminOnlyPost: c.adminOnlyPost } : {}),
@@ -952,7 +1368,7 @@ export function subscribeUserChatsFromFirestore(
           scheduleEmit();
           return;
         }
-        const c = chatSnap.data();
+        const c = chatSnap.data({ serverTimestamps: 'estimate' });
         slot.chatData = c;
 
         const sig = `${c.lastMessageCiphertext || ''}|${c.lastMessageIv || ''}`;
@@ -986,7 +1402,7 @@ export function subscribeUserChatsFromFirestore(
               doc(db, 'chats', chatId, 'members', detectedPeer),
               (pmSnap) => {
                 if (pmSnap.exists()) {
-                  slot.peerMemberData = pmSnap.data();
+                  slot.peerMemberData = pmSnap.data({ serverTimestamps: 'estimate' });
                   scheduleEmit();
                 }
               },
@@ -1085,7 +1501,7 @@ export function subscribeChatMessagesFromFirestore(
       const key = await deriveRoomKeyFromSeed(roomSeed);
       const list: DecryptedMessage[] = [];
       for (const docSnap of snapshot.docs) {
-        const d = docSnap.data();
+        const d = docSnap.data({ serverTimestamps: 'estimate' });
         let payload: MessagePayload = { text: 'تعذر فك التشفير' };
         try {
           const decoded = await decryptPayload(d.ciphertext, d.iv, key);
@@ -1163,6 +1579,86 @@ export function subscribeChatMessagesFromFirestore(
       handleFirestoreError(error, OperationType.LIST, `chats/${chatId}/messages`);
     }
   );
+}
+
+export interface MultiChatMessageSyncController {
+  syncTargets: (
+    targets: Array<{ id: string; roomSeed: string; lastMessageAtMs: number }>,
+    prioritizedChatId: string | null
+  ) => void;
+  resubscribeAll: () => void;
+  dispose: () => void;
+}
+
+/**
+ * Maintains persistent real-time message listeners across all active user chats
+ * (without tearing down unchanged subscriptions when chats update), ensuring instant
+ * multi-device message sync even for background conversations.
+ */
+export function createMultiChatMessageSyncController(
+  uid: string,
+  onChatMessages: (chatId: string, messages: DecryptedMessage[]) => void
+): MultiChatMessageSyncController {
+  const MAX_LIVE_CHATS = 25;
+  const activeSubs = new Map<string, { roomSeed: string; unsub: () => void }>();
+  let latestTargets: Array<{ id: string; roomSeed: string; lastMessageAtMs: number }> = [];
+  let latestPriorityId: string | null = null;
+  let disposed = false;
+
+  const applyTargets = (
+    targets: Array<{ id: string; roomSeed: string; lastMessageAtMs: number }>,
+    prioritizedChatId: string | null
+  ) => {
+    if (disposed) return;
+    latestTargets = targets;
+    latestPriorityId = prioritizedChatId;
+
+    const sorted = [...targets].sort((a, b) => {
+      if (prioritizedChatId) {
+        if (a.id === prioritizedChatId && b.id !== prioritizedChatId) return -1;
+        if (b.id === prioritizedChatId && a.id !== prioritizedChatId) return 1;
+      }
+      return b.lastMessageAtMs - a.lastMessageAtMs;
+    });
+
+    const selected = sorted.slice(0, MAX_LIVE_CHATS);
+    const desiredMap = new Map(selected.map((t) => [t.id, t.roomSeed || t.id]));
+
+    for (const [chatId, entry] of activeSubs.entries()) {
+      const nextSeed = desiredMap.get(chatId);
+      if (!nextSeed || nextSeed !== entry.roomSeed) {
+        entry.unsub();
+        activeSubs.delete(chatId);
+      }
+    }
+
+    for (const [chatId, roomSeed] of desiredMap.entries()) {
+      if (!activeSubs.has(chatId)) {
+        const unsub = subscribeChatMessagesFromFirestore(chatId, roomSeed, uid, (msgs) => {
+          onChatMessages(chatId, msgs);
+        });
+        activeSubs.set(chatId, { roomSeed, unsub });
+      }
+    }
+  };
+
+  return {
+    syncTargets: applyTargets,
+    resubscribeAll: () => {
+      for (const entry of activeSubs.values()) {
+        entry.unsub();
+      }
+      activeSubs.clear();
+      applyTargets(latestTargets, latestPriorityId);
+    },
+    dispose: () => {
+      disposed = true;
+      for (const entry of activeSubs.values()) {
+        entry.unsub();
+      }
+      activeSubs.clear();
+    }
+  };
 }
 
 export async function publishStatusToFirestore(
@@ -1697,19 +2193,59 @@ export async function lookupUserByWasilIdOrUid(queryStr: string): Promise<UserPr
   if (!cleaned) return null;
 
   try {
-    let targetUid = cleaned;
-    const isWasilHandle = cleaned.startsWith('@') || (!cleaned.includes('_') && cleaned.length < 20);
+    let targetUid = '';
+    let resolvedRegistryId: string | undefined;
 
-    if (isWasilHandle) {
-      const regId = cleaned.startsWith('@') ? cleaned : `@${cleaned}`;
-      let regSnap = await getDoc(doc(db, 'wasil_registry', regId));
-      if (!regSnap.exists() && regId.startsWith('@')) {
-        regSnap = await getDoc(doc(db, 'wasil_registry', regId.slice(1)));
-      }
-      if (regSnap.exists()) {
-        targetUid = regSnap.data().uid;
-      } else {
-        return null;
+    if (cleaned.startsWith('@')) {
+      const normalized = normalizeWasilId(cleaned);
+      if (!normalized) return null;
+      const bare = normalized.slice(1);
+      const [atSnap, bareSnap] = await Promise.all([
+        getDoc(doc(db, 'wasil_registry', normalized)),
+        getDoc(doc(db, 'wasil_registry', bare))
+      ]);
+      const matchSnap = atSnap.exists() ? atSnap : bareSnap.exists() ? bareSnap : null;
+      if (!matchSnap) return null;
+      targetUid = matchSnap.data().uid;
+      resolvedRegistryId = (matchSnap.data().wasilId as string) || normalized;
+    } else {
+      const normalized = normalizeWasilId(cleaned);
+      const bare = normalized ? normalized.slice(1) : '';
+      const looksLikeUid = /^[a-zA-Z0-9_-]{20,128}$/.test(cleaned);
+
+      if (looksLikeUid) {
+        const [directSnap, regSnap] = await Promise.all([
+          getDoc(doc(db, 'users', cleaned, 'public', 'profile')),
+          normalized ? getDoc(doc(db, 'wasil_registry', normalized)) : Promise.resolve(null)
+        ]);
+        if (directSnap.exists()) {
+          const d = directSnap.data();
+          return {
+            uid: d.uid,
+            ...(typeof d.wasilId === 'string' ? { wasilId: d.wasilId } : {}),
+            displayName: d.displayName,
+            about: d.about || '',
+            avatarUrl: d.avatarUrl || '',
+            publicKeyJwk: d.publicKeyJwk || '',
+            safetyCode: d.safetyCode || '',
+            isOnline: Boolean(d.isOnline),
+            lastSeenMs: toMillis(d.lastSeen) || Date.now()
+          };
+        }
+        if (regSnap && regSnap.exists()) {
+          targetUid = regSnap.data().uid;
+          resolvedRegistryId = (regSnap.data().wasilId as string) || normalized;
+        }
+      } else if (normalized) {
+        const [atSnap, bareSnap] = await Promise.all([
+          getDoc(doc(db, 'wasil_registry', normalized)),
+          bare ? getDoc(doc(db, 'wasil_registry', bare)) : Promise.resolve(null)
+        ]);
+        const matchSnap = atSnap.exists() ? atSnap : bareSnap && bareSnap.exists() ? bareSnap : null;
+        if (matchSnap) {
+          targetUid = matchSnap.data().uid;
+          resolvedRegistryId = (matchSnap.data().wasilId as string) || normalized;
+        }
       }
     }
 
@@ -1723,7 +2259,7 @@ export async function lookupUserByWasilIdOrUid(queryStr: string): Promise<UserPr
     const d = pubSnap.data();
     return {
       uid: d.uid,
-      wasilId: cleaned.startsWith('@') ? cleaned : undefined,
+      wasilId: (typeof d.wasilId === 'string' ? d.wasilId : undefined) || resolvedRegistryId,
       displayName: d.displayName,
       about: d.about || '',
       avatarUrl: d.avatarUrl || '',

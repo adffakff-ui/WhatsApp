@@ -41,13 +41,32 @@ export function NetworkLatencyBadge() {
           else if (duration < 900) setStatus('good');
           else setStatus('poor');
         }
-      } catch {
-        // Even if collection doesn't exist, if request completed or timed out
+      } catch (err) {
+        const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+        const isOfflineError =
+          !navigator.onLine ||
+          msg.includes('client is offline') ||
+          msg.includes('unavailable') ||
+          msg.includes('failed to get document') ||
+          msg.includes('network');
+
+        if (isOfflineError) {
+          if (isMounted) {
+            setIsOnline(false);
+            setStatus('offline');
+            setLatencyMs(null);
+          }
+          return;
+        }
+
+        // permission-denied or not-found means Firebase server actively responded
         const duration = Math.round(performance.now() - start);
         if (isMounted) {
           setIsOnline(true);
           setLatencyMs(duration);
-          setStatus(duration < 800 ? 'good' : 'poor');
+          if (duration < 300) setStatus('excellent');
+          else if (duration < 900) setStatus('good');
+          else setStatus('poor');
         }
       }
     };
@@ -67,7 +86,7 @@ export function NetworkLatencyBadge() {
     return (
       <div
         className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-500/15 text-red-600 dark:text-red-400 text-[11px] font-medium"
-        title="غير متصل بالخترنت / الخادم"
+        title="غير متصل بالإنترنت / الخادم"
       >
         <WifiOff className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
         <span className="hidden sm:inline">غير متصل</span>

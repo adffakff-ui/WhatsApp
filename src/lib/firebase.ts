@@ -1,6 +1,14 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
+import {
+  doc,
+  getDocFromServer,
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  type Firestore
+} from 'firebase/firestore';
 import appletConfig from '../../firebase-applet-config.json';
 
 // Firebase web configuration is public. Production deployments can override it
@@ -22,8 +30,28 @@ const firebaseConfig = {
   measurementId: metaEnv?.VITE_FIREBASE_MEASUREMENT_ID || appletConfig.measurementId
 };
 
+const databaseId =
+  metaEnv?.VITE_FIREBASE_DATABASE_ID || appletConfig.firestoreDatabaseId || '(default)';
+
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+
+function createFirestoreInstance(): Firestore {
+  try {
+    return initializeFirestore(
+      app,
+      {
+        localCache: persistentLocalCache({
+          tabManager: persistentMultipleTabManager()
+        })
+      },
+      databaseId
+    );
+  } catch {
+    return getFirestore(app, databaseId);
+  }
+}
+
+export const db = createFirestoreInstance();
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.addScope('https://www.googleapis.com/auth/contacts');
@@ -81,6 +109,24 @@ export function handleFirestoreError(
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
+}
+
+export async function testFirestoreConnection(): Promise<boolean> {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn('Firestore connection check: client is offline.');
+      return false;
+    }
+    // Permission denied / not found still confirms live network reachability to Firestore server
+    return true;
+  }
+}
+
+if (typeof window !== 'undefined') {
+  void testFirestoreConnection();
 }
 
 

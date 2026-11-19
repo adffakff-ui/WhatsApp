@@ -27,7 +27,10 @@ import {
   filterExpiredDisappearingMessages,
   splitTextByHighlight,
   searchMessagesInChat,
-  searchAllChatsMessages
+  searchAllChatsMessages,
+  normalizeWasilId,
+  validateWasilId,
+  suggestWasilIdFromName
 } from './chatLogic';
 import type { ChatRoom, DecryptedMessage, PollOption, StatusItem } from '../types/chat';
 
@@ -501,3 +504,26 @@ test('searchMessagesInChat and searchAllChatsMessages search message payloads, f
   );
 });
 
+test('normalizeWasilId, validateWasilId, and suggestWasilIdFromName enforce clean unique handles', () => {
+  assert.equal(normalizeWasilId('  @Akram_99 '), '@akram_99');
+  assert.equal(normalizeWasilId('sara.dev-2026'), '@sara_dev_2026');
+  assert.equal(normalizeWasilId('@@@'), '');
+
+  assert.deepEqual(validateWasilId('@akram_99'), {
+    valid: true,
+    normalized: '@akram_99'
+  });
+  assert.deepEqual(validateWasilId('akram_99'), {
+    valid: true,
+    normalized: '@akram_99'
+  });
+  assert.equal(validateWasilId('ab').valid, false);
+  assert.equal(validateWasilId('user$bad').valid, false);
+  assert.equal(validateWasilId('a'.repeat(29)).valid, false);
+
+  const suggestedFromAscii = suggestWasilIdFromName('Sara Dev', 'abc123');
+  assert.equal(suggestedFromAscii, '@sara_dev_abc1');
+
+  const suggestedFromArabic = suggestWasilIdFromName('أكرم حسن', '99xyz');
+  assert.equal(suggestedFromArabic, '@wasil_99xy');
+});

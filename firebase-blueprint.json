@@ -6,6 +6,7 @@
       "type": "object",
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "wasilId": { "type": "string", "minLength": 4, "maxLength": 29, "pattern": "^@[a-z0-9_]{3,28}$" },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "about": { "type": "string", "minLength": 0, "maxLength": 200 },
         "avatarUrl": { "type": "string", "minLength": 0, "maxLength": 65536 },
@@ -15,7 +16,7 @@
         "lastSeen": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["uid", "displayName", "about", "avatarUrl", "publicKeyJwk", "safetyCode", "isOnline", "lastSeen", "updatedAt"]
+      "required": ["uid", "wasilId", "displayName", "about", "avatarUrl", "publicKeyJwk", "safetyCode", "isOnline", "lastSeen", "updatedAt"]
     },
     "PrivateInfo": {
       "title": "PrivateInfo",
@@ -23,6 +24,7 @@
       "type": "object",
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "wasilId": { "type": "string", "minLength": 4, "maxLength": 29, "pattern": "^@[a-z0-9_]{3,28}$" },
         "email": { "type": "string", "format": "email", "maxLength": 160 },
         "phone": { "type": "string", "minLength": 0, "maxLength": 32 },
         "theme": { "type": "string", "enum": ["light", "dark"] },
@@ -31,6 +33,9 @@
         "lastSeenMode": { "type": "string", "enum": ["everyone", "contacts", "nobody"] },
         "profilePhotoVisibility": { "type": "string", "enum": ["everyone", "contacts", "nobody"] },
         "bioVisibility": { "type": "string", "enum": ["everyone", "contacts", "nobody"] },
+        "identityPublicKeyJwk": { "type": "string", "minLength": 10, "maxLength": 1024 },
+        "identityPrivateKeyJwk": { "type": "string", "minLength": 20, "maxLength": 1024 },
+        "identitySafetyCode": { "type": "string", "minLength": 10, "maxLength": 120 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -206,6 +211,44 @@
         "createdAtMs": { "type": "integer" }
       },
       "required": ["id", "chatId", "senderId", "senderName", "type", "payload", "sendAtMs", "status", "createdAtMs"]
+    },
+    "WasilRegistryEntry": {
+      "title": "WasilRegistryEntry",
+      "description": "Unique handle registry mapping custom @wasilId to user UID for peer discovery.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "wasilId": { "type": "string", "minLength": 4, "maxLength": 29, "pattern": "^@[a-z0-9_]{3,28}$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "wasilId", "displayName", "updatedAt"]
+    },
+    "UserBackup": {
+      "title": "UserBackup",
+      "description": "Encrypted/serialized user backup snapshot stored in Firestore.",
+      "type": "object",
+      "properties": {
+        "payloadJson": { "type": "string", "minLength": 2, "maxLength": 900000 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["payloadJson", "updatedAt"]
+    },
+    "DeviceSession": {
+      "title": "DeviceSession",
+      "description": "Active authenticated device session for multi-device presence and real-time sync.",
+      "type": "object",
+      "properties": {
+        "deviceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "deviceName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "platform": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "isOnline": { "type": "boolean" },
+        "lastActiveAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["deviceId", "uid", "deviceName", "platform", "isOnline", "lastActiveAt", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -216,6 +259,18 @@
     "/users/{userId}/private/info": {
       "schema": { "$ref": "#/entities/PrivateInfo" },
       "description": "Private PII (email, phone) and user settings restricted to the owner."
+    },
+    "/users/{userId}/backups/{docId}": {
+      "schema": { "$ref": "#/entities/UserBackup" },
+      "description": "Owner-only cloud backup snapshots."
+    },
+    "/users/{userId}/devices/{deviceId}": {
+      "schema": { "$ref": "#/entities/DeviceSession" },
+      "description": "Linked active device sessions for multi-device login and presence aggregation."
+    },
+    "/wasil_registry/{wasilId}": {
+      "schema": { "$ref": "#/entities/WasilRegistryEntry" },
+      "description": "Unique handle index resolving custom @wasilId handles to Firebase user UIDs."
     },
     "/users/{userId}/chatPrefs/{chatId}": {
       "schema": { "$ref": "#/entities/ChatPref" },
