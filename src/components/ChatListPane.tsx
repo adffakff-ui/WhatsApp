@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { HighlightText } from './HighlightText';
+import { NetworkLatencyBadge } from './NetworkLatencyBadge';
 import { PWAInstallButton, PWAInstallGuideModal } from './PWAInstallButton';
 import {
   formatWhatsAppTime,
@@ -201,7 +202,8 @@ export function ChatListPane({
           </span>
         </div>
 
-        <div className="flex items-center gap-0.5 shrink-0 relative">
+        <div className="flex items-center gap-1.5 shrink-0 relative">
+          <NetworkLatencyBadge />
           {showArchived && (
             <button
               type="button"

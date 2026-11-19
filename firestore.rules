@@ -252,8 +252,23 @@ service cloud.firestore {
         && incoming().uid == existing().uid
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['phone', 'theme', 'readReceipts', 'lastSeenVisible', 'lastSeenMode', 'profilePhotoVisibility', 'bioVisibility', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['wasilId', 'phone', 'theme', 'readReceipts', 'lastSeenVisible', 'lastSeenMode', 'profilePhotoVisibility', 'bioVisibility', 'updatedAt']);
       allow delete: if false;
+    }
+
+    function isValidWasilId(id) {
+      return id is string && id.size() >= 2 && id.size() <= 64 && id.matches('^@?[a-zA-Z0-9_\\-]+$');
+    }
+
+    match /wasil_registry/{wasilId} {
+      allow get: if isSignedIn() && isValidWasilId(wasilId);
+      allow create, update: if isSignedIn() && isValidWasilId(wasilId) && incoming().uid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    match /users/{userId}/backups/{docId} {
+      allow get, list, create, update: if isOwner(userId) && isValidId(userId);
+      allow delete: if isOwner(userId) && isValidId(userId);
     }
 
     match /users/{userId}/chatPrefs/{chatId} {

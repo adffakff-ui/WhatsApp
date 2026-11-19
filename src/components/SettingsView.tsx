@@ -44,6 +44,8 @@ interface SettingsViewProps {
   isSigningOut?: boolean;
   onGoogleSignIn: () => Promise<void | boolean>;
   onOpenOmarAddons?: () => void;
+  onBackupData?: () => Promise<void>;
+  onRestoreData?: () => Promise<void>;
 }
 
 async function compressImageToAvatarDataUrl(file: File): Promise<string> {
@@ -91,7 +93,9 @@ export function SettingsView({
   onSignOut,
   isSigningOut = false,
   onGoogleSignIn,
-  onOpenOmarAddons
+  onOpenOmarAddons,
+  onBackupData,
+  onRestoreData
 }: SettingsViewProps) {
   const [displayName, setDisplayName] = useState(currentUser.displayName);
   const [about, setAbout] = useState(currentUser.about);
@@ -478,6 +482,75 @@ export function SettingsView({
               />
             </div>
           )}
+
+          {/* Wasil ID Card */}
+          <div className="space-y-2 pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">
+            <h2 className="text-xs font-semibold text-[#54656F] dark:text-[#8696A0] flex items-center gap-1.5">
+              <Shield className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
+              <span>معرّف أكرم الخاص بك (Wasil ID)</span>
+            </h2>
+            <div className="p-3.5 rounded-2xl bg-[#F0F2F5] dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#374248] flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <span dir="ltr" className="block font-mono-code text-sm font-bold text-[var(--wa-accent-strong)] truncate">
+                  {currentUser.wasilId || '@akram_user'}
+                </span>
+                <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] mt-0.5">
+                  شارك هذا المعرف مع الآخرين لبدء محادثات مشفرة فورية.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(currentUser.wasilId || '@akram_user');
+                  setCopiedUid(true);
+                  window.setTimeout(() => setCopiedUid(false), 1800);
+                }}
+                className="shrink-0 px-3 py-2 rounded-xl bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#374248] text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+              >
+                {copiedUid ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-500" />
+                    <span>تم النسخ</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4" />
+                    <span>نسخ</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Cloud & Local Backup & Restore */}
+          <div className="space-y-2.5 pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">
+            <h2 className="text-xs font-semibold text-[#54656F] dark:text-[#8696A0] flex items-center gap-1.5">
+              <Download className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
+              <span>النسخ الاحتياطي التلقائي والمستمر واستعادة البيانات</span>
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {onBackupData && (
+                <button
+                  type="button"
+                  onClick={() => void onBackupData()}
+                  className="py-2.5 px-3 rounded-xl bg-[var(--wa-accent-soft)] text-[var(--wa-accent-strong)] text-xs font-bold hover:brightness-95 flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Download className="w-4 h-4 rotate-180" />
+                  <span>نسخ احتياطي فوري للسحابة</span>
+                </button>
+              )}
+              {onRestoreData && (
+                <button
+                  type="button"
+                  onClick={() => void onRestoreData()}
+                  className="py-2.5 px-3 rounded-xl bg-[#F0F2F5] dark:bg-[#202C33] text-[#111B21] dark:text-[#E9EDEF] text-xs font-bold hover:bg-[#E9EDEF] dark:hover:bg-[#2A3942] flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>استعادة من السحابة</span>
+                </button>
+              )}
+            </div>
+          </div>
 
           {/* Installation & Mobile Packages */}
           <div className="space-y-2.5 pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">

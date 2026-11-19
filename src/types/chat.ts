@@ -53,6 +53,7 @@ export interface PrivacySettings {
 
 export interface UserProfile {
   uid: string;
+  wasilId?: string;
   displayName: string;
   about: string;
   avatarUrl: string;

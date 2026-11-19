@@ -20,6 +20,7 @@ import type { UserProfile } from '../types/chat';
 interface NewChatModalProps {
   mode: 'direct' | 'group' | 'community' | null;
   myUid: string;
+  currentUser?: UserProfile;
   isCloudSynced: boolean;
   contacts: UserProfile[];
   onClose: () => void;
@@ -68,6 +69,7 @@ async function compressGroupIcon(file: File): Promise<string> {
 export function NewChatModal({
   mode,
   myUid,
+  currentUser,
   isCloudSynced,
   contacts,
   onClose,
@@ -265,36 +267,38 @@ export function NewChatModal({
         {mode === 'direct' ? (
           <form onSubmit={(e) => void handleSubmitDirect(e)} className="p-5 space-y-4 overflow-y-auto flex-1">
             {isCloudSynced && (
-              <div className="p-3 rounded-xl bg-[#F7F8FA] dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#2A3942] flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <span className="block text-[10px] font-semibold text-[#54656F] dark:text-[#8696A0]">
-                    معرّفك للمشاركة مع الطرف الآخر (UID):
-                  </span>
-                  <span dir="ltr" className="block font-mono-code text-[11px] font-bold text-[var(--wa-accent)] truncate">
-                    {myUid}
-                  </span>
+              <div className="space-y-2">
+                <div className="p-3 rounded-xl bg-[#F7F8FA] dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#2A3942] flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <span className="block text-[10px] font-semibold text-[#54656F] dark:text-[#8696A0]">
+                      معرّف أكرم الخاص بك (Wasil ID):
+                    </span>
+                    <span dir="ltr" className="block font-mono-code text-xs font-bold text-[var(--wa-accent)] truncate">
+                      {currentUser?.wasilId || '@akram_user'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(currentUser?.wasilId || '@akram_user');
+                      setCopiedUid(true);
+                      window.setTimeout(() => setCopiedUid(false), 1800);
+                    }}
+                    className="shrink-0 min-h-[36px] px-2.5 rounded-lg bg-white dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#2A3942] text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    {copiedUid ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-500" aria-hidden="true" />
+                        <span>تم النسخ</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>نسخ المعرف</span>
+                      </>
+                    )}
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void navigator.clipboard?.writeText(myUid);
-                    setCopiedUid(true);
-                    window.setTimeout(() => setCopiedUid(false), 1800);
-                  }}
-                  className="shrink-0 min-h-[36px] px-2.5 rounded-lg bg-white dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#2A3942] text-[11px] font-bold flex items-center gap-1 cursor-pointer"
-                >
-                  {copiedUid ? (
-                    <>
-                      <Check className="w-3.5 h-3.5 text-emerald-500" aria-hidden="true" />
-                      <span>تم النسخ</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>نسخ</span>
-                    </>
-                  )}
-                </button>
               </div>
             )}
 

@@ -56,6 +56,7 @@ function sanitizePublicKeyJwk(value?: string | null): string {
 }
 
 export interface HydratedUserAccount {
+  wasilId: string;
   displayName: string;
   about: string;
   avatarUrl: string;
@@ -117,6 +118,11 @@ export async function syncUserProfileToFirestore(
     );
 
     const privSnap = await getDoc(privRef);
+    let wasilId = privSnap.exists() ? (privSnap.data().wasilId as string) : '';
+    if (!wasilId) {
+      wasilId = `@akram_${Math.random().toString(36).substring(2, 7)}`;
+    }
+
     const defaultPrivacy: PrivacySettings = {
       readReceipts: true,
       lastSeenMode: 'everyone',
@@ -127,6 +133,7 @@ export async function syncUserProfileToFirestore(
     if (!privSnap.exists()) {
       await setDoc(privRef, {
         uid: user.uid,
+        wasilId,
         email: (user.email || `${user.uid}@wasil.app`).slice(0, 160),
         phone: (user.phoneNumber || '').slice(0, 32),
         theme,
@@ -138,14 +145,37 @@ export async function syncUserProfileToFirestore(
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
-      return { displayName, about: resolvedAbout, avatarUrl, privacy: defaultPrivacy, theme };
+    } else {
+      await updateDoc(privRef, {
+        wasilId,
+        updatedAt: serverTimestamp()
+      });
     }
 
-    const privData = privSnap.data();
-    await updateDoc(privRef, {
-      updatedAt: serverTimestamp()
-    });
+    // Register in wasil_registry
+    await setDoc(
+      doc(db, 'wasil_registry', wasilId),
+      {
+        uid: user.uid,
+        displayName,
+        updatedAt: serverTimestamp()
+      },
+      { merge: true }
+    );
+    if (wasilId.startsWith('@')) {
+      const bareId = wasilId.slice(1);
+      await setDoc(
+        doc(db, 'wasil_registry', bareId),
+        {
+          uid: user.uid,
+          displayName,
+          updatedAt: serverTimestamp()
+        },
+        { merge: true }
+      ).catch(() => {});
+    }
 
+    const privData = privSnap.exists() ? privSnap.data() : {};
     const hydratedPrivacy: PrivacySettings = {
       readReceipts: typeof privData.readReceipts === 'boolean' ? privData.readReceipts : true,
       lastSeenMode: (privData.lastSeenMode as VisibilityScope) || 'everyone',
@@ -154,6 +184,7 @@ export async function syncUserProfileToFirestore(
     };
 
     return {
+      wasilId,
       displayName,
       about: resolvedAbout,
       avatarUrl,
@@ -171,6 +202,7 @@ export async function syncUserProfileToFirestore(
     ) {
       console.warn('Firestore local fallback for syncUserProfileToFirestore:', errStr);
       return {
+        wasilId: '@akram_local',
         displayName: user.displayName || user.email?.split('@')[0] || user.phoneNumber || 'مستخدم تواصل',
         about: about.slice(0, 200),
         avatarUrl: user.photoURL || '',
@@ -261,9 +293,16 @@ export async function updateThemePrefInFirestore(uid: string, theme: ThemeMode):
 }
 
 export async function fetchPublicProfileByUid(targetUid: string): Promise<UserProfile | null> {
-  const path = `users/${targetUid}/public/profile`;
+  const cleaned = (targetUid || '').trim();
+  if (!cleaned) return null;
+  if (cleaned.startsWith('@')) {
+    return lookupUserByWasilIdOrUid(cleaned);
+  }
+  if (!/^[a-zA-Z0-9_-]{10,128}$/.test(cleaned)) {
+    return null;
+  }
   try {
-    const snap = await getDoc(doc(db, 'users', targetUid, 'public', 'profile'));
+    const snap = await getDoc(doc(db, 'users', cleaned, 'public', 'profile'));
     if (!snap.exists()) return null;
     const d = snap.data();
     return {
@@ -277,7 +316,8 @@ export async function fetchPublicProfileByUid(targetUid: string): Promise<UserPr
       lastSeenMs: toMillis(d.lastSeen)
     };
   } catch (error) {
-    handleFirestoreError(error, OperationType.GET, path);
+    console.warn(`fetchPublicProfileByUid failed for ${cleaned}:`, error);
+    return null;
   }
 }
 
@@ -1650,3 +1690,94 @@ export function subscribeScheduledMessagesFromFirestore(
     }
   );
 }
+
+export async function lookupUserByWasilIdOrUid(queryStr: string): Promise<UserProfile | null> {
+  const cleaned = queryStr.trim();
+  if (!cleaned) return null;
+
+  try {
+    let targetUid = cleaned;
+    const isWasilHandle = cleaned.startsWith('@') || (!cleaned.includes('_') && cleaned.length < 20);
+
+    if (isWasilHandle) {
+      const regId = cleaned.startsWith('@') ? cleaned : `@${cleaned}`;
+      let regSnap = await getDoc(doc(db, 'wasil_registry', regId));
+      if (!regSnap.exists() && regId.startsWith('@')) {
+        regSnap = await getDoc(doc(db, 'wasil_registry', regId.slice(1)));
+      }
+      if (regSnap.exists()) {
+        targetUid = regSnap.data().uid;
+      } else {
+        return null;
+      }
+    }
+
+    if (!targetUid || targetUid.startsWith('@') || !/^[a-zA-Z0-9_-]{10,128}$/.test(targetUid)) {
+      return null;
+    }
+
+    const pubSnap = await getDoc(doc(db, 'users', targetUid, 'public', 'profile'));
+    if (!pubSnap.exists()) return null;
+
+    const d = pubSnap.data();
+    return {
+      uid: d.uid,
+      wasilId: cleaned.startsWith('@') ? cleaned : undefined,
+      displayName: d.displayName,
+      about: d.about || '',
+      avatarUrl: d.avatarUrl || '',
+      publicKeyJwk: d.publicKeyJwk || '',
+      safetyCode: d.safetyCode || '',
+      isOnline: Boolean(d.isOnline),
+      lastSeenMs: toMillis(d.lastSeen) || Date.now()
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteChatInFirestore(
+  chatId: string,
+  uid: string,
+  isCreator = false
+): Promise<void> {
+  try {
+    // 1. Remove user membership so chat disappears from live query
+    await deleteDoc(doc(db, 'chats', chatId, 'members', uid)).catch(() => {});
+    // 2. Remove user chat preference
+    await deleteDoc(doc(db, 'users', uid, 'chatPrefs', chatId)).catch(() => {});
+    // 3. If creator, attempt to delete root chat document
+    if (isCreator) {
+      await deleteDoc(doc(db, 'chats', chatId)).catch(() => {});
+    }
+  } catch (error) {
+    console.warn(`deleteChatInFirestore failed for chat ${chatId}:`, error);
+  }
+}
+
+export async function backupUserDataToFirestore(uid: string, backupPayload: Record<string, any>): Promise<void> {
+  try {
+    await setDoc(doc(db, 'users', uid, 'backups', 'latest'), {
+      payloadJson: JSON.stringify(backupPayload),
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `users/${uid}/backups/latest`);
+  }
+}
+
+export async function restoreUserDataFromFirestore(uid: string): Promise<Record<string, any> | null> {
+  try {
+    const snap = await getDoc(doc(db, 'users', uid, 'backups', 'latest'));
+    if (!snap.exists()) return null;
+    const data = snap.data();
+    if (data.payloadJson) {
+      return JSON.parse(data.payloadJson);
+    }
+    return null;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, `users/${uid}/backups/latest`);
+    return null;
+  }
+}
+

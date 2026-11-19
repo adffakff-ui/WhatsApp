@@ -834,41 +834,48 @@ export default function App() {
     setShowSignOutConfirm(true);
   };
 
-  const handleSignOut = async () => {
+  const handleSignOut = () => {
     if (isSigningOut) return;
     setIsSigningOut(true);
     holdEntryForProfileStep.current = false;
-    try {
-      if (isCloudSynced && currentUser.uid) {
-        if (lastTypingSentRef.current?.active) {
-          await updateChatTypingInFirestore(
-            lastTypingSentRef.current.chatId,
-            currentUser.uid,
-            false
-          ).catch(() => {});
-          lastTypingSentRef.current = null;
+
+    // Immediately reset local state and close modals/spinners
+    deliveredSummaryAckedRef.current.clear();
+    deliveredMsgAckedRef.current.clear();
+    readMsgAckedRef.current.clear();
+    localStorage.removeItem(STORAGE_KEYS.ENTERED);
+    setActiveCall(null);
+    setShowSignOutConfirm(false);
+    setAppLockedOnLaunch(false);
+    setUnlockedSessionChatIds([]);
+    setMobileChatOpen(false);
+    setRightPanelMode('none');
+    setActiveTab('chats');
+    setHighlightedJump(null);
+    setIsCloudSynced(false);
+    setIsEntered(false);
+    setIsSigningOut(false);
+    showToast('تم تسجيل الخروج بنجاح');
+
+    // Run network cleanup and auth sign out in background without blocking UI
+    setTimeout(() => {
+      try {
+        if (currentUser.uid && !currentUser.uid.startsWith('demo_')) {
+          if (lastTypingSentRef.current?.active) {
+            void updateChatTypingInFirestore(
+              lastTypingSentRef.current.chatId,
+              currentUser.uid,
+              false
+            ).catch(() => {});
+            lastTypingSentRef.current = null;
+          }
+          void setUserPresenceInFirestore(currentUser.uid, false).catch(() => {});
         }
-        await setUserPresenceInFirestore(currentUser.uid, false).catch(() => {});
-        await signOut(auth).catch(() => {});
+        void signOut(auth).catch(() => {});
+      } catch (err) {
+        console.warn('Background sign out cleanup error:', err);
       }
-    } finally {
-      deliveredSummaryAckedRef.current.clear();
-      deliveredMsgAckedRef.current.clear();
-      readMsgAckedRef.current.clear();
-      localStorage.removeItem(STORAGE_KEYS.ENTERED);
-      setActiveCall(null);
-      setShowSignOutConfirm(false);
-      setAppLockedOnLaunch(false);
-      setUnlockedSessionChatIds([]);
-      setMobileChatOpen(false);
-      setRightPanelMode('none');
-      setActiveTab('chats');
-      setHighlightedJump(null);
-      setIsCloudSynced(false);
-      setIsEntered(false);
-      setIsSigningOut(false);
-      showToast('تم تسجيل الخروج بنجاح');
-    }
+    }, 10);
   };
 
   const handleToggleTheme = () => {
