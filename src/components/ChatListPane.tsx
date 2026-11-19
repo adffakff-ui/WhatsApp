@@ -22,7 +22,9 @@ import {
   Radio,
   LogOut,
   MessageSquareText,
-  Clock
+  Clock,
+  Trash2,
+  CheckSquare
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { HighlightText } from './HighlightText';
@@ -82,6 +84,8 @@ interface ChatListPaneProps {
   onSignOut?: () => void;
   onOpenScheduledMessages?: () => void;
   scheduledCount?: number;
+  onDeleteChat?: (chatId: string) => Promise<void> | void;
+  onDeleteMultipleChats?: (chatIds: string[]) => Promise<void> | void;
 }
 
 export function ChatListPane({
@@ -124,7 +128,9 @@ export function ChatListPane({
   onLockAppNow,
   onSignOut,
   onOpenScheduledMessages,
-  scheduledCount = 0
+  scheduledCount = 0,
+  onDeleteChat,
+  onDeleteMultipleChats
 }: ChatListPaneProps) {
   const [menuChatId, setMenuChatId] = useState<string | null>(null);
   const [showHeaderMenu, setShowHeaderMenu] = useState(false);
@@ -132,7 +138,25 @@ export function ChatListPane({
   const [fabOpen, setFabOpen] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
   const [msgFilter, setMsgFilter] = useState<MessageSearchFilter>('all');
+  const [deleteTargetChat, setDeleteTargetChat] = useState<ChatRoom | null>(null);
+  const [isDeletingChat, setIsDeletingChat] = useState(false);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedChatIdsForDeletion, setSelectedChatIdsForDeletion] = useState<Set<string>>(new Set());
+  const [showMultiDeleteModal, setShowMultiDeleteModal] = useState(false);
+  const [isDeletingMulti, setIsDeletingMulti] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const toggleChatSelection = (chatId: string) => {
+    setSelectedChatIdsForDeletion((prev) => {
+      const next = new Set(prev);
+      if (next.has(chatId)) {
+        next.delete(chatId);
+      } else {
+        next.add(chatId);
+      }
+      return next;
+    });
+  };
 
   const hasSearchQuery = searchQuery.trim().length > 0;
   const showAdvancedFilters = searchFocused || hasSearchQuery || msgFilter !== 'all';
@@ -353,6 +377,19 @@ export function ChatListPane({
                     )}
                   </button>
                 )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowHeaderMenu(false);
+                    setIsSelectionMode((prev) => !prev);
+                    setSelectedChatIdsForDeletion(new Set());
+                  }}
+                  className="w-full px-4 py-2.5 text-right flex items-center gap-2.5 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+                >
+                  <CheckSquare className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+                  <span>{isSelectionMode ? 'إلغاء وضع التحديد' : 'تحديد الدردشات لحذفها'}</span>
+                </button>
                 <button
                   type="button"
                   role="menuitem"
@@ -592,6 +629,51 @@ export function ChatListPane({
         </button>
       )}
 
+      {/* Multi-Selection Action Bar */}
+      {isSelectionMode && (
+        <div className="px-4 py-2.5 bg-[#E9EDEF] dark:bg-[#202C33] border-y border-[#D1D7DB] dark:border-[#374248] flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF] whitespace-nowrap">
+              تم تحديد ({selectedChatIdsForDeletion.size})
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedChatIdsForDeletion.size === chats.length) {
+                  setSelectedChatIdsForDeletion(new Set());
+                } else {
+                  setSelectedChatIdsForDeletion(new Set(chats.map((c) => c.id)));
+                }
+              }}
+              className="text-[11px] text-[var(--wa-accent-strong)] hover:underline font-semibold cursor-pointer whitespace-nowrap"
+            >
+              {selectedChatIdsForDeletion.size === chats.length ? 'إلغاء تحديد الكل' : 'تحديد الكل'}
+            </button>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              disabled={selectedChatIdsForDeletion.size === 0}
+              onClick={() => setShowMultiDeleteModal(true)}
+              className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-40 disabled:hover:bg-rose-600 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
+            >
+              <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>حذف المحدد</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIsSelectionMode(false);
+                setSelectedChatIdsForDeletion(new Set());
+              }}
+              className="px-2.5 py-1.5 rounded-lg bg-white/70 dark:bg-[#111B21] text-xs font-medium text-[#54656F] dark:text-[#8696A0] hover:text-[#111B21] dark:hover:text-white cursor-pointer"
+            >
+              إلغاء
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Chat List & Deep Message Search Results */}
       <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden pb-24 md:pb-16">
         {chats.length === 0 && messageSearchResults.length === 0 ? (
@@ -646,15 +728,32 @@ export function ChatListPane({
                   <button
                     type="button"
                     onClick={() => {
-                      setMenuChatId(null);
-                      onSelectChat(chat.id);
+                      if (isSelectionMode) {
+                        toggleChatSelection(chat.id);
+                      } else {
+                        setMenuChatId(null);
+                        onSelectChat(chat.id);
+                      }
                     }}
                     className={`w-full px-3.5 py-3 flex items-center gap-3 text-right transition-colors cursor-pointer ${
-                      isSelected
+                      isSelected && !isSelectionMode
                         ? 'bg-[#F0F2F5] dark:bg-[#2A3942]'
-                        : 'hover:bg-[#F5F6F6] dark:hover:bg-[#202C33]'
+                        : selectedChatIdsForDeletion.has(chat.id)
+                          ? 'bg-rose-50/70 dark:bg-rose-950/20'
+                          : 'hover:bg-[#F5F6F6] dark:hover:bg-[#202C33]'
                     }`}
                   >
+                    {isSelectionMode && (
+                      <div className="shrink-0 flex items-center justify-center pl-1">
+                        <input
+                          type="checkbox"
+                          aria-label={`تحديد المحادثة ${chat.title}`}
+                          checked={selectedChatIdsForDeletion.has(chat.id)}
+                          onChange={() => toggleChatSelection(chat.id)}
+                          className="w-4.5 h-4.5 rounded accent-rose-600 cursor-pointer"
+                        />
+                      </div>
+                    )}
                     <Avatar
                       src={chat.avatarUrl}
                       name={chat.title}
@@ -813,6 +912,19 @@ export function ChatListPane({
                         className="w-full px-4 py-2 text-right hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
                       >
                         {chat.archived ? 'إلغاء الأرشفة' : 'أرشفة المحادثة'}
+                      </button>
+                      <div className="my-1 border-t border-[#F0F2F5] dark:border-[#374248]" />
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMenuChatId(null);
+                          setDeleteTargetChat(chat);
+                        }}
+                        className="w-full px-4 py-2 text-right flex items-center gap-2 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-rose-600 dark:text-rose-400 font-semibold cursor-pointer transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4 text-rose-500 shrink-0" aria-hidden="true" />
+                        <span>حذف المحادثة</span>
                       </button>
                       </div>
                     )}
@@ -974,6 +1086,114 @@ export function ChatListPane({
         open={showInstallGuide}
         onClose={() => setShowInstallGuide(false)}
       />
+
+      {/* Delete Single Chat Confirmation Modal */}
+      {deleteTargetChat && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="تأكيد حذف المحادثة"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div className="w-full max-w-sm bg-white dark:bg-[#202C33] rounded-2xl p-5 shadow-2xl border border-[#E9EDEF] dark:border-[#374248] space-y-4 text-center">
+            <div className="w-12 h-12 rounded-full bg-rose-100 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 mx-auto flex items-center justify-center">
+              <Trash2 className="w-6 h-6" aria-hidden="true" />
+            </div>
+            <div className="space-y-1.5">
+              <h3 className="text-base font-bold text-[#111B21] dark:text-[#E9EDEF]">
+                حذف المحادثة نهائياً؟
+              </h3>
+              <p className="text-xs text-[#54656F] dark:text-[#8696A0] leading-relaxed">
+                هل أنت متأكد من حذف محادثة «<span className="font-semibold text-[#111B21] dark:text-[#E9EDEF]">{deleteTargetChat.title}</span>»؟
+                سيتم حذف المحادثة والرسائل الخاصة بها نهائياً.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isDeletingChat}
+                onClick={() => setDeleteTargetChat(null)}
+                className="flex-1 py-2.5 rounded-xl bg-[#F0F2F5] dark:bg-[#111B21] text-[#111B21] dark:text-[#E9EDEF] text-xs font-semibold hover:bg-[#E9EDEF] dark:hover:bg-[#222D34] transition-colors cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingChat}
+                onClick={async () => {
+                  if (!onDeleteChat) return;
+                  setIsDeletingChat(true);
+                  try {
+                    await onDeleteChat(deleteTargetChat.id);
+                    setDeleteTargetChat(null);
+                  } finally {
+                    setIsDeletingChat(false);
+                  }
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>{isDeletingChat ? 'جاري الحذف...' : 'حذف المحادثة'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Multiple Chats Confirmation Modal */}
+      {showMultiDeleteModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="تأكيد حذف المحادثات المحددة"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div className="w-full max-w-sm bg-white dark:bg-[#202C33] rounded-2xl p-5 shadow-2xl border border-[#E9EDEF] dark:border-[#374248] space-y-4 text-center">
+            <div className="w-12 h-12 rounded-full bg-rose-100 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 mx-auto flex items-center justify-center">
+              <Trash2 className="w-6 h-6" aria-hidden="true" />
+            </div>
+            <div className="space-y-1.5">
+              <h3 className="text-base font-bold text-[#111B21] dark:text-[#E9EDEF]">
+                تأكيد حذف المحادثات المحددة
+              </h3>
+              <p className="text-xs text-[#54656F] dark:text-[#8696A0] leading-relaxed">
+                هل أنت متأكد من حذف <span className="font-bold text-rose-600 font-mono-code">{selectedChatIdsForDeletion.size}</span> محادثة محددة؟
+                سيتم حذف المحادثات والرسائل الخاصة بها نهائياً.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isDeletingMulti}
+                onClick={() => setShowMultiDeleteModal(false)}
+                className="flex-1 py-2.5 rounded-xl bg-[#F0F2F5] dark:bg-[#111B21] text-[#111B21] dark:text-[#E9EDEF] text-xs font-semibold hover:bg-[#E9EDEF] dark:hover:bg-[#222D34] transition-colors cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingMulti}
+                onClick={async () => {
+                  if (!onDeleteMultipleChats) return;
+                  setIsDeletingMulti(true);
+                  try {
+                    await onDeleteMultipleChats(Array.from(selectedChatIdsForDeletion));
+                    setSelectedChatIdsForDeletion(new Set());
+                    setIsSelectionMode(false);
+                    setShowMultiDeleteModal(false);
+                  } finally {
+                    setIsDeletingMulti(false);
+                  }
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>{isDeletingMulti ? 'جاري الحذف...' : 'حذف الكل'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

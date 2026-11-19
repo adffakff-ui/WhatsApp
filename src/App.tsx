@@ -56,9 +56,11 @@ import {
 } from './data/seedData';
 import {
   createChatInFirestore,
+  deleteChatInFirestore,
   deleteStatusFromFirestore,
   editEncryptedMessageInFirestore,
   fetchPublicProfileByUid,
+  lookupUserByWasilIdOrUid,
   finalizeCallRecordInFirestore,
   inviteMemberToGroupInFirestore,
   markChatMessagesDeliveredInFirestore,
@@ -527,6 +529,7 @@ export default function App() {
         );
         setCurrentUser({
           ...profile,
+          wasilId: hydrated.wasilId,
           displayName: hydrated.displayName,
           about: hydrated.about,
           avatarUrl: hydrated.avatarUrl
@@ -1725,6 +1728,56 @@ export default function App() {
     );
   };
 
+  const handleDeleteChat = async (chatId: string) => {
+    const targetChat = chats.find((c) => c.id === chatId);
+    const isCreator = targetChat?.createdBy === currentUser.uid;
+
+    setChats((prev) => prev.filter((c) => c.id !== chatId));
+    setMessagesMap((prev) => {
+      const next = { ...prev };
+      delete next[chatId];
+      return next;
+    });
+
+    if (selectedChatId === chatId) {
+      setSelectedChatId(null);
+      setMobileChatOpen(false);
+    }
+
+    if (isCloudSynced && currentUser.uid && !currentUser.uid.startsWith('demo_')) {
+      void deleteChatInFirestore(chatId, currentUser.uid, isCreator);
+    }
+
+    showToast('تم حذف المحادثة بنجاح');
+  };
+
+  const handleDeleteMultipleChats = async (chatIds: string[]) => {
+    if (chatIds.length === 0) return;
+    const idsSet = new Set(chatIds);
+
+    setChats((prev) => prev.filter((c) => !idsSet.has(c.id)));
+    setMessagesMap((prev) => {
+      const next = { ...prev };
+      chatIds.forEach((id) => delete next[id]);
+      return next;
+    });
+
+    if (selectedChatId && idsSet.has(selectedChatId)) {
+      setSelectedChatId(null);
+      setMobileChatOpen(false);
+    }
+
+    if (isCloudSynced && currentUser.uid && !currentUser.uid.startsWith('demo_')) {
+      for (const chatId of chatIds) {
+        const targetChat = chats.find((c) => c.id === chatId);
+        const isCreator = targetChat?.createdBy === currentUser.uid;
+        void deleteChatInFirestore(chatId, currentUser.uid, isCreator);
+      }
+    }
+
+    showToast(`تم حذف ${chatIds.length} محادثة بنجاح`);
+  };
+
   const handleStartCallForChat = async (chat: ChatRoom, callType: 'audio' | 'video') => {
     const safeCallerAvatar =
       currentUser.avatarUrl.startsWith('data:') && currentUser.avatarUrl.length > 500
@@ -2533,6 +2586,8 @@ export default function App() {
                 onSignOut={handleRequestSignOut}
                 onOpenScheduledMessages={() => setShowScheduledListModal(true)}
                 scheduledCount={scheduledMessages.filter((m) => m.status === 'pending').length}
+                onDeleteChat={handleDeleteChat}
+                onDeleteMultipleChats={handleDeleteMultipleChats}
               />
             </div>
 
@@ -2715,7 +2770,7 @@ export default function App() {
         onClose={() => setNewChatModalMode(null)}
         onCreateDirectChat={handleCreateDirectChat}
         onCreateGroupChat={handleCreateGroupChat}
-        onLookupPeerByUid={fetchPublicProfileByUid}
+        onLookupPeerByUid={lookupUserByWasilIdOrUid}
         onImportGoogleContacts={handleImportGoogleContacts}
       />
 

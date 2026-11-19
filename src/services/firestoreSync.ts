@@ -906,7 +906,8 @@ export function subscribeUserChatsFromFirestore(
         ...(deliveredIds ? { lastMessageDeliveredToIds: deliveredIds } : {}),
         ...(readIds ? { lastMessageReadByIds: readIds } : {}),
         lastMessageAtMs: toMillis(c.lastMessageAt),
-        roomSeed: chatId
+        roomSeed: chatId,
+        ...(typeof c.createdBy === 'string' ? { createdBy: c.createdBy } : {})
       });
     }
 

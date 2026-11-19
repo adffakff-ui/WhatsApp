@@ -138,6 +138,7 @@ export interface ChatRoom {
   lastMessageReadByIds?: string[];
   lastMessageAtMs: number;
   roomSeed: string;
+  createdBy?: string;
 }
 
 export interface StatusItem {
