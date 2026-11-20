@@ -1025,8 +1025,8 @@ export function RightDrawer({
                         copySecurityValue(
                           JSON.stringify(
                             {
-                              algorithm: latestEncrypted.algorithm,
-                              iv: latestEncrypted.iv,
+                              algorithm: latestEncrypted?.algorithm ?? "",
+                              iv: latestEncrypted?.iv ?? "",
                               ciphertext: latestEncrypted.ciphertext,
                             },
                             null,
@@ -1056,16 +1056,16 @@ export function RightDrawer({
                   >
                     <div>
                       <span className="text-[#06CF9C]">Algorithm:</span>{" "}
-                      {latestEncrypted.algorithm}
+                      {latestEncrypted?.algorithm ?? ""}
                     </div>
                     <div className="break-all">
                       <span className="text-[#06CF9C]">IV (96-bit):</span>{" "}
-                      {latestEncrypted.iv}
+                      {latestEncrypted?.iv ?? ""}
                     </div>
                     <div className="break-all">
                       <span className="text-[#06CF9C]">Ciphertext:</span>{" "}
-                      {latestEncrypted.ciphertext.slice(0, 120)}
-                      {latestEncrypted.ciphertext.length > 120 ? "..." : ""}
+                      {(latestEncrypted?.ciphertext ?? "").slice(0, 120)}
+                      {(latestEncrypted?.ciphertext ?? "").length > 120 ? "..." : ""}
                     </div>
                   </div>
                 </div>
