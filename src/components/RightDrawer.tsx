@@ -975,6 +975,38 @@ export function RightDrawer({
                 {safetyCode}
               </div>
             </div>
+            {(() => {
+              const latestEncrypted = [...messages]
+                .reverse()
+                .find((m) => m.ciphertext && m.iv);
+              if (!latestEncrypted) return null;
+              return (
+                <div className="space-y-2 pt-2 border-t border-[#F0F2F5] dark:border-[#222D34]">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-[#111B21] dark:text-[#E9EDEF]">
+                    <Lock className="w-4 h-4 text-[#00A884]" aria-hidden="true" />
+                    <span>بيانات آخر حمولة مشفرة</span>
+                  </div>
+                  <div
+                    dir="ltr"
+                    className="rounded-xl bg-[#0C1317] text-[#E9EDEF] p-3.5 space-y-2 text-[11px] font-mono-code"
+                  >
+                    <div>
+                      <span className="text-[#06CF9C]">Algorithm:</span>{" "}
+                      {latestEncrypted.algorithm}
+                    </div>
+                    <div className="break-all">
+                      <span className="text-[#06CF9C]">IV (96-bit):</span>{" "}
+                      {latestEncrypted.iv}
+                    </div>
+                    <div className="break-all">
+                      <span className="text-[#06CF9C]">Ciphertext:</span>{" "}
+                      {latestEncrypted.ciphertext.slice(0, 120)}
+                      {latestEncrypted.ciphertext.length > 120 ? "..." : ""}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {inspectedMsg && (
               <div className="space-y-2 pt-2 border-t border-[#F0F2F5] dark:border-[#222D34]">
