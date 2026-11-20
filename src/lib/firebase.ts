@@ -42,7 +42,8 @@ function createFirestoreInstance(): Firestore {
       {
         localCache: persistentLocalCache({
           tabManager: persistentMultipleTabManager()
-        })
+        }),
+        experimentalAutoDetectLongPolling: true
       },
       databaseId
     );
@@ -85,6 +86,20 @@ export interface FirestoreErrorInfo {
   };
 }
 
+export function isTransientFirestoreError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  const code = (error as { code?: string } | null)?.code || '';
+  const lower = msg.toLowerCase();
+  return (
+    code === 'unavailable' ||
+    code === 'aborted' ||
+    code === 'deadline-exceeded' ||
+    lower.includes('code=unavailable') ||
+    lower.includes('the client is offline') ||
+    lower.includes('could not reach cloud firestore backend')
+  );
+}
+
 export function handleFirestoreError(
   error: unknown,
   operationType: OperationType,
@@ -116,8 +131,7 @@ export async function testFirestoreConnection(): Promise<boolean> {
     await getDocFromServer(doc(db, 'test', 'connection'));
     return true;
   } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firestore connection check: client is offline.');
+    if (isTransientFirestoreError(error)) {
       return false;
     }
     // Permission denied / not found still confirms live network reachability to Firestore server
@@ -128,5 +142,3 @@ export async function testFirestoreConnection(): Promise<boolean> {
 if (typeof window !== 'undefined') {
   void testFirestoreConnection();
 }
-
-

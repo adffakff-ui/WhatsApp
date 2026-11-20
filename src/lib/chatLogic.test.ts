@@ -23,6 +23,7 @@ import {
   buildChannelInviteCode,
   sortStatusesWithPinned,
   resolveMessageReceiptStatus,
+  getMessageReceiptDetails,
   mergePollVotesMap,
   filterExpiredDisappearingMessages,
   splitTextByHighlight,
@@ -358,6 +359,71 @@ test('resolveMessageReceiptStatus accurately resolves single check, double gray 
   // Fallback for legacy records without receipt arrays
   assert.equal(resolveMessageReceiptStatus('me', undefined, undefined, 'sent'), 'sent');
   assert.equal(resolveMessageReceiptStatus('me', undefined, undefined, 'read'), 'read');
+});
+
+test('getMessageReceiptDetails derives sent, delivered, and read directly from deliveredToIds and readByIds', () => {
+  // Sent only
+  const sentDetails = getMessageReceiptDetails({
+    senderId: 'me',
+    deliveredToIds: ['me'],
+    readByIds: ['me'],
+    status: 'sent'
+  });
+  assert.equal(sentDetails.status, 'sent');
+  assert.equal(sentDetails.label, 'مرسلة');
+  assert.deepEqual(sentDetails.deliveredPeerIds, []);
+  assert.deepEqual(sentDetails.readPeerIds, []);
+
+  // Delivered even if cached status field lagged behind
+  const deliveredDetails = getMessageReceiptDetails({
+    senderId: 'me',
+    deliveredToIds: ['me', 'peer_1'],
+    readByIds: ['me'],
+    status: 'sent'
+  });
+  assert.equal(deliveredDetails.status, 'delivered');
+  assert.equal(deliveredDetails.label, 'مستلمة');
+  assert.deepEqual(deliveredDetails.deliveredPeerIds, ['peer_1']);
+  assert.deepEqual(deliveredDetails.deliveredOnlyPeerIds, ['peer_1']);
+  assert.deepEqual(deliveredDetails.readPeerIds, []);
+
+  // Read overrides delivered & implies delivery even if deliveredToIds omitted peer
+  const readDetails = getMessageReceiptDetails(
+    {
+      senderId: 'me',
+      deliveredToIds: ['me', 'peer_2'],
+      readByIds: ['me', 'peer_1'],
+      status: 'delivered'
+    },
+    true
+  );
+  assert.equal(readDetails.status, 'read');
+  assert.equal(readDetails.label, 'مقروءة');
+  assert.deepEqual(readDetails.readPeerIds, ['peer_1']);
+  assert.deepEqual(readDetails.deliveredOnlyPeerIds, ['peer_2']);
+  assert.ok(readDetails.deliveredPeerIds.includes('peer_1'));
+  assert.ok(readDetails.deliveredPeerIds.includes('peer_2'));
+  assert.equal(readDetails.description, 'مقروءة لدى 1');
+
+  // Sending and failed preserve client transport states
+  assert.equal(
+    getMessageReceiptDetails({
+      senderId: 'me',
+      deliveredToIds: ['me'],
+      readByIds: ['me'],
+      status: 'sending'
+    }).status,
+    'sending'
+  );
+  assert.equal(
+    getMessageReceiptDetails({
+      senderId: 'me',
+      deliveredToIds: ['me'],
+      readByIds: ['me'],
+      status: 'failed'
+    }).status,
+    'failed'
+  );
 });
 
 test('mergePollVotesMap maps uid->optionId accurately and handles empty votes', () => {

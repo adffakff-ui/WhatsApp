@@ -34,7 +34,10 @@ import {
   RotateCcw,
   Download,
   ChevronUp,
-  ChevronDown
+  ChevronDown,
+  Languages,
+  Palette,
+  Ban
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { HighlightText } from './HighlightText';
@@ -46,17 +49,28 @@ import {
   formatCallDuration,
   formatDisappearingLabel,
   formatWhatsAppTime,
+  getMessageReceiptDetails,
   searchMessagesInChat,
   type MessageSearchFilter
 } from '../lib/chatLogic';
 import { FONT_SIZE_OPTIONS } from '../lib/omarConfig';
+import { resolveChatWallpaper } from '../lib/chatWallpaper';
+import {
+  getTranslatableMessageText,
+  getTranslationLanguageMeta,
+  SUPPORTED_TRANSLATION_LANGUAGES,
+  translateMessageText,
+  type TranslationLangCode,
+  type TranslationResult
+} from '../lib/translation';
 import type {
   ChatRoom,
   DecryptedMessage,
   MessagePayload,
   MessageType,
   OmarSettings,
-  RightPanelMode
+  RightPanelMode,
+  UserProfile
 } from '../types/chat';
 
 interface ChatWindowProps {
@@ -86,6 +100,12 @@ interface ChatWindowProps {
   onClearExternalHighlight?: () => void;
   onScheduleMessage?: (chatId: string, sendAtMs: number, text: string) => Promise<void>;
   onOpenScheduledMessages?: () => void;
+  onChangePreferredLanguage?: (lang: TranslationLangCode) => void;
+  onOpenWallpaperPicker?: () => void;
+  isPeerBlocked?: boolean;
+  onBlockPeer?: () => Promise<void> | void;
+  onUnblockPeer?: () => Promise<void> | void;
+  contacts?: UserProfile[];
 }
 
 async function compressChatImageToDataUrl(file: File): Promise<string> {
@@ -149,7 +169,13 @@ export function ChatWindow({
   externalSearchQuery = '',
   onClearExternalHighlight,
   onScheduleMessage,
-  onOpenScheduledMessages
+  onOpenScheduledMessages,
+  onChangePreferredLanguage,
+  onOpenWallpaperPicker,
+  isPeerBlocked = false,
+  onBlockPeer,
+  onUnblockPeer,
+  contacts = []
 }: ChatWindowProps) {
   const [text, setText] = useState('');
   const [replyTo, setReplyTo] = useState<DecryptedMessage | null>(null);
@@ -161,6 +187,7 @@ export function ChatWindow({
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [activeMsgMenu, setActiveMsgMenu] = useState<string | null>(null);
+  const [activeReceiptMsgId, setActiveReceiptMsgId] = useState<string | null>(null);
   const [showPollModal, setShowPollModal] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '', '']);
@@ -173,6 +200,11 @@ export function ChatWindow({
   const [activeMatchIdx, setActiveMatchIdx] = useState(0);
   const [lightboxImage, setLightboxImage] = useState<{ mediaUrl: string; caption?: string } | null>(null);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [translatedMessages, setTranslatedMessages] = useState<
+    Record<string, { result: TranslationResult; sourceText: string }>
+  >({});
+  const [translatingIds, setTranslatingIds] = useState<Record<string, boolean>>({});
+  const [translationErrors, setTranslationErrors] = useState<Record<string, string>>({});
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -219,6 +251,7 @@ export function ChatWindow({
     setShowAttachMenu(false);
     setShowMoreMenu(false);
     setActiveMsgMenu(null);
+    setActiveReceiptMsgId(null);
     setShowInChatSearch(false);
     setInChatSearchQuery('');
     setInChatFilterType('all');
@@ -244,6 +277,7 @@ export function ChatWindow({
       showAttachMenu ||
       showMoreMenu ||
       Boolean(activeMsgMenu) ||
+      Boolean(activeReceiptMsgId) ||
       showPollModal ||
       Boolean(forwardMsg) ||
       Boolean(editingMsg);
@@ -257,6 +291,7 @@ export function ChatWindow({
       setShowAttachMenu(false);
       setShowMoreMenu(false);
       setActiveMsgMenu(null);
+      setActiveReceiptMsgId(null);
     };
 
     const handleEscape = (e: KeyboardEvent) => {
@@ -266,6 +301,7 @@ export function ChatWindow({
         setShowAttachMenu(false);
         setShowMoreMenu(false);
         setActiveMsgMenu(null);
+        setActiveReceiptMsgId(null);
         setShowPollModal(false);
         setForwardMsg(null);
         if (editingMsg) {
@@ -287,6 +323,7 @@ export function ChatWindow({
     showAttachMenu,
     showMoreMenu,
     activeMsgMenu,
+    activeReceiptMsgId,
     showPollModal,
     forwardMsg,
     editingMsg
@@ -595,6 +632,54 @@ export function ChatWindow({
     }
   };
 
+  const preferredLang = (omarSettings.preferredLanguage as TranslationLangCode) || 'ar';
+
+  const handleTranslateMessage = async (
+    msg: DecryptedMessage,
+    overrideLang?: TranslationLangCode
+  ) => {
+    const sourceText = getTranslatableMessageText(msg);
+    if (!sourceText) return;
+    const targetLang = overrideLang || preferredLang;
+    setTranslatingIds((prev) => ({ ...prev, [msg.id]: true }));
+    setTranslationErrors((prev) => {
+      const next = { ...prev };
+      delete next[msg.id];
+      return next;
+    });
+    try {
+      const result = await translateMessageText(sourceText, targetLang);
+      setTranslatedMessages((prev) => ({
+        ...prev,
+        [msg.id]: { result, sourceText }
+      }));
+    } catch (err) {
+      setTranslationErrors((prev) => ({
+        ...prev,
+        [msg.id]: err instanceof Error ? err.message : 'تعذر ترجمة الرسالة حالياً.'
+      }));
+    } finally {
+      setTranslatingIds((prev) => {
+        const next = { ...prev };
+        delete next[msg.id];
+        return next;
+      });
+    }
+  };
+
+  const handleHideTranslation = (messageId: string) => {
+    setTranslatedMessages((prev) => {
+      const next = { ...prev };
+      delete next[messageId];
+      return next;
+    });
+    setTranslationErrors((prev) => {
+      const next = { ...prev };
+      delete next[messageId];
+      return next;
+    });
+  };
+
   return (
     <section aria-label={`محادثة ${chat.title}`} className="flex-1 flex flex-col h-full w-full max-w-full min-w-0 overflow-hidden relative">
       {/* Chat Header */}
@@ -637,17 +722,19 @@ export function ChatWindow({
                 )}
               </div>
               <p className="text-xs text-[#54656F] dark:text-[#8696A0] truncate">
-                {chat.isTyping && !omarSettings.hideTypingIndicator
-                  ? 'يكتب الآن...'
-                  : chat.type === 'community'
-                    ? `${chat.memberIds.length} متابع · ${chat.adminOnlyPost ? 'بث المشرفين فقط' : 'قناة مفتوحة'}`
-                    : chat.type !== 'direct'
-                      ? `${chat.memberIds.length} أعضاء · مشفرة تماماً`
-                      : omarSettings.freezeLastSeen
-                        ? 'آخر ظهور مجمد'
-                        : chat.isOnline
-                          ? 'متصل الآن'
-                          : 'آخر ظهور اليوم'}
+                {isPeerBlocked && chat.type === 'direct'
+                  ? 'جهة اتصال محظورة'
+                  : chat.isTyping && !omarSettings.hideTypingIndicator
+                    ? 'يكتب الآن...'
+                    : chat.type === 'community'
+                      ? `${chat.memberIds.length} متابع · ${chat.adminOnlyPost ? 'بث المشرفين فقط' : 'قناة مفتوحة'}`
+                      : chat.type !== 'direct'
+                        ? `${chat.memberIds.length} أعضاء · مشفرة تماماً`
+                        : omarSettings.freezeLastSeen
+                          ? 'آخر ظهور مجمد'
+                          : chat.isOnline
+                            ? 'متصل الآن'
+                            : 'آخر ظهور اليوم'}
               </p>
             </div>
           </button>
@@ -668,9 +755,10 @@ export function ChatWindow({
           <button
             type="button"
             aria-label="بدء مكالمة مرئية"
-            title="مكالمة مرئية"
+            title={isPeerBlocked ? 'جهة الاتصال محظورة' : 'مكالمة مرئية'}
+            disabled={isPeerBlocked}
             onClick={() => onStartCall('video')}
-            className="w-10 h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
+            className="w-10 h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
           >
             <Video className="w-5 h-5" aria-hidden="true" />
           </button>
@@ -678,9 +766,10 @@ export function ChatWindow({
           <button
             type="button"
             aria-label="بدء مكالمة صوتية"
-            title="مكالمة صوتية"
+            title={isPeerBlocked ? 'جهة الاتصال محظورة' : 'مكالمة صوتية'}
+            disabled={isPeerBlocked}
             onClick={() => onStartCall('audio')}
-            className="w-10 h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
+            className="w-10 h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
           >
             <Phone className="w-5 h-5" aria-hidden="true" />
           </button>
@@ -779,6 +868,20 @@ export function ChatWindow({
               >
                 التحقق من التشفير
               </button>
+              {onOpenWallpaperPicker && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onOpenWallpaperPicker();
+                    setShowMoreMenu(false);
+                  }}
+                  className="w-full px-4 py-2.5 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+                >
+                  <Palette className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+                  <span>خلفية المحادثة</span>
+                </button>
+              )}
               {onOpenScheduledMessages && (
                 <button
                   type="button"
@@ -830,6 +933,28 @@ export function ChatWindow({
                   ? 'إيقاف الرسائل ذاتية الاختفاء'
                   : 'تفعيل اختفاء الرسائل (٢٤ ساعة)'}
               </button>
+              {chat.type === 'direct' && (isPeerBlocked ? onUnblockPeer : onBlockPeer) && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowMoreMenu(false);
+                    if (isPeerBlocked) {
+                      void onUnblockPeer?.();
+                    } else {
+                      void onBlockPeer?.();
+                    }
+                  }}
+                  className={`w-full px-4 py-2.5 text-right flex items-center gap-2 cursor-pointer ${
+                    isPeerBlocked
+                      ? 'hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300'
+                      : 'hover:bg-red-50 dark:hover:bg-red-950/40 text-red-600 dark:text-red-400'
+                  }`}
+                >
+                  <Ban className="w-4 h-4" aria-hidden="true" />
+                  <span>{isPeerBlocked ? 'إلغاء حظر جهة الاتصال' : 'حظر جهة الاتصال'}</span>
+                </button>
+              )}
               <button
                 type="button"
                 role="menuitem"
@@ -975,7 +1100,16 @@ export function ChatWindow({
       )}
 
       {/* Messages Canvas */}
-      <div className={`flex-1 min-w-0 overflow-y-auto overflow-x-hidden wa-wallpaper-${omarSettings.wallpaper} px-3 sm:px-4 md:px-10 py-4 space-y-2.5`}>
+      {(() => {
+        const resolvedWallpaper = resolveChatWallpaper(chat.wallpaper, omarSettings.wallpaper);
+        return (
+          <div className="relative flex-1 min-w-0 overflow-hidden flex flex-col">
+            <div
+              aria-hidden="true"
+              className={`pointer-events-none absolute inset-0 z-0 transition-all duration-200 ${resolvedWallpaper.className}`}
+              style={resolvedWallpaper.style}
+            />
+            <div className="relative z-10 flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-3 sm:px-4 md:px-10 py-4 space-y-2.5">
         {/* E2EE Encryption Notice Banner */}
         <div className="flex justify-center my-2">
           <button
@@ -1008,7 +1142,9 @@ export function ChatWindow({
               className={`flex flex-col ${isMine ? 'items-start' : 'items-end'}`}
             >
               <div
-                className={`group relative max-w-[88%] sm:max-w-[70%] md:max-w-[62%] px-3 py-2 shadow-xs transition-all ${getBubbleRadiusClass(
+                className={`group relative max-w-[88%] sm:max-w-[70%] md:max-w-[62%] ${
+                  msg.isDeleted ? 'px-3' : 'pl-8 pr-3'
+                } py-2 shadow-xs transition-all ${getBubbleRadiusClass(
                   isMine
                 )} ${
                   isMine
@@ -1212,7 +1348,78 @@ export function ChatWindow({
                   </p>
                 )}
 
-                {/* Timestamp, Edited badge, Star & Ticks */}
+                {/* Per-Message Live Translation Result / Status */}
+                {!msg.isDeleted && translatingIds[msg.id] && (
+                  <div className="mt-2 rounded-lg bg-black/5 dark:bg-black/25 px-2.5 py-2 text-xs text-[#54656F] dark:text-[#AEBAC1] flex items-center gap-2 border-t border-black/5 dark:border-white/10">
+                    <Languages className="w-3.5 h-3.5 text-[var(--wa-accent)] animate-pulse shrink-0" aria-hidden="true" />
+                    <span>جاري ترجمة الرسالة...</span>
+                  </div>
+                )}
+
+                {!msg.isDeleted && !translatingIds[msg.id] && translationErrors[msg.id] && (
+                  <div className="mt-2 rounded-lg bg-red-500/10 px-2.5 py-1.5 text-[11px] text-red-700 dark:text-red-300 flex items-center justify-between gap-2">
+                    <span>{translationErrors[msg.id]}</span>
+                    <button
+                      type="button"
+                      onClick={() => void handleTranslateMessage(msg)}
+                      className="font-bold underline shrink-0 cursor-pointer"
+                    >
+                      إعادة المحاولة
+                    </button>
+                  </div>
+                )}
+
+                {!msg.isDeleted &&
+                  !translatingIds[msg.id] &&
+                  translatedMessages[msg.id] &&
+                  translatedMessages[msg.id].sourceText === getTranslatableMessageText(msg) && (() => {
+                    const entry = translatedMessages[msg.id].result;
+                    const langMeta = getTranslationLanguageMeta(entry.targetLang);
+                    return (
+                      <div className="mt-2 rounded-lg bg-black/5 dark:bg-black/25 px-2.5 py-2 border-r-[3px] border-[var(--wa-accent)] space-y-1">
+                        <div className="flex items-center justify-between gap-2 text-[10px] text-[#54656F] dark:text-[#AEBAC1]">
+                          <span className="inline-flex items-center gap-1 font-semibold text-[var(--wa-accent-strong)]">
+                            <Languages className="w-3 h-3 shrink-0" aria-hidden="true" />
+                            <span>ترجمة ({langMeta.arabicName})</span>
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <select
+                              aria-label="تغيير لغة الترجمة"
+                              value={entry.targetLang}
+                              onChange={(e) => {
+                                const nextLang = e.target.value as TranslationLangCode;
+                                onChangePreferredLanguage?.(nextLang);
+                                void handleTranslateMessage(msg, nextLang);
+                              }}
+                              className="rounded bg-white/80 dark:bg-[#111B21] border border-black/10 dark:border-white/10 px-1.5 py-0.5 text-[10px] text-[#111B21] dark:text-[#E9EDEF] focus:outline-none cursor-pointer"
+                            >
+                              {SUPPORTED_TRANSLATION_LANGUAGES.map((langOpt) => (
+                                <option key={langOpt.code} value={langOpt.code}>
+                                  {langOpt.arabicName}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              aria-label="إخفاء الترجمة"
+                              onClick={() => handleHideTranslation(msg.id)}
+                              className="p-0.5 rounded hover:bg-black/10 dark:hover:bg-white/10 cursor-pointer"
+                            >
+                              <X className="w-3 h-3" aria-hidden="true" />
+                            </button>
+                          </div>
+                        </div>
+                        <p
+                          dir={langMeta.dir}
+                          className={`${fontSizeClass} leading-relaxed whitespace-pre-wrap break-words text-[#111B21] dark:text-[#E9EDEF]`}
+                        >
+                          {entry.translatedText}
+                        </p>
+                      </div>
+                    );
+                  })()}
+
+                {/* Timestamp, Edited badge, Star & Receipt Indicator (from deliveredToIds / readByIds) */}
                 <div className="mt-1 flex items-center justify-end gap-1.5 text-[11px] text-[#667781] dark:text-[#AEBAC1] font-mono-code">
                   {msg.payload.edited && !msg.isDeleted && (
                     <span className="text-[10px] font-sans font-medium opacity-80">
@@ -1221,40 +1428,180 @@ export function ChatWindow({
                   )}
                   {isStarred && <Star className="w-3 h-3 fill-amber-400 text-amber-400" aria-label="مميزة بنجمة" />}
                   <span>{formatWhatsAppTime(msg.createdAtMs)}</span>
-                  {isMine && !msg.isDeleted && (
-                    <span
-                      title={
-                        msg.status === 'read'
-                          ? 'تم الاستلام والمشاهدة'
-                          : msg.status === 'delivered'
-                            ? 'تم الاستلام على جهاز الطرف الآخر'
-                            : msg.status === 'sent'
-                              ? 'تم الإرسال — لم تُستلم بعد'
-                              : msg.status === 'sending'
-                                ? 'جاري الإرسال...'
-                                : 'تعذر الإرسال'
-                      }
-                    >
-                      {msg.status === 'sending' ? (
-                        <Clock className="w-3.5 h-3.5 opacity-70 animate-pulse" aria-label="جاري الإرسال" />
-                      ) : msg.status === 'failed' ? (
+                  {isMine && !msg.isDeleted && (() => {
+                    const isGroupChat = chat.type !== 'direct';
+                    const receipt = getMessageReceiptDetails(msg, isGroupChat);
+                    const resolvePeerName = (peerId: string) => {
+                      const match = contacts.find((c) => c.uid === peerId);
+                      if (match?.displayName) return match.displayName;
+                      if (!isGroupChat && chat.title) return chat.title;
+                      return `${peerId.slice(0, 6)}…`;
+                    };
+                    const isPopoverOpen = activeReceiptMsgId === msg.id;
+
+                    if (receipt.status === 'sending') {
+                      return (
+                        <span
+                          data-receipt-status="sending"
+                          title={receipt.description}
+                          aria-label={receipt.description}
+                          className="inline-flex items-center"
+                        >
+                          <Clock className="w-3.5 h-3.5 opacity-75 animate-pulse" aria-hidden="true" />
+                        </span>
+                      );
+                    }
+
+                    if (receipt.status === 'failed') {
+                      return (
                         <button
                           type="button"
+                          data-receipt-status="failed"
                           onClick={() => onRetryMessage && void onRetryMessage(msg)}
                           className="inline-flex items-center gap-1 text-red-600 dark:text-red-400 font-sans font-bold hover:underline cursor-pointer"
+                          title={receipt.description}
                         >
                           <RotateCcw className="w-3 h-3" aria-hidden="true" />
                           <span>إعادة</span>
                         </button>
-                      ) : msg.status === 'read' ? (
-                        <CheckCheck className="w-3.5 h-3.5 text-[#53BDEB]" aria-label="تمت القراءة والمشاهدة" />
-                      ) : msg.status === 'delivered' ? (
-                        <CheckCheck className="w-3.5 h-3.5 text-[#8696A0]" aria-label="تم الاستلام" />
-                      ) : (
-                        <Check className="w-3.5 h-3.5 text-[#8696A0]" aria-label="تم الإرسال (لم تُستلم بعد)" />
-                      )}
-                    </span>
-                  )}
+                      );
+                    }
+
+                    return (
+                      <div data-chat-floating="true" className="inline-flex items-center">
+                        <button
+                          type="button"
+                          data-receipt-status={receipt.status}
+                          title={`${receipt.description} — انقر لعرض التفاصيل`}
+                          aria-label={receipt.description}
+                          aria-expanded={isPopoverOpen}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveMsgMenu(null);
+                            setActiveReceiptMsgId((curr) => (curr === msg.id ? null : msg.id));
+                          }}
+                          className={`inline-flex items-center gap-0.5 rounded px-0.5 py-0.5 transition-colors cursor-pointer hover:bg-black/5 dark:hover:bg-white/10 ${
+                            receipt.status === 'read'
+                              ? 'text-[#0284C7] dark:text-[#53BDEB]'
+                              : receipt.status === 'delivered'
+                                ? 'text-[#54656F] dark:text-[#AEBAC1]'
+                                : 'text-[#667781] dark:text-[#9CA3AF]'
+                          }`}
+                        >
+                          {receipt.status === 'sent' ? (
+                            <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                          ) : (
+                            <CheckCheck className="w-3.5 h-3.5" aria-hidden="true" />
+                          )}
+                          {isGroupChat &&
+                            (receipt.status === 'read'
+                              ? receipt.readPeerIds.length > 0 && (
+                                  <span className="text-[10px] leading-none font-mono-code">
+                                    {receipt.readPeerIds.length}
+                                  </span>
+                                )
+                              : receipt.status === 'delivered' &&
+                                receipt.deliveredPeerIds.length > 0 && (
+                                  <span className="text-[10px] leading-none font-mono-code">
+                                    {receipt.deliveredPeerIds.length}
+                                  </span>
+                                ))}
+                        </button>
+
+                        {isPopoverOpen && (
+                          <div
+                            role="dialog"
+                            aria-label="تفاصيل حالة الرسالة"
+                            className="absolute bottom-8 right-2 z-40 w-60 rounded-xl bg-white dark:bg-[#233138] shadow-xl border border-[#E9EDEF] dark:border-[#374248] p-3 text-right font-sans text-xs text-[#111B21] dark:text-[#E9EDEF]"
+                          >
+                            <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-[#E9EDEF] dark:border-[#374248]">
+                              <span className="font-bold text-[12px]">حالة الرسالة</span>
+                              <span
+                                className={`text-[11px] font-semibold ${
+                                  receipt.status === 'read'
+                                    ? 'text-[#0284C7] dark:text-[#53BDEB]'
+                                    : receipt.status === 'delivered'
+                                      ? 'text-[var(--wa-accent-strong)]'
+                                      : 'text-[#667781] dark:text-[#AEBAC1]'
+                                }`}
+                              >
+                                {receipt.label}
+                              </span>
+                            </div>
+
+                            <div className="space-y-2 text-[11px]">
+                              <div className="flex items-start gap-2">
+                                <Check
+                                  className="w-3.5 h-3.5 mt-0.5 shrink-0 text-[#54656F] dark:text-[#AEBAC1]"
+                                  aria-hidden="true"
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <p className="font-semibold">مرسلة</p>
+                                  <p className="text-[#667781] dark:text-[#8696A0]">
+                                    تم الإرسال في {formatWhatsAppTime(msg.createdAtMs)}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="flex items-start gap-2">
+                                <CheckCheck
+                                  className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${
+                                    receipt.deliveredPeerIds.length > 0
+                                      ? 'text-[#54656F] dark:text-[#E9EDEF]'
+                                      : 'text-[#8696A0]/45'
+                                  }`}
+                                  aria-hidden="true"
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <p
+                                    className={`font-semibold ${
+                                      receipt.deliveredPeerIds.length > 0
+                                        ? ''
+                                        : 'text-[#8696A0] dark:text-[#667781]'
+                                    }`}
+                                  >
+                                    مستلمة ({receipt.deliveredPeerIds.length})
+                                  </p>
+                                  <p className="text-[#667781] dark:text-[#8696A0] truncate">
+                                    {receipt.deliveredPeerIds.length > 0
+                                      ? receipt.deliveredPeerIds.map(resolvePeerName).join('، ')
+                                      : 'لم تصل إلى جهاز الطرف الآخر بعد'}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="flex items-start gap-2">
+                                <CheckCheck
+                                  className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${
+                                    receipt.readPeerIds.length > 0
+                                      ? 'text-[#0284C7] dark:text-[#53BDEB]'
+                                      : 'text-[#8696A0]/45'
+                                  }`}
+                                  aria-hidden="true"
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <p
+                                    className={`font-semibold ${
+                                      receipt.readPeerIds.length > 0
+                                        ? 'text-[#0284C7] dark:text-[#53BDEB]'
+                                        : 'text-[#8696A0] dark:text-[#667781]'
+                                    }`}
+                                  >
+                                    مقروءة ({receipt.readPeerIds.length})
+                                  </p>
+                                  <p className="text-[#667781] dark:text-[#8696A0] truncate">
+                                    {receipt.readPeerIds.length > 0
+                                      ? receipt.readPeerIds.map(resolvePeerName).join('، ')
+                                      : 'في انتظار القراءة'}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Hover / Touch Quick Action Trigger */}
@@ -1345,6 +1692,24 @@ export function ChatWindow({
                       <Copy className="w-3.5 h-3.5" aria-hidden="true" />
                       <span>نسخ النص</span>
                     </button>
+                    {Boolean(getTranslatableMessageText(msg)) && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setActiveMsgMenu(null);
+                          if (translatedMessages[msg.id]) {
+                            handleHideTranslation(msg.id);
+                          } else {
+                            void handleTranslateMessage(msg);
+                          }
+                        }}
+                        className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+                      >
+                        <Languages className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
+                        <span>{translatedMessages[msg.id] ? 'إخفاء الترجمة' : 'ترجمة الرسالة'}</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       role="menuitem"
@@ -1357,6 +1722,20 @@ export function ChatWindow({
                       <Lock className="w-3.5 h-3.5" aria-hidden="true" />
                       <span>معاينة النص المشفر</span>
                     </button>
+                    {isMine && !msg.isDeleted && msg.status !== 'sending' && msg.status !== 'failed' && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setActiveMsgMenu(null);
+                          setActiveReceiptMsgId(msg.id);
+                        }}
+                        className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer"
+                      >
+                        <CheckCheck className="w-3.5 h-3.5 text-[#0284C7] dark:text-[#53BDEB]" aria-hidden="true" />
+                        <span>حالة الاستلام والقراءة</span>
+                      </button>
+                    )}
                     {isMine && !msg.isDeleted && (msg.type === 'text' || msg.type === 'image') && onEditMessage && (
                       <button
                         type="button"
@@ -1414,7 +1793,10 @@ export function ChatWindow({
           );
         })}
         <div ref={bottomRef} />
-      </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Reply / Edit Preview Strip */}
       {(replyTo || editingMsg) && (
@@ -1452,7 +1834,23 @@ export function ChatWindow({
         data-chat-floating="true"
         className="px-2.5 sm:px-3 py-2.5 pb-safe bg-[#F0F2F5] dark:bg-[#202C33] border-t border-[#E9EDEF] dark:border-[#222D34] relative shrink-0"
       >
-        {chat.type === 'community' && chat.adminOnlyPost && chat.id.startsWith('channel_') ? (
+        {chat.type === 'direct' && isPeerBlocked ? (
+          <div className="py-2.5 px-3.5 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 flex flex-wrap items-center justify-between gap-2 text-xs text-red-700 dark:text-red-300">
+            <div className="flex items-center gap-2 min-w-0">
+              <Ban className="w-4 h-4 shrink-0" aria-hidden="true" />
+              <span>لقد قمت بحظر جهة الاتصال هذه — تم منع الرسائل والمكالمات بينكما.</span>
+            </div>
+            {onUnblockPeer && (
+              <button
+                type="button"
+                onClick={() => void onUnblockPeer()}
+                className="px-3 py-1 rounded-lg bg-white dark:bg-[#111B21] border border-red-200 dark:border-red-800 text-xs font-bold text-[#111B21] dark:text-[#E9EDEF] hover:brightness-95 cursor-pointer"
+              >
+                إلغاء الحظر
+              </button>
+            )}
+          </div>
+        ) : chat.type === 'community' && chat.adminOnlyPost && chat.id.startsWith('channel_') ? (
           <div className="py-2 px-3 rounded-xl bg-white/80 dark:bg-[#111B21]/70 text-center text-xs text-[#54656F] dark:text-[#AEBAC1] flex items-center justify-center gap-2">
             <Lock className="w-3.5 h-3.5 text-[var(--wa-accent)] shrink-0" aria-hidden="true" />
             <span>

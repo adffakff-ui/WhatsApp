@@ -431,6 +431,110 @@ export function resolveMessageReceiptStatus(
   return 'sent';
 }
 
+export interface MessageReceiptDetails {
+  status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+  deliveredPeerIds: string[];
+  readPeerIds: string[];
+  deliveredOnlyPeerIds: string[];
+  label: string;
+  description: string;
+}
+
+/**
+ * Derives full message receipt indicator details directly from deliveredToIds and readByIds
+ * (while preserving transient client-side 'sending' and 'failed' transport states).
+ */
+export function getMessageReceiptDetails(
+  msg: Pick<DecryptedMessage, 'senderId' | 'deliveredToIds' | 'readByIds' | 'status'>,
+  isGroupChat = false
+): MessageReceiptDetails {
+  const readSet = new Set<string>();
+  if (Array.isArray(msg.readByIds)) {
+    for (const id of msg.readByIds) {
+      if (id && id !== msg.senderId) readSet.add(id);
+    }
+  }
+
+  const deliveredSet = new Set<string>(readSet);
+  if (Array.isArray(msg.deliveredToIds)) {
+    for (const id of msg.deliveredToIds) {
+      if (id && id !== msg.senderId) deliveredSet.add(id);
+    }
+  }
+
+  const readPeerIds = Array.from(readSet);
+  const deliveredPeerIds = Array.from(deliveredSet);
+  const deliveredOnlyPeerIds = deliveredPeerIds.filter((id) => !readSet.has(id));
+
+  if (msg.status === 'sending') {
+    return {
+      status: 'sending',
+      deliveredPeerIds,
+      readPeerIds,
+      deliveredOnlyPeerIds,
+      label: 'جاري الإرسال',
+      description: 'جاري إرسال الرسالة إلى الخادم...'
+    };
+  }
+
+  if (msg.status === 'failed') {
+    return {
+      status: 'failed',
+      deliveredPeerIds,
+      readPeerIds,
+      deliveredOnlyPeerIds,
+      label: 'تعذر الإرسال',
+      description: 'تعذر الإرسال، اضغط إعادة للمحاولة'
+    };
+  }
+
+  const fallbackStatus =
+    msg.status === 'read' || msg.status === 'delivered' ? msg.status : 'sent';
+  const resolved = resolveMessageReceiptStatus(
+    msg.senderId,
+    deliveredPeerIds.length > 0 ? [msg.senderId, ...deliveredPeerIds] : msg.deliveredToIds,
+    readPeerIds.length > 0 ? [msg.senderId, ...readPeerIds] : msg.readByIds,
+    fallbackStatus
+  );
+
+  if (resolved === 'read') {
+    return {
+      status: 'read',
+      deliveredPeerIds,
+      readPeerIds,
+      deliveredOnlyPeerIds,
+      label: 'مقروءة',
+      description:
+        isGroupChat && readPeerIds.length > 0
+          ? `مقروءة لدى ${readPeerIds.length}`
+          : 'مقروءة • تمت القراءة والمشاهدة'
+    };
+  }
+
+  if (resolved === 'delivered') {
+    return {
+      status: 'delivered',
+      deliveredPeerIds,
+      readPeerIds,
+      deliveredOnlyPeerIds,
+      label: 'مستلمة',
+      description:
+        isGroupChat && deliveredPeerIds.length > 0
+          ? `مستلمة لدى ${deliveredPeerIds.length}`
+          : 'مستلمة • وصلت إلى جهاز الطرف الآخر'
+    };
+  }
+
+  return {
+    status: 'sent',
+    deliveredPeerIds,
+    readPeerIds,
+    deliveredOnlyPeerIds,
+    label: 'مرسلة',
+    description: 'مرسلة • لم تُستلم على جهاز الطرف الآخر بعد'
+  };
+}
+
 export function mergePollVotesMap(
   options: PollOption[],
   pollVotes?: Record<string, string>

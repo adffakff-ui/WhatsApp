@@ -4,8 +4,10 @@ import {
   generateIdentityKeyPair,
   deriveSharedSecretKey,
   deriveRoomKeyFromSeed,
+  deriveCandidateRoomKeysForDecryption,
   encryptPayload,
   decryptPayload,
+  decryptPayloadWithAnyKey,
   computeSafetyNumber
 } from './crypto';
 
@@ -39,6 +41,19 @@ test('Decryption fails with wrong key or tampered ciphertext', async () => {
     },
     'Expected AES-GCM authentication tag failure when decrypting with wrong key'
   );
+});
+
+test('decryptPayloadWithAnyKey resolves valid key among candidate keys cleanly', async () => {
+  const keyPrimary = await deriveRoomKeyFromSeed('chat_room_1');
+  const keyWrong = await deriveRoomKeyFromSeed('chat_room_2');
+  const envelope = await encryptPayload('رسالة متزامنة بين الطرفين', keyPrimary);
+
+  const candidates = await deriveCandidateRoomKeysForDecryption('chat_room_1');
+  const decoded = await decryptPayloadWithAnyKey(envelope.ciphertext, envelope.iv, [
+    keyWrong,
+    ...candidates
+  ]);
+  assert.equal(decoded, 'رسالة متزامنة بين الطرفين');
 });
 
 test('Safety number is symmetric and formatted into 12 groups of 5 digits', async () => {

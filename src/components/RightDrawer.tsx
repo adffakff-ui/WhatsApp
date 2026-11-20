@@ -23,11 +23,15 @@ import {
   ExternalLink,
   Download,
   Copy,
-  Megaphone
+  Megaphone,
+  Palette,
+  RotateCcw,
+  Ban
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { HighlightText } from './HighlightText';
 import { GROUP_ICON_PRESETS } from '../data/assets';
+import { resolveChatWallpaper } from '../lib/chatWallpaper';
 import {
   buildChannelInviteCode,
   extractChatSharedAssets,
@@ -38,7 +42,13 @@ import {
   validateAvatarUrl,
   type SharedMediaItem
 } from '../lib/chatLogic';
-import type { ChatRoom, DecryptedMessage, RightPanelMode, UserProfile } from '../types/chat';
+import type {
+  ChatRoom,
+  ChatWallpaperId,
+  DecryptedMessage,
+  RightPanelMode,
+  UserProfile
+} from '../types/chat';
 
 interface RightDrawerProps {
   mode: RightPanelMode;
@@ -65,6 +75,11 @@ interface RightDrawerProps {
   onInviteMemberToGroup: (chatId: string, contact: UserProfile) => Promise<void>;
   onRemoveMemberFromGroup: (chatId: string, memberUid: string) => Promise<void>;
   onJumpToMessage?: (messageId: string, query?: string) => void;
+  globalWallpaper?: ChatWallpaperId;
+  onOpenWallpaperPicker?: (chatId: string) => void;
+  onResetChatWallpaper?: (chatId: string) => void;
+  isPeerBlocked?: boolean;
+  onToggleBlockPeer?: () => Promise<void> | void;
 }
 
 async function compressGroupIcon(file: File): Promise<string> {
@@ -114,7 +129,12 @@ export function RightDrawer({
   onUpdateGroupSettings,
   onInviteMemberToGroup,
   onRemoveMemberFromGroup,
-  onJumpToMessage
+  onJumpToMessage,
+  globalWallpaper = 'pattern',
+  onOpenWallpaperPicker,
+  onResetChatWallpaper,
+  isPeerBlocked = false,
+  onToggleBlockPeer
 }: RightDrawerProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [isEditingGroup, setIsEditingGroup] = useState(false);
@@ -752,6 +772,66 @@ export function RightDrawer({
               </div>
             </div>
 
+            {/* Per-Chat Wallpaper Selector */}
+            {onOpenWallpaperPicker && (() => {
+              const resolvedWp = resolveChatWallpaper(chat.wallpaper, globalWallpaper);
+              return (
+                <div className="space-y-2.5 pb-4 border-b border-[#F0F2F5] dark:border-[#222D34]">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-[#111B21] dark:text-[#E9EDEF]">
+                      <Palette className="w-4 h-4 text-[#00A884]" aria-hidden="true" />
+                      <span>خلفية المحادثة</span>
+                    </div>
+                    {resolvedWp.isCustomOverride && onResetChatWallpaper && (
+                      <button
+                        type="button"
+                        onClick={() => onResetChatWallpaper(chat.id)}
+                        className="text-[11px] font-semibold text-[#54656F] dark:text-[#AEBAC1] hover:text-red-600 dark:hover:text-red-400 flex items-center gap-1 cursor-pointer"
+                      >
+                        <RotateCcw className="w-3 h-3" aria-hidden="true" />
+                        <span>استعادة الافتراضي</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="p-2.5 rounded-xl bg-[#F8FAFB] dark:bg-[#182229] border border-[#E9EDEF] dark:border-[#222D34] flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span
+                        className={`w-10 h-10 rounded-xl border border-black/10 dark:border-white/10 shrink-0 ${
+                          resolvedWp.mode === 'image' ? 'bg-cover bg-center' : resolvedWp.className
+                        }`}
+                        style={
+                          resolvedWp.imageUrl
+                            ? { backgroundImage: `url("${resolvedWp.imageUrl}")` }
+                            : resolvedWp.swatchColor
+                              ? { backgroundColor: resolvedWp.swatchColor }
+                              : resolvedWp.style
+                        }
+                      />
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-[#111B21] dark:text-[#E9EDEF] truncate">
+                          {resolvedWp.label}
+                        </p>
+                        <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate">
+                          {resolvedWp.isCustomOverride
+                            ? 'مخصصة لهذه المحادثة في حسابك'
+                            : 'تتبع الخلفية العامة للتطبيق'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => onOpenWallpaperPicker(chat.id)}
+                      className="shrink-0 px-3 py-1.5 rounded-lg bg-[var(--wa-accent-soft)] text-[var(--wa-accent-strong)] text-xs font-bold hover:brightness-95 cursor-pointer"
+                    >
+                      تغيير
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Actions */}
             <div className="space-y-1">
               <button
@@ -794,6 +874,20 @@ export function RightDrawer({
                   <span>{chat.archived ? 'إلغاء الأرشفة' : 'أرشفة الدردشة'}</span>
                 </span>
               </button>
+              {chat.type === 'direct' && onToggleBlockPeer && (
+                <button
+                  type="button"
+                  onClick={() => void onToggleBlockPeer()}
+                  className={`w-full px-3 py-2.5 rounded-xl flex items-center gap-3 text-sm cursor-pointer ${
+                    isPeerBlocked
+                      ? 'hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300'
+                      : 'hover:bg-red-50 dark:hover:bg-red-950/30 text-red-600 dark:text-red-400'
+                  }`}
+                >
+                  <Ban className="w-4 h-4" aria-hidden="true" />
+                  <span>{isPeerBlocked ? 'إلغاء حظر جهة الاتصال' : 'حظر جهة الاتصال'}</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => onClearChat(chat.id)}

@@ -17,8 +17,15 @@ import {
   where,
   writeBatch
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { decryptPayload, deriveRoomKeyFromSeed, encryptPayload, type IdentityKeys } from '../lib/crypto';
+import { db, handleFirestoreError, isTransientFirestoreError, OperationType } from '../lib/firebase';
+import {
+  decryptPayloadWithAnyKey,
+  deriveCandidateRoomKeysForDecryption,
+  deriveRoomKeyFromSeed,
+  encryptPayload,
+  type IdentityKeys,
+  type RoomKeyHint
+} from '../lib/crypto';
 import {
   buildChannelInviteCode,
   filterActiveStatuses,
@@ -33,7 +40,10 @@ import {
   validateWasilId
 } from '../lib/chatLogic';
 import { isDeviceSessionActive } from '../lib/deviceSession';
+import { normalizeChatWallpaper } from '../lib/chatWallpaper';
+import { sanitizeBlockedContactInput } from '../lib/blockedContacts';
 import type {
+  BlockedContact,
   CallRecord,
   ChatRoom,
   DecryptedMessage,
@@ -354,6 +364,9 @@ export async function syncUserProfileToFirestore(
 
     await batch.commit();
 
+    // Best-effort background heal so existing chat member docs stay synced with authoritative publicKeyJwk
+    void syncPublicKeyToAllUserChats(user.uid, displayName, avatarUrl, safePublicKey);
+
     const privData = existingPriv || {};
     const hydratedPrivacy: PrivacySettings = {
       readReceipts: typeof privData.readReceipts === 'boolean' ? privData.readReceipts : true,
@@ -405,6 +418,44 @@ export async function syncUserProfileToFirestore(
       };
     }
     handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
+  }
+}
+
+export async function syncPublicKeyToAllUserChats(
+  uid: string,
+  displayName: string,
+  avatarUrl: string,
+  publicKeyJwk: string
+): Promise<void> {
+  const safeKey = sanitizePublicKeyJwk(publicKeyJwk);
+  if (!uid || !safeKey) return;
+  try {
+    const snap = await getDocs(query(collectionGroup(db, 'members'), where('uid', '==', uid)));
+    const safeName = (displayName || 'مستخدم تواصل').slice(0, 80);
+    const safeAvatar = (avatarUrl || '').slice(0, 65536);
+    const updates: Promise<void>[] = [];
+    for (const memberDoc of snap.docs) {
+      const data = memberDoc.data();
+      if (
+        data.publicKeyJwk !== safeKey ||
+        data.displayName !== safeName ||
+        data.avatarUrl !== safeAvatar
+      ) {
+        updates.push(
+          updateDoc(memberDoc.ref, {
+            displayName: safeName,
+            avatarUrl: safeAvatar,
+            publicKeyJwk: safeKey,
+            updatedAt: serverTimestamp()
+          }).catch(() => {})
+        );
+      }
+    }
+    if (updates.length > 0) {
+      await Promise.all(updates);
+    }
+  } catch {
+    // Non-fatal background sync
   }
 }
 
@@ -539,6 +590,7 @@ export function subscribeUserDevicesFromFirestore(
       onDevices(list);
     },
     (error) => {
+      if (isTransientFirestoreError(error)) return;
       handleFirestoreError(error, OperationType.LIST, `users/${uid}/devices`);
     }
   );
@@ -757,7 +809,16 @@ export async function createChatInFirestore(
     new Set([creator.uid, ...invitedContacts.map((c) => c.uid)])
   ).slice(0, 50);
 
-  const key = await deriveRoomKeyFromSeed(chatId);
+  const directPeer =
+    type === 'direct'
+      ? invitedContacts.find((c) => c.uid && c.uid !== creator.uid)
+      : undefined;
+  const key = await deriveRoomKeyFromSeed(
+    chatId,
+    directPeer
+      ? { peerUid: directPeer.uid, peerPublicKeyJwk: directPeer.publicKeyJwk }
+      : undefined
+  );
   const payload: MessagePayload = { text: initialMessageText };
   const envelope = await encryptPayload(JSON.stringify(payload), key);
   const inviteCode =
@@ -826,6 +887,7 @@ export async function createChatInFirestore(
     favorite: false,
     unreadCount: 0,
     disappearingSeconds: 0,
+    wallpaper: '',
     updatedAt: serverTimestamp()
   });
 
@@ -961,10 +1023,11 @@ export async function sendEncryptedMessageToFirestore(
   payload: MessagePayload,
   viewerIds: string[],
   replyToId?: string,
-  customMsgId?: string
+  customMsgId?: string,
+  roomKeyHint?: RoomKeyHint
 ): Promise<string> {
   const msgId = customMsgId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-  const key = await deriveRoomKeyFromSeed(roomSeed);
+  const key = await deriveRoomKeyFromSeed(roomSeed, roomKeyHint);
   const envelope = await encryptPayload(JSON.stringify(payload), key);
 
   const batch = writeBatch(db);
@@ -1074,10 +1137,11 @@ export async function editEncryptedMessageInFirestore(
   messageId: string,
   roomSeed: string,
   newPayload: MessagePayload,
-  updateChatLastMessage = false
+  updateChatLastMessage = false,
+  roomKeyHint?: RoomKeyHint
 ): Promise<{ ciphertext: string; iv: string; algorithm: string }> {
   const path = `chats/${chatId}/messages/${messageId}`;
-  const key = await deriveRoomKeyFromSeed(roomSeed);
+  const key = await deriveRoomKeyFromSeed(roomSeed, roomKeyHint);
   const envelope = await encryptPayload(
     JSON.stringify({ ...newPayload, edited: true }),
     key
@@ -1197,9 +1261,11 @@ export async function saveChatPrefToFirestore(
     favorite: boolean;
     unreadCount: number;
     disappearingSeconds: number;
+    wallpaper?: string;
   }
 ): Promise<void> {
   const path = `users/${uid}/chatPrefs/${chatId}`;
+  const normalizedWallpaper = normalizeChatWallpaper(pref.wallpaper);
   try {
     await setDoc(doc(db, 'users', uid, 'chatPrefs', chatId), {
       chatId,
@@ -1210,6 +1276,7 @@ export async function saveChatPrefToFirestore(
       favorite: Boolean(pref.favorite),
       unreadCount: Math.max(0, Math.min(10000, Math.floor(pref.unreadCount))),
       disappearingSeconds: Math.max(0, Math.min(7776000, Math.floor(pref.disappearingSeconds))),
+      wallpaper: normalizedWallpaper,
       updatedAt: serverTimestamp()
     });
   } catch (error) {
@@ -1224,6 +1291,7 @@ interface LiveChatSlot {
   peerProfileData: Record<string, unknown> | null;
   previewText: string;
   lastCipherSignature: string;
+  lastPeerKeySignature: string;
   peerUid?: string;
   unsubs: (() => void)[];
 }
@@ -1313,6 +1381,7 @@ export function subscribeUserChatsFromFirestore(
         unreadCount: resolvedUnread,
         disappearingSeconds:
           typeof pref.disappearingSeconds === 'number' ? pref.disappearingSeconds : 0,
+        wallpaper: normalizeChatWallpaper(pref.wallpaper),
         ...(typeof c.adminOnlyPost === 'boolean' ? { adminOnlyPost: c.adminOnlyPost } : {}),
         ...(typeof c.inviteCode === 'string' ? { inviteCode: c.inviteCode } : {}),
         lastMessagePreview: slot.previewText,
@@ -1354,11 +1423,44 @@ export function subscribeUserChatsFromFirestore(
       peerProfileData: null,
       previewText: 'رسالة مشفرة 🔒',
       lastCipherSignature: '',
+      lastPeerKeySignature: '',
       unsubs: []
     };
     slots.set(chatId, slot);
 
     let peerWatchedUid: string | null = null;
+
+    const refreshPreviewDecryption = async (force = false) => {
+      const c = slot.chatData;
+      if (!c) return;
+      const peerKeyHint =
+        (slot.peerProfileData?.publicKeyJwk as string) ||
+        (slot.peerMemberData?.publicKeyJwk as string) ||
+        undefined;
+      const sig = `${c.lastMessageCiphertext || ''}|${c.lastMessageIv || ''}|${peerKeyHint || ''}`;
+      if (!force && sig === slot.lastCipherSignature) return;
+      slot.lastCipherSignature = sig;
+      if (c.lastMessageCiphertext && c.lastMessageIv) {
+        try {
+          const candidateKeys = await deriveCandidateRoomKeysForDecryption(chatId, {
+            peerUid: slot.peerUid,
+            peerPublicKeyJwk: peerKeyHint
+          });
+          const raw = await decryptPayloadWithAnyKey(
+            c.lastMessageCiphertext as string,
+            c.lastMessageIv as string,
+            candidateKeys
+          );
+          const parsed = JSON.parse(raw) as MessagePayload;
+          slot.previewText = parsed.text || 'رسالة مشفرة';
+        } catch {
+          slot.previewText = 'رسالة مشفرة 🔒';
+        }
+      } else {
+        slot.previewText = 'رسالة مشفرة 🔒';
+      }
+      scheduleEmit();
+    };
 
     const unsubChat = onSnapshot(
       doc(db, 'chats', chatId),
@@ -1371,27 +1473,6 @@ export function subscribeUserChatsFromFirestore(
         const c = chatSnap.data({ serverTimestamps: 'estimate' });
         slot.chatData = c;
 
-        const sig = `${c.lastMessageCiphertext || ''}|${c.lastMessageIv || ''}`;
-        if (sig !== slot.lastCipherSignature) {
-          slot.lastCipherSignature = sig;
-          if (c.lastMessageCiphertext && c.lastMessageIv) {
-            try {
-              const key = await deriveRoomKeyFromSeed(chatId);
-              const raw = await decryptPayload(
-                c.lastMessageCiphertext as string,
-                c.lastMessageIv as string,
-                key
-              );
-              const parsed = JSON.parse(raw) as MessagePayload;
-              slot.previewText = parsed.text || 'رسالة مشفرة';
-            } catch {
-              slot.previewText = 'رسالة مشفرة 🔒';
-            }
-          } else {
-            slot.previewText = 'رسالة مشفرة 🔒';
-          }
-        }
-
         if (c.type === 'direct' && Array.isArray(c.memberIds)) {
           const detectedPeer = (c.memberIds as string[]).find((id) => id && id !== uid) || null;
           if (detectedPeer && detectedPeer !== peerWatchedUid) {
@@ -1403,7 +1484,13 @@ export function subscribeUserChatsFromFirestore(
               (pmSnap) => {
                 if (pmSnap.exists()) {
                   slot.peerMemberData = pmSnap.data({ serverTimestamps: 'estimate' });
-                  scheduleEmit();
+                  const nextKeySig = `${slot.peerProfileData?.publicKeyJwk || ''}|${slot.peerMemberData?.publicKeyJwk || ''}`;
+                  if (nextKeySig !== slot.lastPeerKeySignature) {
+                    slot.lastPeerKeySignature = nextKeySig;
+                    void refreshPreviewDecryption(true);
+                  } else {
+                    scheduleEmit();
+                  }
                 }
               },
               () => {}
@@ -1414,7 +1501,13 @@ export function subscribeUserChatsFromFirestore(
               (ppSnap) => {
                 if (ppSnap.exists()) {
                   slot.peerProfileData = ppSnap.data();
-                  scheduleEmit();
+                  const nextKeySig = `${slot.peerProfileData?.publicKeyJwk || ''}|${slot.peerMemberData?.publicKeyJwk || ''}`;
+                  if (nextKeySig !== slot.lastPeerKeySignature) {
+                    slot.lastPeerKeySignature = nextKeySig;
+                    void refreshPreviewDecryption(true);
+                  } else {
+                    scheduleEmit();
+                  }
                 }
               },
               () => {}
@@ -1424,6 +1517,7 @@ export function subscribeUserChatsFromFirestore(
           }
         }
 
+        await refreshPreviewDecryption(false);
         scheduleEmit();
       },
       () => {}
@@ -1468,6 +1562,7 @@ export function subscribeUserChatsFromFirestore(
       }
     },
     (error) => {
+      if (isTransientFirestoreError(error)) return;
       handleFirestoreError(error, OperationType.LIST, 'members');
     }
   );
@@ -1488,7 +1583,8 @@ export function subscribeChatMessagesFromFirestore(
   chatId: string,
   roomSeed: string,
   uid: string,
-  onMessages: (messages: DecryptedMessage[]) => void
+  onMessages: (messages: DecryptedMessage[]) => void,
+  roomKeyHint?: RoomKeyHint
 ): () => void {
   const q = query(
     collection(db, 'chats', chatId, 'messages'),
@@ -1498,13 +1594,13 @@ export function subscribeChatMessagesFromFirestore(
   return onSnapshot(
     q,
     async (snapshot) => {
-      const key = await deriveRoomKeyFromSeed(roomSeed);
+      const candidateKeys = await deriveCandidateRoomKeysForDecryption(roomSeed, roomKeyHint);
       const list: DecryptedMessage[] = [];
       for (const docSnap of snapshot.docs) {
         const d = docSnap.data({ serverTimestamps: 'estimate' });
         let payload: MessagePayload = { text: 'تعذر فك التشفير' };
         try {
-          const decoded = await decryptPayload(d.ciphertext, d.iv, key);
+          const decoded = await decryptPayloadWithAnyKey(d.ciphertext, d.iv, candidateKeys);
           payload = JSON.parse(decoded) as MessagePayload;
         } catch {
           payload = { text: '🔒 رسالة مشفرة بمفتاح مختلف' };
@@ -1576,16 +1672,22 @@ export function subscribeChatMessagesFromFirestore(
       onMessages(list);
     },
     (error) => {
+      if (isTransientFirestoreError(error)) return;
       handleFirestoreError(error, OperationType.LIST, `chats/${chatId}/messages`);
     }
   );
 }
 
+export interface MultiChatSyncTarget {
+  id: string;
+  roomSeed: string;
+  lastMessageAtMs: number;
+  peerUid?: string;
+  peerPublicKeyJwk?: string;
+}
+
 export interface MultiChatMessageSyncController {
-  syncTargets: (
-    targets: Array<{ id: string; roomSeed: string; lastMessageAtMs: number }>,
-    prioritizedChatId: string | null
-  ) => void;
+  syncTargets: (targets: MultiChatSyncTarget[], prioritizedChatId: string | null) => void;
   resubscribeAll: () => void;
   dispose: () => void;
 }
@@ -1600,13 +1702,13 @@ export function createMultiChatMessageSyncController(
   onChatMessages: (chatId: string, messages: DecryptedMessage[]) => void
 ): MultiChatMessageSyncController {
   const MAX_LIVE_CHATS = 25;
-  const activeSubs = new Map<string, { roomSeed: string; unsub: () => void }>();
-  let latestTargets: Array<{ id: string; roomSeed: string; lastMessageAtMs: number }> = [];
+  const activeSubs = new Map<string, { signature: string; unsub: () => void }>();
+  let latestTargets: MultiChatSyncTarget[] = [];
   let latestPriorityId: string | null = null;
   let disposed = false;
 
   const applyTargets = (
-    targets: Array<{ id: string; roomSeed: string; lastMessageAtMs: number }>,
+    targets: MultiChatSyncTarget[],
     prioritizedChatId: string | null
   ) => {
     if (disposed) return;
@@ -1622,22 +1724,40 @@ export function createMultiChatMessageSyncController(
     });
 
     const selected = sorted.slice(0, MAX_LIVE_CHATS);
-    const desiredMap = new Map(selected.map((t) => [t.id, t.roomSeed || t.id]));
+    const desiredMap = new Map(
+      selected.map((t) => [
+        t.id,
+        {
+          roomSeed: t.roomSeed || t.id,
+          signature: `${t.roomSeed || t.id}|${t.peerPublicKeyJwk || ''}`,
+          hint:
+            t.peerUid || t.peerPublicKeyJwk
+              ? { peerUid: t.peerUid, peerPublicKeyJwk: t.peerPublicKeyJwk }
+              : undefined
+        }
+      ])
+    );
 
     for (const [chatId, entry] of activeSubs.entries()) {
-      const nextSeed = desiredMap.get(chatId);
-      if (!nextSeed || nextSeed !== entry.roomSeed) {
+      const next = desiredMap.get(chatId);
+      if (!next || next.signature !== entry.signature) {
         entry.unsub();
         activeSubs.delete(chatId);
       }
     }
 
-    for (const [chatId, roomSeed] of desiredMap.entries()) {
+    for (const [chatId, next] of desiredMap.entries()) {
       if (!activeSubs.has(chatId)) {
-        const unsub = subscribeChatMessagesFromFirestore(chatId, roomSeed, uid, (msgs) => {
-          onChatMessages(chatId, msgs);
-        });
-        activeSubs.set(chatId, { roomSeed, unsub });
+        const unsub = subscribeChatMessagesFromFirestore(
+          chatId,
+          next.roomSeed,
+          uid,
+          (msgs) => {
+            onChatMessages(chatId, msgs);
+          },
+          next.hint
+        );
+        activeSubs.set(chatId, { signature: next.signature, unsub });
       }
     }
   };
@@ -1788,6 +1908,7 @@ export function subscribeStatusesFromFirestore(
       onStatuses(filterActiveStatuses(rawItems, nowMs));
     },
     (error) => {
+      if (isTransientFirestoreError(error)) return;
       handleFirestoreError(error, OperationType.LIST, 'statuses');
     }
   );
@@ -1959,6 +2080,7 @@ export function subscribeCallDocument(
       });
     },
     (error) => {
+      if (isTransientFirestoreError(error)) return;
       handleFirestoreError(error, OperationType.GET, `calls/${callId}`);
     }
   );
@@ -1993,6 +2115,7 @@ export function subscribeCallIceCandidates(
       }
     },
     (error) => {
+      if (isTransientFirestoreError(error)) return;
       handleFirestoreError(error, OperationType.LIST, `calls/${callId}/candidates`);
     }
   );
@@ -2039,6 +2162,7 @@ export function subscribeIncomingCallsFromFirestore(
       });
     },
     (error) => {
+      if (isTransientFirestoreError(error)) return;
       handleFirestoreError(error, OperationType.LIST, 'calls');
     }
   );
@@ -2104,6 +2228,7 @@ export function subscribeCallsFromFirestore(
       emitMerged();
     },
     (error) => {
+      if (isTransientFirestoreError(error)) return;
       handleFirestoreError(error, OperationType.LIST, 'calls');
     }
   );
@@ -2119,6 +2244,7 @@ export function subscribeCallsFromFirestore(
       emitMerged();
     },
     (error) => {
+      if (isTransientFirestoreError(error)) return;
       handleFirestoreError(error, OperationType.LIST, 'calls');
     }
   );
@@ -2183,6 +2309,7 @@ export function subscribeScheduledMessagesFromFirestore(
       onUpdate(list);
     },
     (error) => {
+      if (isTransientFirestoreError(error)) return;
       handleFirestoreError(error, OperationType.LIST, 'scheduled_messages');
     }
   );
@@ -2317,4 +2444,96 @@ export async function restoreUserDataFromFirestore(uid: string): Promise<Record<
     return null;
   }
 }
+
+export async function blockUserInFirestore(
+  myUid: string,
+  target: Pick<UserProfile, 'uid' | 'displayName' | 'wasilId' | 'avatarUrl'>
+): Promise<BlockedContact> {
+  const sanitized = sanitizeBlockedContactInput(myUid, target);
+  const path = `users/${sanitized.uid}/blockedUsers/${sanitized.blockedUid}`;
+  const docRef = doc(db, 'users', sanitized.uid, 'blockedUsers', sanitized.blockedUid);
+
+  try {
+    const existingSnap = await getDoc(docRef);
+    const nowMs = Date.now();
+    if (existingSnap.exists()) {
+      await updateDoc(docRef, {
+        displayName: sanitized.displayName,
+        wasilId: sanitized.wasilId,
+        avatarUrl: sanitized.avatarUrl,
+        updatedAt: serverTimestamp()
+      });
+      return {
+        ...sanitized,
+        createdAtMs: toMillis(existingSnap.data().createdAt) || nowMs,
+        updatedAtMs: nowMs
+      };
+    }
+
+    await setDoc(docRef, {
+      uid: sanitized.uid,
+      blockedUid: sanitized.blockedUid,
+      displayName: sanitized.displayName,
+      wasilId: sanitized.wasilId,
+      avatarUrl: sanitized.avatarUrl,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+
+    return {
+      ...sanitized,
+      createdAtMs: nowMs,
+      updatedAtMs: nowMs
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+    throw error;
+  }
+}
+
+export async function unblockUserInFirestore(
+  myUid: string,
+  blockedUid: string
+): Promise<void> {
+  const cleanMyUid = (myUid || '').trim();
+  const cleanBlockedUid = (blockedUid || '').trim();
+  if (!cleanMyUid || !cleanBlockedUid) return;
+  const path = `users/${cleanMyUid}/blockedUsers/${cleanBlockedUid}`;
+  try {
+    await deleteDoc(doc(db, 'users', cleanMyUid, 'blockedUsers', cleanBlockedUid));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export function subscribeBlockedUsersFromFirestore(
+  myUid: string,
+  onBlockedUsers: (list: BlockedContact[]) => void
+): () => void {
+  const q = query(collection(db, 'users', myUid, 'blockedUsers'), where('uid', '==', myUid));
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const list: BlockedContact[] = snapshot.docs.map((docSnap) => {
+        const d = docSnap.data({ serverTimestamps: 'estimate' });
+        return {
+          uid: (d.uid as string) || myUid,
+          blockedUid: (d.blockedUid as string) || docSnap.id,
+          displayName: (d.displayName as string) || docSnap.id,
+          wasilId: (d.wasilId as string) || '',
+          avatarUrl: (d.avatarUrl as string) || '',
+          createdAtMs: toMillis(d.createdAt),
+          updatedAtMs: toMillis(d.updatedAt)
+        };
+      });
+      list.sort((a, b) => b.createdAtMs - a.createdAtMs);
+      onBlockedUsers(list);
+    },
+    (error) => {
+      if (isTransientFirestoreError(error)) return;
+      handleFirestoreError(error, OperationType.LIST, `users/${myUid}/blockedUsers`);
+    }
+  );
+}
+
 

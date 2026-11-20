@@ -33,7 +33,8 @@ export const DEFAULT_OMAR_SETTINGS: OmarSettings = {
   biometricEnrolledAtMs: 0,
   biometricDeviceLabel: '',
   dndMode: false,
-  showStoriesTray: true
+  showStoriesTray: true,
+  preferredLanguage: 'ar'
 };
 
 export interface OmarThemeMeta {

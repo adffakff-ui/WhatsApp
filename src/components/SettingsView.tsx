@@ -17,13 +17,18 @@ import {
   Edit3,
   Smartphone,
   Laptop,
-  RefreshCw
+  RefreshCw,
+  Languages,
+  Ban,
+  Search,
+  UserX
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { BiometricLockPanel } from './BiometricLockPanel';
 import { PWAInstallButton } from './PWAInstallButton';
 import { PRESET_AVATARS } from '../data/assets';
 import {
+  formatWhatsAppTime,
   getVisibilityLabel,
   normalizeWasilId,
   validateAvatarUrl,
@@ -31,8 +36,13 @@ import {
   validateWasilId
 } from '../lib/chatLogic';
 import { formatDeviceLastActive, isDeviceSessionActive } from '../lib/deviceSession';
+import {
+  SUPPORTED_TRANSLATION_LANGUAGES,
+  type TranslationLangCode
+} from '../lib/translation';
 import { checkWasilIdAvailability } from '../services/firestoreSync';
 import type {
+  BlockedContact,
   DeviceSession,
   OmarSettings,
   PrivacySettings,
@@ -63,6 +73,11 @@ interface SettingsViewProps {
   onOpenOmarAddons?: () => void;
   onBackupData?: () => Promise<void>;
   onRestoreData?: () => Promise<void>;
+  contacts?: UserProfile[];
+  blockedContacts?: BlockedContact[];
+  onBlockContact?: (target: UserProfile) => Promise<void>;
+  onUnblockContact?: (blockedUid: string) => Promise<void>;
+  onLookupUser?: (query: string) => Promise<UserProfile | null>;
 }
 
 async function compressImageToAvatarDataUrl(file: File): Promise<string> {
@@ -116,7 +131,12 @@ export function SettingsView({
   onGoogleSignIn,
   onOpenOmarAddons,
   onBackupData,
-  onRestoreData
+  onRestoreData,
+  contacts = [],
+  blockedContacts = [],
+  onBlockContact,
+  onUnblockContact,
+  onLookupUser
 }: SettingsViewProps) {
   const [displayName, setDisplayName] = useState(currentUser.displayName);
   const [about, setAbout] = useState(currentUser.about);
@@ -132,6 +152,11 @@ export function SettingsView({
   const [wasilIdError, setWasilIdError] = useState<string | null>(null);
   const [savingWasilId, setSavingWasilId] = useState(false);
   const [revokingDeviceId, setRevokingDeviceId] = useState<string | null>(null);
+  const [blockQuery, setBlockQuery] = useState('');
+  const [selectedContactToBlock, setSelectedContactToBlock] = useState('');
+  const [isBlockingContact, setIsBlockingContact] = useState(false);
+  const [unblockingUid, setUnblockingUid] = useState<string | null>(null);
+  const [blockError, setBlockError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -217,6 +242,68 @@ export function SettingsView({
       setWasilIdError(err instanceof Error ? err.message : 'تعذر تحديث المعرف.');
     } finally {
       setSavingWasilId(false);
+    }
+  };
+
+  const blockedUidSet = new Set(blockedContacts.map((b) => b.blockedUid));
+  const blockableContacts = contacts.filter(
+    (c) => c.uid && c.uid !== currentUser.uid && !blockedUidSet.has(c.uid) && !c.uid.startsWith('gcontact_')
+  );
+
+  const handleBlockByLookup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onBlockContact) return;
+    const trimmed = blockQuery.trim();
+    if (!trimmed) return;
+    setBlockError(null);
+
+    const localMatch = contacts.find(
+      (c) =>
+        c.uid === trimmed ||
+        (c.wasilId && c.wasilId.toLowerCase() === trimmed.toLowerCase()) ||
+        c.displayName.toLowerCase() === trimmed.toLowerCase()
+    );
+
+    setIsBlockingContact(true);
+    try {
+      let target: UserProfile | null = localMatch || null;
+      if (!target && onLookupUser) {
+        target = await onLookupUser(trimmed);
+      }
+      if (!target) {
+        setBlockError('لم يتم العثور على مستخدم بهذا المعرف (@wasilId) أو UID.');
+        return;
+      }
+      if (target.uid === currentUser.uid) {
+        setBlockError('لا يمكنك حظر حسابك الشخصي.');
+        return;
+      }
+      if (blockedUidSet.has(target.uid)) {
+        setBlockError('جهة الاتصال محظورة بالفعل.');
+        return;
+      }
+      await onBlockContact(target);
+      setBlockQuery('');
+    } catch (err) {
+      setBlockError(err instanceof Error ? err.message : 'تعذر حظر جهة الاتصال.');
+    } finally {
+      setIsBlockingContact(false);
+    }
+  };
+
+  const handleBlockFromSelect = async () => {
+    if (!onBlockContact || !selectedContactToBlock) return;
+    const target = blockableContacts.find((c) => c.uid === selectedContactToBlock);
+    if (!target) return;
+    setBlockError(null);
+    setIsBlockingContact(true);
+    try {
+      await onBlockContact(target);
+      setSelectedContactToBlock('');
+    } catch (err) {
+      setBlockError(err instanceof Error ? err.message : 'تعذر حظر جهة الاتصال.');
+    } finally {
+      setIsBlockingContact(false);
     }
   };
 
@@ -517,7 +604,176 @@ export function SettingsView({
                 ))}
               </select>
             </div>
+
+            {omarSettings && onUpdateOmarSettings && (
+              <div className="p-3 rounded-xl bg-[#F0F2F5] dark:bg-[#202C33] flex items-center justify-between gap-2 min-w-0">
+                <label
+                  htmlFor="preferred-translation-lang"
+                  className="text-xs sm:text-sm text-[#111B21] dark:text-[#E9EDEF] min-w-0 flex-1 truncate flex items-center gap-2"
+                >
+                  <Languages className="w-4 h-4 text-[var(--wa-accent)] shrink-0" aria-hidden="true" />
+                  <span className="truncate">لغة الترجمة المفضلة</span>
+                </label>
+                <select
+                  id="preferred-translation-lang"
+                  value={omarSettings.preferredLanguage || 'ar'}
+                  onChange={(e) => {
+                    onUpdateOmarSettings({
+                      preferredLanguage: e.target.value as TranslationLangCode
+                    });
+                    onShowToast?.('تم حفظ لغة الترجمة المفضلة');
+                  }}
+                  className="shrink-0 max-w-[46%] rounded-lg bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#374248] px-2.5 py-1.5 text-xs text-[#111B21] dark:text-[#E9EDEF] focus:outline-none"
+                >
+                  {SUPPORTED_TRANSLATION_LANGUAGES.map((lang) => (
+                    <option key={lang.code} value={lang.code}>
+                      {lang.arabicName} ({lang.nativeName})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
+
+          {/* Blocked Contacts Section */}
+          {onBlockContact && onUnblockContact && (
+            <section
+              aria-label="جهات الاتصال المحظورة"
+              className="space-y-3 pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-xs font-semibold text-[#54656F] dark:text-[#8696A0] flex items-center gap-1.5">
+                  <Ban className="w-3.5 h-3.5 text-red-500" aria-hidden="true" />
+                  <span>جهات الاتصال المحظورة ({blockedContacts.length})</span>
+                </h2>
+                <span className="text-[10px] font-semibold text-red-600 dark:text-red-400">
+                  منع نهائي للرسائل والمكالمات
+                </span>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-[#F0F2F5] dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#374248] space-y-3">
+                <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] leading-relaxed">
+                  لن يتمكن المستخدمون في هذه القائمة من مراسلتك أو الاتصال بك، ويتم حفظ الحظر ومزامنته عبر Firestore.
+                </p>
+
+                {/* Quick block from existing contacts */}
+                {blockableContacts.length > 0 && (
+                  <div className="flex items-center gap-2 min-w-0">
+                    <select
+                      aria-label="اختر جهة اتصال لحظرها"
+                      value={selectedContactToBlock}
+                      onChange={(e) => {
+                        setBlockError(null);
+                        setSelectedContactToBlock(e.target.value);
+                      }}
+                      className="flex-1 min-w-0 rounded-lg bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#374248] px-2.5 py-2 text-xs text-[#111B21] dark:text-[#E9EDEF] focus:outline-none focus:ring-2 focus:ring-red-400"
+                    >
+                      <option value="">اختر جهة اتصال من محادثاتك لحظرها...</option>
+                      {blockableContacts.map((c) => (
+                        <option key={c.uid} value={c.uid}>
+                          {c.displayName} {c.wasilId ? `(${c.wasilId})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={!selectedContactToBlock || isBlockingContact}
+                      onClick={() => void handleBlockFromSelect()}
+                      className="shrink-0 px-3 py-2 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700 disabled:opacity-50 flex items-center gap-1 cursor-pointer"
+                    >
+                      <Ban className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>حظر</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Block by @wasilId or UID */}
+                <form onSubmit={(e) => void handleBlockByLookup(e)} className="flex items-center gap-2 min-w-0">
+                  <div className="flex-1 min-w-0 flex items-center rounded-lg bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#374248] px-2.5">
+                    <Search className="w-3.5 h-3.5 text-[#667781] shrink-0 ml-1.5" aria-hidden="true" />
+                    <input
+                      type="text"
+                      dir="ltr"
+                      value={blockQuery}
+                      onChange={(e) => {
+                        setBlockError(null);
+                        setBlockQuery(e.target.value);
+                      }}
+                      placeholder="أضف للحظر عبر @wasilId أو UID"
+                      aria-label="البحث عن مستخدم لحظر جهته"
+                      className="w-full py-2 bg-transparent text-xs font-mono-code text-[#111B21] dark:text-[#E9EDEF] placeholder:text-[#667781] dark:placeholder:text-[#8696A0] focus:outline-none"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={!blockQuery.trim() || isBlockingContact}
+                    className="shrink-0 px-3 py-2 rounded-lg bg-[#111B21] dark:bg-[#2A3942] text-white text-xs font-bold hover:opacity-90 disabled:opacity-50 flex items-center gap-1 cursor-pointer"
+                  >
+                    <UserX className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>{isBlockingContact ? '...' : 'إضافة'}</span>
+                  </button>
+                </form>
+
+                {blockError && (
+                  <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">
+                    {blockError}
+                  </p>
+                )}
+
+                {/* Blocked Users List */}
+                {blockedContacts.length === 0 ? (
+                  <div className="py-3 px-2 rounded-xl bg-white/70 dark:bg-[#111B21]/60 text-center text-xs text-[#667781] dark:text-[#8696A0]">
+                    لا توجد جهات اتصال محظورة حالياً.
+                  </div>
+                ) : (
+                  <ul className="space-y-2 max-h-60 overflow-y-auto">
+                    {blockedContacts.map((item) => (
+                      <li
+                        key={item.blockedUid}
+                        className="p-2.5 rounded-xl bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#2A3942] flex items-center justify-between gap-2.5"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <Avatar src={item.avatarUrl} name={item.displayName} size="sm" />
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
+                              {item.displayName}
+                            </p>
+                            <p className="text-[10px] text-[#54656F] dark:text-[#8696A0] truncate">
+                              <span dir="ltr" className="font-mono-code">
+                                {item.wasilId || item.blockedUid.slice(0, 12)}
+                              </span>
+                              {' · '}
+                              <span>حُظر {formatWhatsAppTime(item.createdAtMs)}</span>
+                            </p>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={unblockingUid === item.blockedUid}
+                          onClick={() => {
+                            setUnblockingUid(item.blockedUid);
+                            void onUnblockContact(item.blockedUid)
+                              .catch(() => {
+                                onShowToast?.('تعذر إلغاء الحظر الآن، يرجى المحاولة مجدداً.');
+                              })
+                              .finally(() => {
+                                setUnblockingUid((curr) =>
+                                  curr === item.blockedUid ? null : curr
+                                );
+                              });
+                          }}
+                          className="shrink-0 px-2.5 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold hover:brightness-95 disabled:opacity-50 cursor-pointer"
+                        >
+                          {unblockingUid === item.blockedUid ? 'جاري الفك...' : 'إلغاء الحظر'}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </section>
+          )}
 
           {/* Biometric & App Lock Security Section */}
           {omarSettings && onUpdateOmarSettings && (

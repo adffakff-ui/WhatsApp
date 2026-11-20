@@ -44,8 +44,18 @@ export const CALL_QUALITY_PRESETS: Record<CallQualityPreset, QualityPresetConfig
   }
 };
 
-export const WEBRTC_RTC_CONFIG: RTCConfiguration = {
-  iceServers: [
+function readEnvVar(name: string): string {
+  try {
+    const metaEnv = (import.meta as unknown as { env?: Record<string, unknown> })?.env;
+    const val = metaEnv?.[name];
+    return typeof val === 'string' ? val.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+export function buildRtcConfiguration(): RTCConfiguration {
+  const iceServers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
@@ -53,11 +63,44 @@ export const WEBRTC_RTC_CONFIG: RTCConfiguration = {
     { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
     { urls: 'stun:stun.services.mozilla.com' }
-  ],
-  iceCandidatePoolSize: 10,
-  bundlePolicy: 'max-bundle',
-  rtcpMuxPolicy: 'require'
-};
+  ];
+
+  const customTurnUrl = readEnvVar('VITE_TURN_URL');
+  const customTurnUser = readEnvVar('VITE_TURN_USERNAME');
+  const customTurnCred = readEnvVar('VITE_TURN_CREDENTIAL');
+  if (customTurnUrl) {
+    iceServers.push({
+      urls: customTurnUrl.split(',').map((s) => s.trim()).filter(Boolean),
+      ...(customTurnUser ? { username: customTurnUser } : {}),
+      ...(customTurnCred ? { credential: customTurnCred } : {})
+    });
+  }
+
+  // Public Metered OpenRelay TURN fallback for symmetric NAT / cellular carrier traversal
+  iceServers.push(
+    {
+      urls: [
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:80?transport=tcp',
+        'turn:openrelay.metered.ca:443',
+        'turn:openrelay.metered.ca:443?transport=tcp',
+        'turns:openrelay.metered.ca:443?transport=tcp'
+      ],
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    }
+  );
+
+  return {
+    iceServers,
+    iceCandidatePoolSize: 10,
+    iceTransportPolicy: 'all',
+    bundlePolicy: 'max-bundle',
+    rtcpMuxPolicy: 'require'
+  };
+}
+
+export const WEBRTC_RTC_CONFIG: RTCConfiguration = buildRtcConfiguration();
 
 export function buildMediaConstraints(
   callType: 'audio' | 'video',
@@ -113,12 +156,36 @@ export async function acquireCallMediaStream(
       fallbackAudioOnly: false
     };
   } catch {
-    // If video failed (camera missing/blocked), fall back gracefully to audio-only
+    // Relax strict resolution / sample-rate constraints on mobile cameras before falling back to audio-only
     if (callType === 'video') {
       try {
-        const audioOnlyStream = await navigator.mediaDevices.getUserMedia(
-          buildMediaConstraints('audio', presetId, facingMode)
-        );
+        const relaxedStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
+          video: { facingMode }
+        });
+        return {
+          stream: relaxedStream,
+          hasVideo: relaxedStream.getVideoTracks().length > 0,
+          hasAudio: relaxedStream.getAudioTracks().length > 0,
+          fallbackAudioOnly: false
+        };
+      } catch {
+        // Ignore and try audio-only next
+      }
+
+      try {
+        const audioOnlyStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
+          video: false
+        });
         return {
           stream: audioOnlyStream,
           hasVideo: false,
@@ -129,7 +196,21 @@ export async function acquireCallMediaStream(
         return { stream: null, hasVideo: false, hasAudio: false, fallbackAudioOnly: false };
       }
     }
-    return { stream: null, hasVideo: false, hasAudio: false, fallbackAudioOnly: false };
+
+    try {
+      const relaxedAudio = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: false
+      });
+      return {
+        stream: relaxedAudio,
+        hasVideo: false,
+        hasAudio: relaxedAudio.getAudioTracks().length > 0,
+        fallbackAudioOnly: false
+      };
+    } catch {
+      return { stream: null, hasVideo: false, hasAudio: false, fallbackAudioOnly: false };
+    }
   }
 }
 

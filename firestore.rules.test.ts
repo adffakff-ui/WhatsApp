@@ -57,5 +57,17 @@ test('Dirty Dozen security invariants are enforced in firestore.rules', () => {
   assert.match(rulesContent, /match \/users\/\{userId\}\/devices\/\{deviceId\}/);
   assert.match(rulesContent, /isValidDeviceSession/);
   assert.match(rulesContent, /'identityPrivateKeyJwk'/);
+
+  // 14. Per-chat wallpaper preference strictly validated & owner-isolated
+  assert.match(rulesContent, /isValidWallpaper/);
+  assert.match(rulesContent, /'wallpaper'/);
+  assert.match(rulesContent, /val\.size\(\) <= 65536/);
+
+  // 15. Blocked contacts list is owner-isolated & enforced on direct messages & calls
+  assert.match(rulesContent, /match \/users\/\{userId\}\/blockedUsers\/\{blockedUid\}/);
+  assert.match(rulesContent, /isValidBlockedContact/);
+  assert.match(rulesContent, /incoming\(\)\.blockedUid != request\.auth\.uid/);
+  assert.match(rulesContent, /!isDirectPeerBlockedAfter\(chatId\)/);
+  assert.match(rulesContent, /!isBlockedBetween\(request\.auth\.uid, incoming\(\)\.calleeId\)/);
 });
 

@@ -7,12 +7,20 @@ import {
   enhanceSdpMediaQuality
 } from './webrtcConfig';
 
-test('CALL_QUALITY_PRESETS and WEBRTC_RTC_CONFIG define HD specs and STUN pool', () => {
+test('CALL_QUALITY_PRESETS and WEBRTC_RTC_CONFIG define HD specs and STUN/TURN pool', () => {
   assert.equal(CALL_QUALITY_PRESETS.ultra.height, 1080);
   assert.equal(CALL_QUALITY_PRESETS.ultra.videoMaxBitrateKbps, 2500);
   assert.equal(CALL_QUALITY_PRESETS.balanced.height, 720);
   assert.equal(CALL_QUALITY_PRESETS.saver.height, 480);
-  assert.ok((WEBRTC_RTC_CONFIG.iceServers?.length || 0) >= 3);
+  const servers = WEBRTC_RTC_CONFIG.iceServers || [];
+  assert.ok(servers.length >= 4);
+  assert.ok(
+    servers.some((srv) => {
+      const urls = Array.isArray(srv.urls) ? srv.urls : [srv.urls];
+      return urls.some((u) => u.startsWith('turn:') || u.startsWith('turns:'));
+    }),
+    'Expected at least one TURN relay server for symmetric NAT traversal'
+  );
   assert.equal(WEBRTC_RTC_CONFIG.bundlePolicy, 'max-bundle');
   assert.equal(WEBRTC_RTC_CONFIG.rtcpMuxPolicy, 'require');
 });

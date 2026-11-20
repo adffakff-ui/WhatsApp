@@ -35,6 +35,7 @@ import {
   searchAllChatsMessages,
   type MessageSearchFilter
 } from '../lib/chatLogic';
+import { computeVirtualWindow } from '../lib/virtualList';
 import type {
   ChatFilter,
   ChatRoom,
@@ -42,6 +43,8 @@ import type {
   StatusItem,
   UserProfile
 } from '../types/chat';
+
+const CHAT_ROW_HEIGHT = 74;
 
 interface ChatListPaneProps {
   chats: ChatRoom[];
@@ -144,7 +147,50 @@ export function ChatListPane({
   const [selectedChatIdsForDeletion, setSelectedChatIdsForDeletion] = useState<Set<string>>(new Set());
   const [showMultiDeleteModal, setShowMultiDeleteModal] = useState(false);
   const [isDeletingMulti, setIsDeletingMulti] = useState(false);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(640);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const listScrollRef = useRef<HTMLDivElement>(null);
+  const scrollRafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const el = listScrollRef.current;
+    if (!el) return;
+    const measure = () => {
+      if (el.clientHeight > 0) {
+        setViewportHeight(el.clientHeight);
+      }
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (listScrollRef.current) {
+      listScrollRef.current.scrollTop = 0;
+    }
+    setScrollTop(0);
+  }, [filter, showArchived]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) {
+        window.cancelAnimationFrame(scrollRafRef.current);
+      }
+    };
+  }, []);
+
+  const handleListScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const nextTop = e.currentTarget.scrollTop;
+    if (scrollRafRef.current !== null) return;
+    scrollRafRef.current = window.requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      setScrollTop(nextTop);
+    });
+  };
 
   const toggleChatSelection = (chatId: string) => {
     setSelectedChatIdsForDeletion((prev) => {
@@ -168,6 +214,23 @@ export function ChatListPane({
     const hiddenLockedIds = lockedChatIds.filter((id) => !unlockedSet.has(id));
     return searchAllChatsMessages(messagesMap, pool, searchQuery, hiddenLockedIds, msgFilter, 40);
   }, [hasSearchQuery, msgFilter, allChats, chats, messagesMap, searchQuery, lockedChatIds, unlockedChatIds]);
+
+  const virtualWindow = useMemo(
+    () =>
+      computeVirtualWindow({
+        totalCount: chats.length,
+        itemHeight: CHAT_ROW_HEIGHT,
+        viewportHeight,
+        scrollTop,
+        overscan: 6
+      }),
+    [chats.length, viewportHeight, scrollTop]
+  );
+
+  const visibleChats = useMemo(
+    () => chats.slice(virtualWindow.startIndex, virtualWindow.endIndex),
+    [chats, virtualWindow.startIndex, virtualWindow.endIndex]
+  );
 
   useEffect(() => {
     if (!menuChatId && !showHeaderMenu && !fabOpen) return;
@@ -674,8 +737,12 @@ export function ChatListPane({
         </div>
       )}
 
-      {/* Chat List & Deep Message Search Results */}
-      <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden pb-24 md:pb-16">
+      {/* Chat List & Deep Message Search Results (Virtualized Window) */}
+      <div
+        ref={listScrollRef}
+        onScroll={handleListScroll}
+        className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden pb-24 md:pb-16"
+      >
         {chats.length === 0 && messageSearchResults.length === 0 ? (
           <div className="px-6 py-14 text-center space-y-2">
             <p className="text-sm font-semibold text-[#111B21] dark:text-[#E9EDEF]">
@@ -722,7 +789,14 @@ export function ChatListPane({
             )}
             {chats.length > 0 && (
           <ul className="divide-y divide-[#F0F2F5] dark:divide-[#222D34]/60">
-            {chats.map((chat) => {
+            {virtualWindow.topSpacerHeight > 0 && (
+              <li
+                aria-hidden="true"
+                style={{ height: `${virtualWindow.topSpacerHeight}px` }}
+                className="pointer-events-none !border-0"
+              />
+            )}
+            {visibleChats.map((chat) => {
               const isSelected = selectedChatId === chat.id;
               const isMine = chat.lastMessageSenderId === myUid;
               const isLocked = lockedChatIds.includes(chat.id);
@@ -730,7 +804,7 @@ export function ChatListPane({
               return (
                 <li
                   key={chat.id}
-                  className={`relative group ${menuChatId === chat.id ? 'z-20' : ''}`}
+                  className={`relative group h-[74px] ${menuChatId === chat.id ? 'z-20' : ''}`}
                 >
                   <button
                     type="button"
@@ -742,7 +816,7 @@ export function ChatListPane({
                         onSelectChat(chat.id);
                       }
                     }}
-                    className={`w-full px-3.5 py-3 flex items-center gap-3 text-right transition-colors cursor-pointer ${
+                    className={`w-full h-full px-3.5 flex items-center gap-3 text-right transition-colors cursor-pointer ${
                       isSelected && !isSelectionMode
                         ? 'bg-[#F0F2F5] dark:bg-[#2A3942]'
                         : selectedChatIdsForDeletion.has(chat.id)
@@ -939,6 +1013,13 @@ export function ChatListPane({
                 </li>
               );
             })}
+            {virtualWindow.bottomSpacerHeight > 0 && (
+              <li
+                aria-hidden="true"
+                style={{ height: `${virtualWindow.bottomSpacerHeight}px` }}
+                className="pointer-events-none !border-0"
+              />
+            )}
             </ul>
             )}
 

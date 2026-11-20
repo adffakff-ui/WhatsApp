@@ -62,6 +62,23 @@ service cloud.firestore {
       return id is string && id.size() >= 3 && id.size() <= 36 && id.matches('^@?[a-zA-Z0-9_\\-]+$');
     }
 
+    function isBlockedBetween(uidA, uidB) {
+      return exists(/databases/$(database)/documents/users/$(uidA)/blockedUsers/$(uidB))
+        || exists(/databases/$(database)/documents/users/$(uidB)/blockedUsers/$(uidA));
+    }
+
+    function isDirectPeerBlockedAfter(chatId) {
+      let chatData = getAfter(/databases/$(database)/documents/chats/$(chatId)).data;
+      return chatData.type == 'direct'
+        && ('memberIds' in chatData)
+        && chatData.memberIds is list
+        && chatData.memberIds.size() == 2
+        && (
+          (chatData.memberIds[0] != request.auth.uid && isBlockedBetween(request.auth.uid, chatData.memberIds[0])) ||
+          (chatData.memberIds[1] != request.auth.uid && isBlockedBetween(request.auth.uid, chatData.memberIds[1]))
+        );
+    }
+
     // Validation blueprints
     function isValidPublicProfile(data) {
       return data.keys().hasAll(['uid', 'wasilId', 'displayName', 'about', 'avatarUrl', 'publicKeyJwk', 'safetyCode', 'isOnline', 'lastSeen', 'updatedAt'])
@@ -111,9 +128,32 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidBlockedContact(data) {
+      return data.keys().hasAll(['uid', 'blockedUid', 'displayName', 'wasilId', 'avatarUrl', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'blockedUid', 'displayName', 'wasilId', 'avatarUrl', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && isValidId(data.blockedUid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.wasilId is string && data.wasilId.size() <= 36
+        && data.avatarUrl is string && data.avatarUrl.size() <= 65536
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWallpaper(val) {
+      return val is string
+        && val.size() <= 65536
+        && (
+          val == '' ||
+          val in ['default', 'pattern', 'mint', 'slate', 'sand', 'velvet'] ||
+          val.matches('^#[0-9a-fA-F]{6}$') ||
+          val.matches('^data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$')
+        );
+    }
+
     function isValidChatPref(data) {
       return data.keys().hasAll(['chatId', 'uid', 'pinned', 'archived', 'muted', 'favorite', 'unreadCount', 'disappearingSeconds', 'updatedAt'])
-        && data.keys().hasOnly(['chatId', 'uid', 'pinned', 'archived', 'muted', 'favorite', 'unreadCount', 'disappearingSeconds', 'updatedAt'])
+        && data.keys().hasOnly(['chatId', 'uid', 'pinned', 'archived', 'muted', 'favorite', 'unreadCount', 'disappearingSeconds', 'wallpaper', 'updatedAt'])
         && isValidId(data.chatId)
         && isValidId(data.uid)
         && data.pinned is bool
@@ -122,6 +162,7 @@ service cloud.firestore {
         && data.favorite is bool
         && data.unreadCount is int && data.unreadCount >= 0 && data.unreadCount <= 10000
         && data.disappearingSeconds is int && data.disappearingSeconds >= 0 && data.disappearingSeconds <= 7776000
+        && (!('wallpaper' in data) || isValidWallpaper(data.wallpaper))
         && data.updatedAt is timestamp;
     }
 
@@ -306,6 +347,26 @@ service cloud.firestore {
       allow delete: if isOwner(userId) && isValidId(userId) && isValidId(deviceId);
     }
 
+    match /users/{userId}/blockedUsers/{blockedUid} {
+      allow get: if isOwner(userId) && isValidId(userId) && isValidId(blockedUid);
+      allow list: if isOwner(userId) && resource.data.uid == request.auth.uid;
+      allow create: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(blockedUid)
+        && isValidBlockedContact(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().blockedUid == blockedUid
+        && incoming().blockedUid != request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(blockedUid)
+        && isValidBlockedContact(incoming())
+        && incoming().uid == existing().uid
+        && incoming().blockedUid == existing().blockedUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'wasilId', 'avatarUrl', 'updatedAt']);
+      allow delete: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(blockedUid);
+    }
+
     match /wasil_registry/{wasilId} {
       allow get: if isSignedIn() && isValidWasilId(wasilId);
       allow create: if isSignedIn() && isValidWasilId(wasilId)
@@ -349,7 +410,7 @@ service cloud.firestore {
         && incoming().uid == existing().uid
         && incoming().chatId == existing().chatId
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['pinned', 'archived', 'muted', 'favorite', 'unreadCount', 'disappearingSeconds', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['pinned', 'archived', 'muted', 'favorite', 'unreadCount', 'disappearingSeconds', 'wallpaper', 'updatedAt']);
       allow delete: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(chatId);
     }
 
@@ -418,7 +479,8 @@ service cloud.firestore {
           && request.auth.uid in incoming().viewerIds
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
-          && (isChatMember(chatId) || isChatMemberAfter(chatId));
+          && (isChatMember(chatId) || isChatMemberAfter(chatId))
+          && !isDirectPeerBlockedAfter(chatId);
         allow update: if isVerifiedUser() && isValidId(chatId) && isValidId(messageId)
           && isValidMessage(incoming())
           && isChatMember(chatId)
@@ -483,7 +545,9 @@ service cloud.firestore {
         && incoming().status == 'ringing'
         && incoming().durationSeconds == 0
         && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time;
+        && incoming().updatedAt == request.time
+        && incoming().calleeId != request.auth.uid
+        && !isBlockedBetween(request.auth.uid, incoming().calleeId);
       allow update: if isVerifiedUser() && isValidId(callId)
         && isValidCall(incoming())
         && (existing().callerId == request.auth.uid || existing().calleeId == request.auth.uid)

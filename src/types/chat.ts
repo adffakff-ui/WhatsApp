@@ -42,6 +42,7 @@ export interface OmarSettings {
   biometricDeviceLabel?: string;
   dndMode: boolean;
   showStoriesTray: boolean;
+  preferredLanguage?: string;
 }
 
 export interface PrivacySettings {
@@ -128,6 +129,7 @@ export interface ChatRoom {
   favorite: boolean;
   unreadCount: number;
   disappearingSeconds: number;
+  wallpaper?: string;
   adminOnlyPost?: boolean;
   inviteCode?: string;
   lastMessagePreview: string;
@@ -200,5 +202,15 @@ export interface DeviceSession {
   isOnline: boolean;
   lastActiveAtMs: number;
   createdAtMs: number;
+}
+
+export interface BlockedContact {
+  uid: string;
+  blockedUid: string;
+  displayName: string;
+  wasilId: string;
+  avatarUrl: string;
+  createdAtMs: number;
+  updatedAtMs: number;
 }
 

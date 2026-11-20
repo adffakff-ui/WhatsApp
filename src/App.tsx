@@ -27,6 +27,7 @@ import { BUNDLED_ASSETS } from './data/assets';
 import { mapFirebaseAuthErrorToArabic, parseWasilBackupJson } from './lib/authHelpers';
 import { verifyBiometricCredential } from './lib/webauthn';
 import {
+  archivePreviousIdentityKey,
   computeSafetyNumber,
   deriveRoomKeyFromSeed,
   encryptPayload,
@@ -46,15 +47,28 @@ import {
 } from './lib/chatLogic';
 import { deleteMediaBlob } from './lib/mediaStorage';
 import { DEFAULT_OMAR_SETTINGS } from './lib/omarConfig';
+import { normalizeChatWallpaper } from './lib/chatWallpaper';
+import {
+  buildBlockedUidSet,
+  filterBlockedIncomingCall,
+  filterBlockedMessages,
+  filterBlockedStatuses,
+  getDirectChatBlockedPeerUid,
+  getDirectChatPeerUid,
+  isUidBlocked,
+  sanitizeChatsForBlockedUsers
+} from './lib/blockedContacts';
 import {
   detectClientDeviceInfo,
   getOrCreateLocalDeviceId
 } from './lib/deviceSession';
 import {
   backupUserDataToFirestore,
+  blockUserInFirestore,
   claimCustomWasilId,
   createChatInFirestore,
   createMultiChatMessageSyncController,
+  declineIncomingCallInFirestore,
   deleteChatInFirestore,
   deleteStatusFromFirestore,
   editEncryptedMessageInFirestore,
@@ -74,6 +88,7 @@ import {
   sendEncryptedMessageToFirestore,
   setUserPresenceInFirestore,
   softDeleteMessageInFirestore,
+  subscribeBlockedUsersFromFirestore,
   subscribeCallsFromFirestore,
   subscribeIncomingCallsFromFirestore,
   subscribeOwnPrivateInfoFromFirestore,
@@ -81,9 +96,11 @@ import {
   subscribeStatusesFromFirestore,
   subscribeUserChatsFromFirestore,
   subscribeUserDevicesFromFirestore,
+  syncPublicKeyToAllUserChats,
   syncUserProfileToFirestore,
   togglePinStatusInFirestore,
   toggleStarMessageInFirestore,
+  unblockUserInFirestore,
   updateChatTypingInFirestore,
   updateGroupSettingsInFirestore,
   updateMessageReactionsInFirestore,
@@ -100,6 +117,7 @@ import { AuthScreen, type OnboardingCompletionPayload } from './components/AuthS
 import { NavRail } from './components/NavRail';
 import { ChatListPane } from './components/ChatListPane';
 import { ChatWindow } from './components/ChatWindow';
+import { ChatWallpaperModal } from './components/ChatWallpaperModal';
 import { RightDrawer } from './components/RightDrawer';
 import { StatusView, type PublishStatusPayload } from './components/StatusView';
 import { CallsView } from './components/CallsView';
@@ -113,6 +131,7 @@ import { OmarAddonsView } from './components/OmarAddonsView';
 import { OfflineIndicator } from './components/PWAInstallButton';
 import { Avatar } from './components/Avatar';
 import type {
+  BlockedContact,
   CallRecord,
   ChatFilter,
   ChatRoom,
@@ -248,6 +267,7 @@ export default function App() {
     CALLS: `${uid}_wasil_calls_v1`,
     PROFILE: `${uid}_wasil_profile_v1`,
     PRIVACY: `${uid}_wasil_privacy_v1`,
+    BLOCKED: `${uid}_wasil_blocked_v1`,
     ENTERED: `${uid}_wasil_entered_v1`
   }), [uid]);
 
@@ -281,6 +301,16 @@ export default function App() {
   const [calls, setCalls] = useState<CallRecord[]>(() =>
     isRemoteFirebaseUid(uid) ? readJsonStorage<CallRecord[]>(userKeys.CALLS) || [] : []
   );
+
+  const [blockedContacts, setBlockedContacts] = useState<BlockedContact[]>(() =>
+    isRemoteFirebaseUid(uid) ? readJsonStorage<BlockedContact[]>(userKeys.BLOCKED) || [] : []
+  );
+
+  const blockedUidSet = useMemo(() => buildBlockedUidSet(blockedContacts), [blockedContacts]);
+  const blockedUidSetRef = useRef<Set<string>>(blockedUidSet);
+  useEffect(() => {
+    blockedUidSetRef.current = blockedUidSet;
+  }, [blockedUidSet]);
 
   const [scheduledMessages, setScheduledMessages] = useState<ScheduledMessage[]>([]);
 
@@ -342,6 +372,7 @@ export default function App() {
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [showScheduledListModal, setShowScheduledListModal] = useState(false);
+  const [wallpaperPickerChatId, setWallpaperPickerChatId] = useState<string | null>(null);
   const [highlightedJump, setHighlightedJump] = useState<{
     chatId: string;
     messageId: string;
@@ -479,11 +510,12 @@ export default function App() {
     if (isRemoteFirebaseUid(currentUser.uid)) {
       localStorage.setItem(userKeys.STATUSES, JSON.stringify(statuses));
       localStorage.setItem(userKeys.CALLS, JSON.stringify(calls));
+      localStorage.setItem(userKeys.BLOCKED, JSON.stringify(blockedContacts));
       localStorage.setItem(userKeys.PROFILE, JSON.stringify(currentUser));
       localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(currentUser));
       localStorage.setItem(userKeys.PRIVACY, JSON.stringify(privacySettings));
     }
-  }, [statuses, calls, currentUser, privacySettings, userKeys]);
+  }, [statuses, calls, blockedContacts, currentUser, privacySettings, userKeys]);
 
   // Periodically prune expired 24-hour statuses from state and Firestore
   useEffect(() => {
@@ -514,6 +546,7 @@ export default function App() {
     let unsubOwnPublic: (() => void) | null = null;
     let unsubOwnPrivate: (() => void) | null = null;
     let unsubDevices: (() => void) | null = null;
+    let unsubBlocked: (() => void) | null = null;
 
     const cleanupDataSubscriptions = () => {
       unsubChats?.();
@@ -530,6 +563,8 @@ export default function App() {
       unsubOwnPrivate = null;
       unsubDevices?.();
       unsubDevices = null;
+      unsubBlocked?.();
+      unsubBlocked = null;
     };
 
     const unsubAuth = onAuthStateChanged(auth, async (fbUser) => {
@@ -548,6 +583,7 @@ export default function App() {
         setMessagesMap({});
         setStatuses([]);
         setCalls([]);
+        setBlockedContacts([]);
         setScheduledMessages([]);
         setLinkedDevices([]);
         setSelectedChatId(null);
@@ -617,13 +653,24 @@ export default function App() {
       });
 
       unsubIncomingCalls = subscribeIncomingCallsFromFirestore(fbUser.uid, (incoming) => {
-        if (incoming) {
-          setActiveCall((curr) => (curr ? curr : incoming));
+        const { allowed, blockedCallToDecline } = filterBlockedIncomingCall(
+          incoming,
+          blockedUidSetRef.current
+        );
+        if (blockedCallToDecline) {
+          void declineIncomingCallInFirestore(blockedCallToDecline.id).catch(() => {});
+        }
+        if (allowed) {
+          setActiveCall((curr) => (curr ? curr : allowed));
         } else {
           setActiveCall((curr) =>
             curr && curr.direction === 'incoming' && curr.status === 'ringing' ? null : curr
           );
         }
+      });
+
+      unsubBlocked = subscribeBlockedUsersFromFirestore(fbUser.uid, (list) => {
+        setBlockedContacts(list);
       });
 
       unsubOwnPublic = subscribeOwnPublicProfileFromFirestore(fbUser.uid, (pubPatch) => {
@@ -653,6 +700,7 @@ export default function App() {
           privPatch.identityKeys &&
           privPatch.identityKeys.publicKeyJwk !== identityKeysRef.current?.publicKeyJwk
         ) {
+          archivePreviousIdentityKey(identityKeysRef.current);
           identityKeysRef.current = privPatch.identityKeys;
           localStorage.setItem(STORAGE_KEYS.KEYS, JSON.stringify(privPatch.identityKeys));
           setIdentityKeys(privPatch.identityKeys);
@@ -664,6 +712,12 @@ export default function App() {
                   safetyCode: privPatch.identityKeys!.safetyCode
                 }
               : curr
+          );
+          void syncPublicKeyToAllUserChats(
+            fbUser.uid,
+            fbUser.displayName || 'مستخدم تواصل',
+            fbUser.photoURL || '',
+            privPatch.identityKeys.publicKeyJwk
           );
           msgSyncControllerRef.current?.resubscribeAll();
         }
@@ -695,6 +749,7 @@ export default function App() {
         const resolvedKeys = hydrated.identityKeys || keys;
         const keysChanged = resolvedKeys.publicKeyJwk !== keys.publicKeyJwk;
         if (keysChanged) {
+          archivePreviousIdentityKey(identityKeysRef.current);
           identityKeysRef.current = resolvedKeys;
           localStorage.setItem(STORAGE_KEYS.KEYS, JSON.stringify(resolvedKeys));
           setIdentityKeys(resolvedKeys);
@@ -735,16 +790,17 @@ export default function App() {
     const controller = createMultiChatMessageSyncController(
       currentUser.uid,
       (chatId, cloudMsgs) => {
+        const visibleCloudMsgs = filterBlockedMessages(cloudMsgs, blockedUidSetRef.current);
         setMessagesMap((prev) => {
           const existingLocal = prev[chatId] || [];
-          const cloudIds = new Set(cloudMsgs.map((m) => m.id));
+          const cloudIds = new Set(visibleCloudMsgs.map((m) => m.id));
           const pendingOrFailed = existingLocal.filter(
             (m) => (m.status === 'sending' || m.status === 'failed') && !cloudIds.has(m.id)
           );
           const merged =
             pendingOrFailed.length > 0
-              ? [...cloudMsgs, ...pendingOrFailed].sort((a, b) => a.createdAtMs - b.createdAtMs)
-              : cloudMsgs;
+              ? [...visibleCloudMsgs, ...pendingOrFailed].sort((a, b) => a.createdAtMs - b.createdAtMs)
+              : visibleCloudMsgs;
           return { ...prev, [chatId]: merged };
         });
       }
@@ -768,7 +824,9 @@ export default function App() {
       .map((c) => ({
         id: c.id,
         roomSeed: c.roomSeed || c.id,
-        lastMessageAtMs: c.lastMessageAtMs || 0
+        lastMessageAtMs: c.lastMessageAtMs || 0,
+        ...(c.peerUid ? { peerUid: c.peerUid } : {}),
+        ...(c.peerPublicKeyJwk ? { peerPublicKeyJwk: c.peerPublicKeyJwk } : {})
       }));
     msgSyncControllerRef.current.syncTargets(targets, selectedChatId);
   }, [isCloudSynced, currentUser.uid, selectedChatId, chats]);
@@ -812,18 +870,58 @@ export default function App() {
     };
   }, [isCloudSynced, currentUser.uid, omarSettings.freezeLastSeen, localDeviceMeta]);
 
-  // Acknowledge delivery on incoming cloud chat summaries even before opening each chat
+  // Acknowledge delivery on incoming cloud chat summaries and synced messages even before opening each chat
   useEffect(() => {
     if (!isCloudSynced || !currentUser.uid) return;
     for (const c of chats) {
-      if (!c.lastMessageSenderId || c.lastMessageSenderId === currentUser.uid) continue;
-      if (c.lastMessageDeliveredToIds?.includes(currentUser.uid)) continue;
+      if (getDirectChatBlockedPeerUid(c, currentUser.uid, blockedUidSet) !== null) continue;
+      if (!c.memberIds?.includes(currentUser.uid)) continue;
+
+      const syncedMsgs = messagesMap[c.id] || [];
+      const undeliveredMsgIds = syncedMsgs
+        .filter(
+          (m) =>
+            m.senderId !== currentUser.uid &&
+            !blockedUidSet.has(m.senderId) &&
+            !m.deliveredToIds?.includes(currentUser.uid) &&
+            !deliveredMsgAckedRef.current.has(m.id)
+        )
+        .map((m) => m.id);
+
       const summaryKey = `${c.id}:${c.lastMessageAtMs}`;
-      if (deliveredSummaryAckedRef.current.has(summaryKey)) continue;
-      deliveredSummaryAckedRef.current.add(summaryKey);
-      void markChatMessagesDeliveredInFirestore(c.id, currentUser.uid, [], true);
+      const needSummaryDelivered =
+        Boolean(c.lastMessageSenderId) &&
+        c.lastMessageSenderId !== currentUser.uid &&
+        !blockedUidSet.has(c.lastMessageSenderId) &&
+        !c.lastMessageDeliveredToIds?.includes(currentUser.uid) &&
+        !deliveredSummaryAckedRef.current.has(summaryKey);
+
+      if (undeliveredMsgIds.length === 0 && !needSummaryDelivered) continue;
+
+      undeliveredMsgIds.forEach((id) => deliveredMsgAckedRef.current.add(id));
+      if (needSummaryDelivered) {
+        deliveredSummaryAckedRef.current.add(summaryKey);
+      }
+      void markChatMessagesDeliveredInFirestore(
+        c.id,
+        currentUser.uid,
+        undeliveredMsgIds,
+        needSummaryDelivered
+      );
     }
-  }, [isCloudSynced, chats, currentUser.uid]);
+  }, [isCloudSynced, chats, messagesMap, currentUser.uid, blockedUidSet]);
+
+  // Immediately terminate any incoming ringing call if the caller becomes blocked
+  useEffect(() => {
+    if (!activeCall || activeCall.direction !== 'incoming') return;
+    if (blockedUidSet.has(activeCall.callerId)) {
+      const blockedId = activeCall.id;
+      setActiveCall(null);
+      if (isCloudSynced && activeCall.status === 'ringing') {
+        void declineIncomingCallInFirestore(blockedId).catch(() => {});
+      }
+    }
+  }, [activeCall, blockedUidSet, isCloudSynced]);
 
   // Cleanup pending typing timeout on unmount
   useEffect(() => {
@@ -1056,6 +1154,7 @@ export default function App() {
     setMessagesMap({});
     setStatuses([]);
     setCalls([]);
+    setBlockedContacts([]);
     setLinkedDevices([]);
     setSelectedChatId(null);
     setActiveCall(null);
@@ -1064,6 +1163,7 @@ export default function App() {
     setUnlockedSessionChatIds([]);
     setMobileChatOpen(false);
     setRightPanelMode('none');
+    setWallpaperPickerChatId(null);
     setActiveTab('chats');
     setHighlightedJump(null);
     setIsCloudSynced(false);
@@ -1128,53 +1228,71 @@ export default function App() {
     [chats, currentUser.uid, googleContacts]
   );
 
+  const displayChats = useMemo(
+    () => sanitizeChatsForBlockedUsers(chats, currentUser.uid, blockedUidSet),
+    [chats, currentUser.uid, blockedUidSet]
+  );
+
   const visibleChats = useMemo(
     () =>
       filterAndSortChats(
-        chats,
+        displayChats,
         chatFilter,
         searchQuery,
         showArchived,
         omarSettings.lockedChatIds
       ),
-    [chats, chatFilter, searchQuery, showArchived, omarSettings.lockedChatIds]
+    [displayChats, chatFilter, searchQuery, showArchived, omarSettings.lockedChatIds]
   );
 
   const totalUnread = useMemo(
-    () => chats.reduce((sum, c) => sum + (c.archived ? 0 : c.unreadCount), 0),
-    [chats]
+    () => displayChats.reduce((sum, c) => sum + (c.archived ? 0 : c.unreadCount), 0),
+    [displayChats]
   );
 
   const archivedCount = useMemo(
-    () => chats.filter((c) => c.archived).length,
-    [chats]
+    () => displayChats.filter((c) => c.archived).length,
+    [displayChats]
   );
 
   const sortedStatuses = useMemo(
-    () => sortStatusesWithPinned(statuses, pinnedStatusIds),
-    [statuses, pinnedStatusIds]
+    () => sortStatusesWithPinned(filterBlockedStatuses(statuses, blockedUidSet), pinnedStatusIds),
+    [statuses, blockedUidSet, pinnedStatusIds]
   );
 
   const selectedChat = useMemo(
-    () => chats.find((c) => c.id === selectedChatId) || null,
-    [chats, selectedChatId]
+    () => displayChats.find((c) => c.id === selectedChatId) || null,
+    [displayChats, selectedChatId]
+  );
+
+  const selectedChatPeerBlocked = useMemo(
+    () =>
+      selectedChat
+        ? getDirectChatBlockedPeerUid(selectedChat, currentUser.uid, blockedUidSet) !== null
+        : false,
+    [selectedChat, currentUser.uid, blockedUidSet]
   );
 
   const activeMessages = useMemo(
-    () => (selectedChatId ? messagesMap[selectedChatId] || [] : []),
-    [messagesMap, selectedChatId]
+    () =>
+      selectedChatId
+        ? filterBlockedMessages(messagesMap[selectedChatId] || [], blockedUidSet)
+        : [],
+    [messagesMap, selectedChatId, blockedUidSet]
   );
 
   // Acknowledge delivery & read receipts for the active cloud chat
   useEffect(() => {
     if (!isCloudSynced || !selectedChatId || !selectedChat) return;
     if (!selectedChat.memberIds?.includes(currentUser.uid)) return;
+    if (selectedChatPeerBlocked) return;
 
     const flushReceipts = () => {
       const undeliveredIds = activeMessages
         .filter(
           (m) =>
             m.senderId !== currentUser.uid &&
+            !blockedUidSet.has(m.senderId) &&
             !m.deliveredToIds?.includes(currentUser.uid) &&
             !deliveredMsgAckedRef.current.has(m.id)
         )
@@ -1183,6 +1301,7 @@ export default function App() {
       const needLastDelivered =
         Boolean(selectedChat.lastMessageSenderId) &&
         selectedChat.lastMessageSenderId !== currentUser.uid &&
+        !blockedUidSet.has(selectedChat.lastMessageSenderId) &&
         !selectedChat.lastMessageDeliveredToIds?.includes(currentUser.uid);
 
       if (undeliveredIds.length > 0 || needLastDelivered) {
@@ -1205,6 +1324,7 @@ export default function App() {
           .filter(
             (m) =>
               m.senderId !== currentUser.uid &&
+              !blockedUidSet.has(m.senderId) &&
               !m.readByIds?.includes(currentUser.uid) &&
               !readMsgAckedRef.current.has(m.id)
           )
@@ -1213,6 +1333,7 @@ export default function App() {
         const needLastRead =
           Boolean(selectedChat.lastMessageSenderId) &&
           selectedChat.lastMessageSenderId !== currentUser.uid &&
+          !blockedUidSet.has(selectedChat.lastMessageSenderId) &&
           !selectedChat.lastMessageReadByIds?.includes(currentUser.uid);
 
         if (unreadIds.length > 0 || needLastRead) {
@@ -1230,7 +1351,8 @@ export default function App() {
               muted: selectedChat.muted,
               favorite: selectedChat.favorite,
               unreadCount: 0,
-              disappearingSeconds: selectedChat.disappearingSeconds
+              disappearingSeconds: selectedChat.disappearingSeconds,
+              wallpaper: selectedChat.wallpaper || ''
             }).catch(() => {});
           }
         }
@@ -1248,6 +1370,8 @@ export default function App() {
     isCloudSynced,
     selectedChatId,
     selectedChat,
+    selectedChatPeerBlocked,
+    blockedUidSet,
     activeMessages,
     currentUser.uid,
     privacySettings.readReceipts,
@@ -1284,7 +1408,8 @@ export default function App() {
       muted: nextChat.muted,
       favorite: nextChat.favorite,
       unreadCount: nextChat.unreadCount,
-      disappearingSeconds: nextChat.disappearingSeconds
+      disappearingSeconds: nextChat.disappearingSeconds,
+      wallpaper: nextChat.wallpaper || ''
     }).catch(() => {});
   };
 
@@ -1476,6 +1601,77 @@ export default function App() {
     }
   };
 
+  const handleBlockContact = async (target: UserProfile) => {
+    if (!isCloudSynced || !auth.currentUser || !isRemoteFirebaseUid(currentUser.uid)) {
+      showToast('يجب تسجيل الدخول عبر Firebase لإدارة قائمة الحظر');
+      return;
+    }
+    try {
+      const saved = await blockUserInFirestore(currentUser.uid, target);
+      setBlockedContacts((prev) => [
+        saved,
+        ...prev.filter((item) => item.blockedUid !== saved.blockedUid)
+      ]);
+      if (activeCall && activeCall.callerId === saved.blockedUid) {
+        const callToDecline = activeCall;
+        setActiveCall(null);
+        if (callToDecline.status === 'ringing') {
+          void declineIncomingCallInFirestore(callToDecline.id).catch(() => {});
+        }
+      }
+      showToast(`تم حظر ${saved.displayName} نهائياً — تم منع رسائله ومكالماته`);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'تعذر حظر جهة الاتصال حالياً.');
+      throw err;
+    }
+  };
+
+  const handleUnblockContact = async (blockedUid: string) => {
+    if (!isCloudSynced || !auth.currentUser || !isRemoteFirebaseUid(currentUser.uid)) {
+      showToast('يجب تسجيل الدخول عبر Firebase لإدارة قائمة الحظر');
+      return;
+    }
+    try {
+      await unblockUserInFirestore(currentUser.uid, blockedUid);
+      setBlockedContacts((prev) => prev.filter((item) => item.blockedUid !== blockedUid));
+      msgSyncControllerRef.current?.resubscribeAll();
+      showToast('تم إلغاء حظر جهة الاتصال');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'تعذر إلغاء الحظر حالياً.');
+      throw err;
+    }
+  };
+
+  const handleToggleBlockForChat = async (chat: ChatRoom) => {
+    if (chat.type !== 'direct') return;
+    const peerUid = getDirectChatPeerUid(chat, currentUser.uid);
+    if (!peerUid) {
+      showToast('تعذر تحديد معرف جهة الاتصال.');
+      return;
+    }
+    if (isUidBlocked(blockedUidSet, peerUid)) {
+      await handleUnblockContact(peerUid);
+      return;
+    }
+    const existingContact = contactsList.find((c) => c.uid === peerUid);
+    let resolvedProfile: UserProfile | null = existingContact || null;
+    if (!resolvedProfile) {
+      resolvedProfile = await fetchPublicProfileByUid(peerUid).catch(() => null);
+    }
+    await handleBlockContact(
+      resolvedProfile || {
+        uid: peerUid,
+        displayName: chat.title,
+        about: chat.peerAbout || '',
+        avatarUrl: chat.avatarUrl,
+        publicKeyJwk: chat.peerPublicKeyJwk || '',
+        safetyCode: '',
+        isOnline: false,
+        lastSeenMs: Date.now()
+      }
+    );
+  };
+
   const sendMessageToTargetChat = async (
     targetChat: ChatRoom,
     type: MessageType,
@@ -1487,10 +1683,18 @@ export default function App() {
       showToast('يجب تسجيل الدخول عبر Firebase لإرسال الرسائل');
       return;
     }
+    if (getDirectChatBlockedPeerUid(targetChat, currentUser.uid, blockedUidSet) !== null) {
+      showToast('جهة الاتصال محظورة — قم بإلغاء الحظر أولاً لإرسال الرسائل');
+      return;
+    }
 
     const msgId =
       existingFailedMsgId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    const key = await deriveRoomKeyFromSeed(targetChat.roomSeed);
+    const roomKeyHint =
+      targetChat.peerUid || targetChat.peerPublicKeyJwk
+        ? { peerUid: targetChat.peerUid, peerPublicKeyJwk: targetChat.peerPublicKeyJwk }
+        : undefined;
+    const key = await deriveRoomKeyFromSeed(targetChat.roomSeed, roomKeyHint);
     const envelope = await encryptPayload(JSON.stringify(payload), key);
     const nowMs = Date.now();
 
@@ -1558,7 +1762,8 @@ export default function App() {
         payload,
         targetChat.memberIds,
         replyToId,
-        msgId
+        msgId,
+        roomKeyHint
       );
 
       setMessagesMap((prev) => ({
@@ -1719,7 +1924,10 @@ export default function App() {
           messageId,
           selectedChat.roomSeed,
           updatedPayload,
-          isLastMessage
+          isLastMessage,
+          selectedChat.peerUid || selectedChat.peerPublicKeyJwk
+            ? { peerUid: selectedChat.peerUid, peerPublicKeyJwk: selectedChat.peerPublicKeyJwk }
+            : undefined
         );
         showToast('تم تعديل الرسالة');
       } catch {
@@ -1911,6 +2119,52 @@ export default function App() {
     );
   };
 
+  const handleSetChatWallpaper = async (chatId: string, wallpaper: string) => {
+    const normalized = normalizeChatWallpaper(wallpaper);
+    const target = chats.find((c) => c.id === chatId);
+    if (!target) return;
+
+    const prevWallpaper = target.wallpaper || '';
+    const nextChat: ChatRoom = {
+      ...target,
+      wallpaper: normalized
+    };
+
+    setChats((prev) =>
+      prev.map((c) => (c.id === chatId ? { ...c, wallpaper: normalized } : c))
+    );
+
+    if (isCloudSynced && isRemoteFirebaseUid(currentUser.uid)) {
+      try {
+        await saveChatPrefToFirestore(currentUser.uid, chatId, {
+          pinned: nextChat.pinned,
+          archived: nextChat.archived,
+          muted: nextChat.muted,
+          favorite: nextChat.favorite,
+          unreadCount: nextChat.unreadCount,
+          disappearingSeconds: nextChat.disappearingSeconds,
+          wallpaper: normalized
+        });
+        showToast(
+          normalized
+            ? 'تم حفظ خلفية المحادثة في Firestore بنجاح'
+            : 'تمت استعادة الخلفية الافتراضية للمحادثة'
+        );
+      } catch {
+        setChats((prev) =>
+          prev.map((c) => (c.id === chatId ? { ...c, wallpaper: prevWallpaper } : c))
+        );
+        showToast('تعذر حفظ خلفية المحادثة في السحابة');
+      }
+    } else {
+      showToast(
+        normalized
+          ? 'تم تحديث خلفية المحادثة'
+          : 'تمت استعادة الخلفية الافتراضية للمحادثة'
+      );
+    }
+  };
+
   const handleClearChat = (chatId: string) => {
     setMessagesMap((prev) => ({ ...prev, [chatId]: [] }));
     setChats((prev) =>
@@ -1975,6 +2229,10 @@ export default function App() {
     }
     if (!chat.peerUid || !isRemoteFirebaseUid(chat.peerUid)) {
       showToast('المكالمات المباشرة متاحة فقط مع جهات اتصال مسجلة عبر Firebase');
+      return;
+    }
+    if (isUidBlocked(blockedUidSet, chat.peerUid)) {
+      showToast('لا يمكنك الاتصال بجهة اتصال محظورة. ألغِ الحظر من الإعدادات أولاً.');
       return;
     }
 
@@ -2042,6 +2300,10 @@ export default function App() {
 
     if (!peerUid || !isRemoteFirebaseUid(peerUid)) {
       showToast('يجب البحث عن مستخدم مسجّل عبر معرّف تواصل (Wasil ID) لبدء محادثة');
+      return;
+    }
+    if (isUidBlocked(blockedUidSet, peerUid)) {
+      showToast('هذه الجهة محظورة حالياً — قم بإلغاء الحظر من الإعدادات أولاً');
       return;
     }
 
@@ -2667,7 +2929,7 @@ export default function App() {
                 onToggleFavorite={(id) => handleToggleChatProp(id, 'favorite')}
                 onToggleLockChat={handleToggleLockChat}
                 isCloudSynced={isCloudSynced}
-                allChats={chats}
+                allChats={displayChats}
                 messagesMap={messagesMap}
                 unlockedChatIds={unlockedSessionChatIds}
                 onJumpToMessage={handleJumpToMessage}
@@ -2687,7 +2949,7 @@ export default function App() {
             >
               <ChatWindow
                 chat={selectedChat}
-                chats={chats}
+                chats={displayChats}
                 messages={activeMessages}
                 myUid={currentUser.uid}
                 omarSettings={omarSettings}
@@ -2727,6 +2989,24 @@ export default function App() {
                 onClearExternalHighlight={() => setHighlightedJump(null)}
                 onScheduleMessage={handleScheduleMessage}
                 onOpenScheduledMessages={() => setShowScheduledListModal(true)}
+                onChangePreferredLanguage={(lang) =>
+                  handleUpdateOmarSettings({ preferredLanguage: lang })
+                }
+                onOpenWallpaperPicker={() => {
+                  if (selectedChat) setWallpaperPickerChatId(selectedChat.id);
+                }}
+                isPeerBlocked={selectedChatPeerBlocked}
+                onBlockPeer={
+                  selectedChat && selectedChat.type === 'direct'
+                    ? () => handleToggleBlockForChat(selectedChat)
+                    : undefined
+                }
+                onUnblockPeer={
+                  selectedChat && selectedChat.type === 'direct'
+                    ? () => handleToggleBlockForChat(selectedChat)
+                    : undefined
+                }
+                contacts={contactsList}
               />
 
               <RightDrawer
@@ -2750,6 +3030,15 @@ export default function App() {
                 onJumpToMessage={(msgId, q) => {
                   if (selectedChat) handleJumpToMessage(selectedChat.id, msgId, q);
                 }}
+                globalWallpaper={omarSettings.wallpaper}
+                onOpenWallpaperPicker={(id) => setWallpaperPickerChatId(id)}
+                onResetChatWallpaper={(id) => void handleSetChatWallpaper(id, '')}
+                isPeerBlocked={selectedChatPeerBlocked}
+                onToggleBlockPeer={
+                  selectedChat && selectedChat.type === 'direct'
+                    ? () => handleToggleBlockForChat(selectedChat)
+                    : undefined
+                }
               />
             </div>
           </div>
@@ -2793,7 +3082,9 @@ export default function App() {
         {activeTab === 'calls' && (
           <CallsView
             calls={calls}
-            chats={chats}
+            chats={displayChats.filter(
+              (c) => getDirectChatBlockedPeerUid(c, currentUser.uid, blockedUidSet) === null
+            )}
             onStartCall={(chat, type) => void handleStartCallForChat(chat, type)}
           />
         )}
@@ -2801,7 +3092,7 @@ export default function App() {
         {activeTab === 'starred' && (
           <StarredView
             messagesMap={messagesMap}
-            chats={chats}
+            chats={displayChats}
             myUid={currentUser.uid}
             onJumpToChat={(chatId) => {
               setSelectedChatId(chatId);
@@ -2815,7 +3106,7 @@ export default function App() {
           <OmarAddonsView
             settings={omarSettings}
             theme={theme}
-            chats={chats}
+            chats={displayChats}
             currentUser={currentUser}
             onUpdateSettings={handleUpdateOmarSettings}
             onToggleTheme={handleToggleTheme}
@@ -2852,6 +3143,11 @@ export default function App() {
             onOpenOmarAddons={() => setActiveTab('omar')}
             onBackupData={handleBackupUserData}
             onRestoreData={handleRestoreUserData}
+            contacts={contactsList}
+            blockedContacts={blockedContacts}
+            onBlockContact={handleBlockContact}
+            onUnblockContact={handleUnblockContact}
+            onLookupUser={lookupUserByWasilIdOrUid}
           />
         )}
       </div>
@@ -3170,12 +3466,31 @@ export default function App() {
         />
       )}
 
+      {/* Per-Chat Wallpaper Customization Modal */}
+      {wallpaperPickerChatId && (() => {
+        const wallpaperTarget = chats.find((c) => c.id === wallpaperPickerChatId);
+        if (!wallpaperTarget) return null;
+        return (
+          <ChatWallpaperModal
+            chat={wallpaperTarget}
+            omarSettings={omarSettings}
+            onClose={() => setWallpaperPickerChatId(null)}
+            onSaveWallpaper={handleSetChatWallpaper}
+          />
+        );
+      })()}
+
       {/* Active WebRTC Call Modal */}
       {activeCall && (
         <CallOverlay
           activeCall={activeCall}
           myUid={currentUser.uid}
           isCloudSynced={isCloudSynced}
+          onCallAccepted={(callId) =>
+            setActiveCall((curr) =>
+              curr && curr.id === callId ? { ...curr, status: 'connected' } : curr
+            )
+          }
           onEndCall={(dur, finalStatus, skipRemoteFinalize) =>
             void handleEndCall(dur, finalStatus, skipRemoteFinalize)
           }
