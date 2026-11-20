@@ -289,7 +289,7 @@ export function subscribeToChatMessages(
               ? await decryptGroupMessage(chatId, uid, data.ciphertext)
               : JSON.parse(await decryptPayload(data.ciphertext, data.iv, await deriveRoomKeyFromSeed(chatId))) as MessagePayload;
           } catch {
-            payload = { text: '🔒 تعذر فك تشفير الرسالة على هذا الجهاز' };
+            payload = { text: "🔒 رسالة مشفرة بمفتاح مختلف" };
           }
           list.push({
             id: snap.id,
