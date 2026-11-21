@@ -452,7 +452,6 @@ export async function deriveCandidateRoomKeysForDecryption(
   keys.push(await deriveLegacyRoomSymmetricKey(roomSeed));
   if (roomSeed) {
     keys.push(await deriveLegacyRoomSymmetricKey(roomSeed.replace(/^direct_/, '')));
-    keys.push(await deriveLegacyRoomSymmetricKey('wasil-global-room'));
   }
   return keys;
 }
@@ -503,16 +502,15 @@ export async function decryptPayloadWithAnyKey(
     }
   }
 
-  // Graceful fallback for unencrypted or legacy text / JSON payloads so conversation is always visible
+  // Graceful fallback only for explicit valid JSON { text } legacy payloads
   if (ciphertext) {
     try {
       const parsed = JSON.parse(ciphertext);
       if (parsed && typeof parsed === 'object' && typeof parsed.text === 'string') {
         return ciphertext;
       }
-    } catch {}
-    if (typeof ciphertext === 'string' && ciphertext.length > 0 && ciphertext.length <= 4000) {
-      return JSON.stringify({ text: ciphertext });
+    } catch {
+      // Encrypted base64 payload that failed all keys should reject cleanly
     }
   }
 

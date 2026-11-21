@@ -60,6 +60,7 @@
           "maxLength": 65536,
           "pattern": "^(|default|pattern|mint|slate|sand|velvet|#[0-9a-fA-F]{6}|data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+)$"
         },
+        "clearedAtMs": { "type": "integer" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["chatId", "uid", "pinned", "archived", "muted", "favorite", "unreadCount", "disappearingSeconds", "updatedAt"]

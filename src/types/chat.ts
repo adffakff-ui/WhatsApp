@@ -130,6 +130,7 @@ export interface ChatRoom {
   unreadCount: number;
   disappearingSeconds: number;
   wallpaper?: string;
+  clearedAtMs?: number;
   adminOnlyPost?: boolean;
   inviteCode?: string;
   lastMessagePreview: string;

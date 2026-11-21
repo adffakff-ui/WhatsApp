@@ -152,6 +152,7 @@ export function RightDrawer({
   const iconInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    setSearchTerm('');
     if (chat) {
       setGroupTitle(chat.title);
       setGroupDesc(chat.description);

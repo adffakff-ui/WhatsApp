@@ -313,6 +313,7 @@ export default function App() {
   }, [blockedUidSet]);
 
   const [scheduledMessages, setScheduledMessages] = useState<ScheduledMessage[]>([]);
+  const dispatchingScheduledRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!currentUser || !isCloudSynced) return;
@@ -327,18 +328,23 @@ export default function App() {
       const now = Date.now();
       const due = scheduledMessages.filter((m) => m.status === 'pending' && m.sendAtMs <= now);
       for (const msg of due) {
+        if (dispatchingScheduledRef.current.has(msg.id)) continue;
+        dispatchingScheduledRef.current.add(msg.id);
         try {
+          const targetChat = chats.find((c) => c.id === msg.chatId);
+          if (!targetChat) continue;
+          await sendMessageToTargetChat(targetChat, msg.type, msg.payload);
           if (isCloudSynced) {
             await deleteScheduledMessageFromFirestore(msg.id);
           }
-          setScheduledMessages((prev) => prev.map((item) => item.id === msg.id ? { ...item, status: 'sent' } : item));
-          const targetChat = chats.find((c) => c.id === msg.chatId);
-          if (targetChat) {
-            await sendMessageToTargetChat(targetChat, msg.type, msg.payload);
-            showToast(`تم إرسال الرسالة المجدولة تلقائياً`);
-          }
+          setScheduledMessages((prev) =>
+            prev.map((item) => (item.id === msg.id ? { ...item, status: 'sent' } : item))
+          );
+          showToast(`تم إرسال الرسالة المجدولة تلقائياً`);
         } catch (err) {
           console.error('Failed to dispatch scheduled message:', err);
+        } finally {
+          dispatchingScheduledRef.current.delete(msg.id);
         }
       }
     }, 5000);
@@ -355,6 +361,7 @@ export default function App() {
   const [rightPanelMode, setRightPanelMode] = useState<RightPanelMode>('none');
   const [inspectMessageId, setInspectMessageId] = useState<string | null>(null);
   const [newChatModalMode, setNewChatModalMode] = useState<'direct' | 'group' | 'community' | null>(null);
+  const [newChatInitialQuery, setNewChatInitialQuery] = useState('');
   const [activeCall, setActiveCall] = useState<CallRecord | null>(null);
   const [googleContacts, setGoogleContacts] = useState<UserProfile[]>([]);
 
@@ -495,7 +502,7 @@ export default function App() {
   }, [chats, currentUser.uid, userKeys.CHATS]);
 
   useEffect(() => {
-    if (isRemoteFirebaseUid(currentUser.uid) && Object.keys(messagesMap).length > 0) {
+    if (isRemoteFirebaseUid(currentUser.uid)) {
       localStorage.setItem(userKeys.MESSAGES, JSON.stringify(messagesMap));
     }
   }, [messagesMap, currentUser.uid, userKeys.MESSAGES]);
@@ -1273,13 +1280,12 @@ export default function App() {
     [selectedChat, currentUser.uid, blockedUidSet]
   );
 
-  const activeMessages = useMemo(
-    () =>
-      selectedChatId
-        ? filterBlockedMessages(messagesMap[selectedChatId] || [], blockedUidSet)
-        : [],
-    [messagesMap, selectedChatId, blockedUidSet]
-  );
+  const activeMessages = useMemo(() => {
+    if (!selectedChatId) return [];
+    const clearedAtMs = selectedChat?.clearedAtMs || 0;
+    const msgs = filterBlockedMessages(messagesMap[selectedChatId] || [], blockedUidSet);
+    return clearedAtMs > 0 ? msgs.filter((m) => m.createdAtMs > clearedAtMs) : msgs;
+  }, [messagesMap, selectedChatId, selectedChat?.clearedAtMs, blockedUidSet]);
 
   // Acknowledge delivery & read receipts for the active cloud chat
   useEffect(() => {
@@ -1352,7 +1358,8 @@ export default function App() {
               favorite: selectedChat.favorite,
               unreadCount: 0,
               disappearingSeconds: selectedChat.disappearingSeconds,
-              wallpaper: selectedChat.wallpaper || ''
+              wallpaper: selectedChat.wallpaper || '',
+              clearedAtMs: selectedChat.clearedAtMs || 0
             }).catch(() => {});
           }
         }
@@ -1409,7 +1416,8 @@ export default function App() {
       favorite: nextChat.favorite,
       unreadCount: nextChat.unreadCount,
       disappearingSeconds: nextChat.disappearingSeconds,
-      wallpaper: nextChat.wallpaper || ''
+      wallpaper: nextChat.wallpaper || '',
+      clearedAtMs: nextChat.clearedAtMs || 0
     }).catch(() => {});
   };
 
@@ -1886,7 +1894,11 @@ export default function App() {
       edited: true
     };
 
-    const key = await deriveRoomKeyFromSeed(selectedChat.roomSeed);
+    const roomKeyHint =
+      selectedChat.peerUid || selectedChat.peerPublicKeyJwk
+        ? { peerUid: selectedChat.peerUid, peerPublicKeyJwk: selectedChat.peerPublicKeyJwk }
+        : undefined;
+    const key = await deriveRoomKeyFromSeed(selectedChat.roomSeed, roomKeyHint);
     const localEnvelope = await encryptPayload(JSON.stringify(updatedPayload), key);
 
     const latestMsg = chatMessages[chatMessages.length - 1];
@@ -2143,7 +2155,8 @@ export default function App() {
           favorite: nextChat.favorite,
           unreadCount: nextChat.unreadCount,
           disappearingSeconds: nextChat.disappearingSeconds,
-          wallpaper: normalized
+          wallpaper: normalized,
+          clearedAtMs: nextChat.clearedAtMs || 0
         });
         showToast(
           normalized
@@ -2166,15 +2179,57 @@ export default function App() {
   };
 
   const handleClearChat = (chatId: string) => {
+    const existingMsgs = messagesMap[chatId] || [];
+    const maxExistingMsgMs = existingMsgs.reduce(
+      (max, m) => (m.createdAtMs > max ? m.createdAtMs : max),
+      0
+    );
+    const clearedAtMs = Math.max(Date.now(), maxExistingMsgMs);
+
     setMessagesMap((prev) => ({ ...prev, [chatId]: [] }));
     setChats((prev) =>
-      prev.map((c) => (c.id === chatId ? { ...c, lastMessagePreview: 'تم مسح الدردشة' } : c))
+      prev.map((c) => {
+        if (c.id !== chatId) return c;
+        const nextChat: ChatRoom = {
+          ...c,
+          clearedAtMs,
+          unreadCount: 0,
+          lastMessageSenderId: '',
+          lastMessagePreview: 'تم مسح الدردشة'
+        };
+        persistChatPrefsIfCloud(nextChat);
+        return nextChat;
+      })
     );
+    showToast('تم مسح محتوى المحادثة');
+  };
+
+  const cleanupTransientStateForDeletedChats = (idsSet: Set<string>) => {
+    for (const chatId of idsSet) {
+      const msgs = messagesMap[chatId] || [];
+      for (const m of msgs) {
+        deliveredMsgAckedRef.current.delete(m.id);
+        readMsgAckedRef.current.delete(m.id);
+      }
+    }
+    if (highlightedJump && idsSet.has(highlightedJump.chatId)) {
+      setHighlightedJump(null);
+    }
+    if (wallpaperPickerChatId && idsSet.has(wallpaperPickerChatId)) {
+      setWallpaperPickerChatId(null);
+    }
+    if (selectedChatId && idsSet.has(selectedChatId)) {
+      setSelectedChatId(null);
+      setMobileChatOpen(false);
+      setRightPanelMode('none');
+      setInspectMessageId(null);
+    }
   };
 
   const handleDeleteChat = async (chatId: string) => {
     const targetChat = chats.find((c) => c.id === chatId);
     const isCreator = targetChat?.createdBy === currentUser.uid;
+    const idsSet = new Set([chatId]);
 
     setChats((prev) => prev.filter((c) => c.id !== chatId));
     setMessagesMap((prev) => {
@@ -2182,14 +2237,10 @@ export default function App() {
       delete next[chatId];
       return next;
     });
-
-    if (selectedChatId === chatId) {
-      setSelectedChatId(null);
-      setMobileChatOpen(false);
-    }
+    cleanupTransientStateForDeletedChats(idsSet);
 
     if (isCloudSynced && isRemoteFirebaseUid(currentUser.uid)) {
-      void deleteChatInFirestore(chatId, currentUser.uid, isCreator);
+      await deleteChatInFirestore(chatId, currentUser.uid, isCreator);
     }
 
     showToast('تم حذف المحادثة بنجاح');
@@ -2198,6 +2249,7 @@ export default function App() {
   const handleDeleteMultipleChats = async (chatIds: string[]) => {
     if (chatIds.length === 0) return;
     const idsSet = new Set(chatIds);
+    const targetsSnapshot = chats.filter((c) => idsSet.has(c.id));
 
     setChats((prev) => prev.filter((c) => !idsSet.has(c.id)));
     setMessagesMap((prev) => {
@@ -2205,18 +2257,16 @@ export default function App() {
       chatIds.forEach((id) => delete next[id]);
       return next;
     });
-
-    if (selectedChatId && idsSet.has(selectedChatId)) {
-      setSelectedChatId(null);
-      setMobileChatOpen(false);
-    }
+    cleanupTransientStateForDeletedChats(idsSet);
 
     if (isCloudSynced && isRemoteFirebaseUid(currentUser.uid)) {
-      for (const chatId of chatIds) {
-        const targetChat = chats.find((c) => c.id === chatId);
-        const isCreator = targetChat?.createdBy === currentUser.uid;
-        void deleteChatInFirestore(chatId, currentUser.uid, isCreator);
-      }
+      await Promise.all(
+        chatIds.map((chatId) => {
+          const targetChat = targetsSnapshot.find((c) => c.id === chatId);
+          const isCreator = targetChat?.createdBy === currentUser.uid;
+          return deleteChatInFirestore(chatId, currentUser.uid, isCreator);
+        })
+      );
     }
 
     showToast(`تم حذف ${chatIds.length} محادثة بنجاح`);
@@ -2284,14 +2334,18 @@ export default function App() {
 
   const handleCreateDirectChat = async (name: string, peerUid?: string) => {
     if (!isCloudSynced || !auth.currentUser || !isRemoteFirebaseUid(currentUser.uid)) {
-      showToast('يجب تسجيل الدخول عبر Firebase لبدء محادثة جديدة');
-      return;
+      const msg = 'يجب تسجيل الدخول عبر Firebase لبدء محادثة جديدة';
+      showToast(msg);
+      throw new Error(msg);
     }
 
     const existingByPeer = peerUid
       ? chats.find((c) => c.type === 'direct' && (c.peerUid === peerUid || c.memberIds.includes(peerUid)))
       : undefined;
     if (existingByPeer) {
+      setSearchQuery('');
+      setShowArchived(false);
+      setChatFilter('all');
       setSelectedChatId(existingByPeer.id);
       setMobileChatOpen(true);
       setActiveTab('chats');
@@ -2299,12 +2353,14 @@ export default function App() {
     }
 
     if (!peerUid || !isRemoteFirebaseUid(peerUid)) {
-      showToast('يجب البحث عن مستخدم مسجّل عبر معرّف تواصل (Wasil ID) لبدء محادثة');
-      return;
+      const msg = 'يجب البحث عن مستخدم مسجّل عبر معرّف تواصل (Wasil ID) لبدء محادثة';
+      showToast(msg);
+      throw new Error(msg);
     }
     if (isUidBlocked(blockedUidSet, peerUid)) {
-      showToast('هذه الجهة محظورة حالياً — قم بإلغاء الحظر من الإعدادات أولاً');
-      return;
+      const msg = 'هذه الجهة محظورة حالياً — قم بإلغاء الحظر من الإعدادات أولاً';
+      showToast(msg);
+      throw new Error(msg);
     }
 
     const deterministicId = buildDirectChatId(currentUser.uid, peerUid);
@@ -2326,6 +2382,9 @@ export default function App() {
       `تم بدء قناة مراسلة مشفرة مع ${resolvedTitle} 🔒`,
       invited
     );
+    setSearchQuery('');
+    setShowArchived(false);
+    setChatFilter('all');
     setSelectedChatId(deterministicId);
     setMobileChatOpen(true);
     setActiveTab('chats');
@@ -2340,8 +2399,9 @@ export default function App() {
     adminOnlyPost = false
   ) => {
     if (!isCloudSynced || !auth.currentUser || !isRemoteFirebaseUid(currentUser.uid)) {
-      showToast('يجب تسجيل الدخول عبر Firebase لإنشاء مجموعة أو قناة جديدة');
-      return;
+      const msg = 'يجب تسجيل الدخول عبر Firebase لإنشاء مجموعة أو قناة جديدة';
+      showToast(msg);
+      throw new Error(msg);
     }
 
     const chatId = `${roomType === 'community' ? 'comm' : 'group'}_${Date.now()}`;
@@ -2899,9 +2959,18 @@ export default function App() {
                 showStoriesTray={omarSettings.showStoriesTray}
                 dndMode={omarSettings.dndMode}
                 onToggleDndMode={() => handleUpdateOmarSettings({ dndMode: !omarSettings.dndMode })}
-                onOpenNewChat={() => setNewChatModalMode('direct')}
-                onOpenNewGroup={() => setNewChatModalMode('group')}
-                onOpenNewChannel={() => setNewChatModalMode('community')}
+                onOpenNewChat={(prefillQuery) => {
+                  setNewChatInitialQuery(typeof prefillQuery === 'string' ? prefillQuery : '');
+                  setNewChatModalMode('direct');
+                }}
+                onOpenNewGroup={() => {
+                  setNewChatInitialQuery('');
+                  setNewChatModalMode('group');
+                }}
+                onOpenNewChannel={() => {
+                  setNewChatInitialQuery('');
+                  setNewChatModalMode('community');
+                }}
                 onOpenBroadcast={() => {
                   setBroadcastChatIds(chats.slice(0, 2).map((c) => c.id));
                   setShowBroadcastModal(true);
@@ -3155,11 +3224,15 @@ export default function App() {
       {/* New Chat / Group Modal */}
       <NewChatModal
         mode={newChatModalMode}
+        initialDirectQuery={newChatInitialQuery}
         myUid={currentUser.uid}
         currentUser={currentUser}
         isCloudSynced={isCloudSynced}
         contacts={contactsList}
-        onClose={() => setNewChatModalMode(null)}
+        onClose={() => {
+          setNewChatModalMode(null);
+          setNewChatInitialQuery('');
+        }}
         onCreateDirectChat={handleCreateDirectChat}
         onCreateGroupChat={handleCreateGroupChat}
         onLookupPeerByUid={lookupUserByWasilIdOrUid}

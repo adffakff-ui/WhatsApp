@@ -69,5 +69,10 @@ test('Dirty Dozen security invariants are enforced in firestore.rules', () => {
   assert.match(rulesContent, /incoming\(\)\.blockedUid != request\.auth\.uid/);
   assert.match(rulesContent, /!isDirectPeerBlockedAfter\(chatId\)/);
   assert.match(rulesContent, /!isBlockedBetween\(request\.auth\.uid, incoming\(\)\.calleeId\)/);
+
+  // 16. Direct chat reactivation and per-user clearedAtMs support
+  assert.match(rulesContent, /'clearedAtMs'/);
+  assert.match(rulesContent, /existing\(\)\.type == 'direct'/);
+  assert.match(rulesContent, /isChatMemberAfter\(chatId\)/);
 });
 

@@ -153,7 +153,7 @@ service cloud.firestore {
 
     function isValidChatPref(data) {
       return data.keys().hasAll(['chatId', 'uid', 'pinned', 'archived', 'muted', 'favorite', 'unreadCount', 'disappearingSeconds', 'updatedAt'])
-        && data.keys().hasOnly(['chatId', 'uid', 'pinned', 'archived', 'muted', 'favorite', 'unreadCount', 'disappearingSeconds', 'wallpaper', 'updatedAt'])
+        && data.keys().hasOnly(['chatId', 'uid', 'pinned', 'archived', 'muted', 'favorite', 'unreadCount', 'disappearingSeconds', 'wallpaper', 'clearedAtMs', 'updatedAt'])
         && isValidId(data.chatId)
         && isValidId(data.uid)
         && data.pinned is bool
@@ -163,6 +163,7 @@ service cloud.firestore {
         && data.unreadCount is int && data.unreadCount >= 0 && data.unreadCount <= 10000
         && data.disappearingSeconds is int && data.disappearingSeconds >= 0 && data.disappearingSeconds <= 7776000
         && (!('wallpaper' in data) || isValidWallpaper(data.wallpaper))
+        && (!('clearedAtMs' in data) || (data.clearedAtMs is int && data.clearedAtMs >= 0 && data.clearedAtMs <= 9999999999999))
         && data.updatedAt is timestamp;
     }
 
@@ -410,13 +411,16 @@ service cloud.firestore {
         && incoming().uid == existing().uid
         && incoming().chatId == existing().chatId
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['pinned', 'archived', 'muted', 'favorite', 'unreadCount', 'disappearingSeconds', 'wallpaper', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['pinned', 'archived', 'muted', 'favorite', 'unreadCount', 'disappearingSeconds', 'wallpaper', 'clearedAtMs', 'updatedAt']);
       allow delete: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(chatId);
     }
 
     // Chats & Encrypted Messages
     match /chats/{chatId} {
-      allow get: if isSignedIn() && isValidId(chatId) && isChatMember(chatId);
+      allow get: if isSignedIn() && isValidId(chatId) && (
+        isChatMember(chatId) ||
+        (existing().type == 'direct' && ('memberIds' in existing()) && existing().memberIds is list && request.auth.uid in existing().memberIds)
+      );
       allow create: if isVerifiedUser() && isValidId(chatId)
         && isValidChat(incoming())
         && incoming().id == chatId
@@ -427,18 +431,27 @@ service cloud.firestore {
         && isChatMemberAfter(chatId);
       allow update: if isVerifiedUser() && isValidId(chatId)
         && isValidChat(incoming())
-        && isChatMember(chatId)
         && incoming().id == existing().id
+        && incoming().type == existing().type
         && incoming().createdBy == existing().createdBy
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          (incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageCiphertext', 'lastMessageIv', 'lastMessageSenderId', 'lastMessageType', 'lastMessageDeliveredToIds', 'lastMessageReadByIds', 'lastMessageAt', 'updatedAt'])
-            && incoming().lastMessageAt == request.time) ||
-          (existing().lastMessageSenderId == request.auth.uid
-            && incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageCiphertext', 'lastMessageIv', 'updatedAt'])) ||
-          (incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageDeliveredToIds', 'lastMessageReadByIds', 'updatedAt'])) ||
-          (isChatAdmin(chatId) && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'avatarUrl', 'memberIds', 'adminOnlyPost', 'inviteCode', 'updatedAt']))
+          (isChatMember(chatId) && (
+            (incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageCiphertext', 'lastMessageIv', 'lastMessageSenderId', 'lastMessageType', 'lastMessageDeliveredToIds', 'lastMessageReadByIds', 'lastMessageAt', 'updatedAt'])
+              && incoming().lastMessageAt == request.time) ||
+            (existing().lastMessageSenderId == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageCiphertext', 'lastMessageIv', 'updatedAt'])) ||
+            (incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageDeliveredToIds', 'lastMessageReadByIds', 'updatedAt'])) ||
+            (isChatAdmin(chatId) && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'avatarUrl', 'memberIds', 'adminOnlyPost', 'inviteCode', 'updatedAt']))
+          )) ||
+          (existing().type == 'direct'
+            && ('memberIds' in existing())
+            && existing().memberIds is list
+            && request.auth.uid in existing().memberIds
+            && isChatMemberAfter(chatId)
+            && incoming().lastMessageAt == request.time
+            && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'avatarUrl', 'lastMessageCiphertext', 'lastMessageIv', 'lastMessageSenderId', 'lastMessageType', 'lastMessageDeliveredToIds', 'lastMessageReadByIds', 'lastMessageAt', 'updatedAt']))
         );
       allow delete: if isVerifiedUser() && isValidId(chatId) && existing().createdBy == request.auth.uid;
 
@@ -453,16 +466,27 @@ service cloud.firestore {
           && incoming().joinedAt == request.time
           && incoming().updatedAt == request.time
           && existsAfter(/databases/$(database)/documents/chats/$(chatId))
-          && ((memberId == request.auth.uid && incoming().role == 'admin') || isChatAdmin(chatId) || isChatAdminAfter(chatId));
+          && (
+            (memberId == request.auth.uid && incoming().role == 'admin') ||
+            isChatAdmin(chatId) ||
+            isChatAdminAfter(chatId) ||
+            (memberId == request.auth.uid
+              && exists(/databases/$(database)/documents/chats/$(chatId))
+              && get(/databases/$(database)/documents/chats/$(chatId)).data.type == 'direct'
+              && ('memberIds' in get(/databases/$(database)/documents/chats/$(chatId)).data)
+              && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.memberIds)
+          );
         allow update: if isVerifiedUser() && isValidId(chatId) && isValidId(memberId)
           && isValidChatMember(incoming())
           && incoming().chatId == existing().chatId
           && incoming().uid == existing().uid
-          && incoming().joinedAt == existing().joinedAt
           && incoming().updatedAt == request.time
           && (
-            (isChatAdmin(chatId) && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'updatedAt'])) ||
-            (memberId == request.auth.uid && incoming().role == existing().role && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'avatarUrl', 'publicKeyJwk', 'isTyping', 'typingAt', 'updatedAt']))
+            (incoming().joinedAt == existing().joinedAt && isChatAdmin(chatId) && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'updatedAt'])) ||
+            (incoming().joinedAt == existing().joinedAt && memberId == request.auth.uid && incoming().role == existing().role && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'avatarUrl', 'publicKeyJwk', 'isTyping', 'typingAt', 'updatedAt'])) ||
+            (!exists(/databases/$(database)/documents/chats/$(chatId))
+              && existsAfter(/databases/$(database)/documents/chats/$(chatId))
+              && getAfter(/databases/$(database)/documents/chats/$(chatId)).data.createdBy == request.auth.uid)
           );
         allow delete: if isVerifiedUser() && isValidId(chatId) && isValidId(memberId)
           && (memberId == request.auth.uid || isChatAdmin(chatId));

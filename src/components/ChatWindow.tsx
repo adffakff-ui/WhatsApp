@@ -207,6 +207,8 @@ export function ChatWindow({
   const [translationErrors, setTranslationErrors] = useState<Record<string, string>>({});
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  const prevChatIdRef = useRef<string | null>(null);
+  const prevMsgCountRef = useRef<number>(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inChatSearchInputRef = useRef<HTMLInputElement>(null);
   const msgRefsMap = useRef<Record<string, HTMLDivElement | null>>({});
@@ -236,8 +238,14 @@ export function ChatWindow({
       : highlightedMessageId;
 
   useEffect(() => {
-    if (!highlightedMessageId) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const currentChatId = chat?.id || null;
+    const chatChanged = currentChatId !== prevChatIdRef.current;
+    const messageAppended = messages.length > prevMsgCountRef.current;
+    prevChatIdRef.current = currentChatId;
+    prevMsgCountRef.current = messages.length;
+
+    if (!highlightedMessageId && (chatChanged || messageAppended)) {
+      bottomRef.current?.scrollIntoView({ behavior: chatChanged ? 'auto' : 'smooth' });
     }
   }, [messages.length, chat?.id, highlightedMessageId]);
 
@@ -264,11 +272,21 @@ export function ChatWindow({
 
   useEffect(() => {
     if (!focusedMatchId) return;
-    const targetEl = msgRefsMap.current[focusedMatchId];
-    if (targetEl) {
-      targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const scrollToTarget = () => {
+      const targetEl = msgRefsMap.current[focusedMatchId];
+      if (targetEl) {
+        targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return true;
+      }
+      return false;
+    };
+    if (!scrollToTarget()) {
+      const rafId = window.requestAnimationFrame(() => {
+        scrollToTarget();
+      });
+      return () => window.cancelAnimationFrame(rafId);
     }
-  }, [focusedMatchId]);
+  }, [focusedMatchId, messages.length]);
 
   useEffect(() => {
     const hasFloatingOpen =
@@ -853,7 +871,7 @@ export function ChatWindow({
                   onOpenRightPanel('search');
                   setShowMoreMenu(false);
                 }}
-                className="hidden sm:block w-full px-4 py-2.5 text-right hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+                className="w-full px-4 py-2.5 text-right hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
               >
                 فهرس البحث الجانبي
               </button>

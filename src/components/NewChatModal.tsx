@@ -19,6 +19,7 @@ import type { UserProfile } from '../types/chat';
 
 interface NewChatModalProps {
   mode: 'direct' | 'group' | 'community' | null;
+  initialDirectQuery?: string;
   myUid: string;
   currentUser?: UserProfile;
   isCloudSynced: boolean;
@@ -68,6 +69,7 @@ async function compressGroupIcon(file: File): Promise<string> {
 
 export function NewChatModal({
   mode,
+  initialDirectQuery = '',
   myUid,
   currentUser,
   isCloudSynced,
@@ -105,11 +107,17 @@ export function NewChatModal({
       setRoomType('group');
       setAdminOnlyPost(false);
     }
+    if (mode === 'direct') {
+      setContactInput(initialDirectQuery || '');
+    } else if (!mode) {
+      setContactInput('');
+    }
+    setIsSubmitting(false);
     setErrorMsg(null);
     setFoundRemoteUser(null);
     setGroupFoundPeer(null);
     setGroupPeerQuery('');
-  }, [mode]);
+  }, [mode, initialDirectQuery]);
 
   // Automatic debounced lookup as user types a Wasil ID (@handle or bare handle >= 3 chars)
   useEffect(() => {
@@ -226,10 +234,26 @@ export function NewChatModal({
     }
   };
 
+  const handleQuickCreateDirect = async (displayName: string, peerUid?: string) => {
+    if (isSubmitting) return;
+    setErrorMsg(null);
+    setIsSubmitting(true);
+    try {
+      await onCreateDirectChat(displayName, peerUid);
+      setContactInput('');
+      setFoundRemoteUser(null);
+      onClose();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'تعذر فتح المحادثة. حاول مرة أخرى.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleSubmitDirect = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = contactInput.trim();
-    if (!trimmed) return;
+    if (!trimmed || isSubmitting) return;
     setErrorMsg(null);
     setIsSubmitting(true);
     try {
@@ -270,6 +294,8 @@ export function NewChatModal({
       setContactInput('');
       setFoundRemoteUser(null);
       onClose();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'تعذر بدء المحادثة. حاول مرة أخرى.');
     } finally {
       setIsSubmitting(false);
     }
@@ -277,7 +303,7 @@ export function NewChatModal({
 
   const handleSubmitGroup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!groupTitle.trim()) return;
+    if (!groupTitle.trim() || isSubmitting) return;
     setIsSubmitting(true);
     setErrorMsg(null);
     try {
@@ -294,6 +320,8 @@ export function NewChatModal({
       setGroupAvatar(GROUP_ICON_PRESETS[0]);
       setSelectedUids([]);
       onClose();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'تعذر إنشاء المجموعة. حاول مرة أخرى.');
     } finally {
       setIsSubmitting(false);
     }
@@ -439,10 +467,9 @@ export function NewChatModal({
             {foundRemoteUser && (
               <button
                 type="button"
-                onClick={() => {
-                  void onCreateDirectChat(foundRemoteUser.displayName, foundRemoteUser.uid).then(onClose);
-                }}
-                className="w-full p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 flex items-center justify-between gap-3 text-right cursor-pointer hover:brightness-95 transition-all"
+                disabled={isSubmitting}
+                onClick={() => void handleQuickCreateDirect(foundRemoteUser.displayName, foundRemoteUser.uid)}
+                className="w-full p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 flex items-center justify-between gap-3 text-right cursor-pointer hover:brightness-95 disabled:opacity-60 transition-all"
               >
                 <div className="flex items-center gap-3 min-w-0">
                   <Avatar
@@ -516,10 +543,9 @@ export function NewChatModal({
                         <li key={c.uid}>
                           <button
                             type="button"
-                            onClick={() => {
-                              void onCreateDirectChat(c.displayName, c.uid).then(onClose);
-                            }}
-                            className="w-full p-2 rounded-xl flex items-center gap-3 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-right cursor-pointer"
+                            disabled={isSubmitting}
+                            onClick={() => void handleQuickCreateDirect(c.displayName, c.uid)}
+                            className="w-full p-2 rounded-xl flex items-center gap-3 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-right cursor-pointer disabled:opacity-60"
                           >
                             <Avatar src={c.avatarUrl} name={c.displayName} size="sm" isOnline={c.isOnline} />
                             <div className="min-w-0 flex-1">

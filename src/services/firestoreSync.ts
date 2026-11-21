@@ -782,6 +782,8 @@ export async function fetchPublicProfileByUid(targetUid: string): Promise<UserPr
   }
 }
 
+const inFlightChatDeletes = new Map<string, Promise<void>>();
+
 export async function createChatInFirestore(
   chatId: string,
   type: 'direct' | 'group' | 'community',
@@ -793,6 +795,11 @@ export async function createChatInFirestore(
   invitedContacts: UserProfile[] = [],
   options?: { adminOnlyPost?: boolean; inviteCode?: string }
 ): Promise<void> {
+  const pendingDelete = inFlightChatDeletes.get(chatId);
+  if (pendingDelete) {
+    await pendingDelete.catch(() => {});
+  }
+
   const batch = writeBatch(db);
   const chatRef = doc(db, 'chats', chatId);
   const myMemberRef = doc(db, 'chats', chatId, 'members', creator.uid);
@@ -825,57 +832,145 @@ export async function createChatInFirestore(
     options?.inviteCode ||
     (type !== 'direct' ? buildChannelInviteCode(chatId) : undefined);
 
-  batch.set(chatRef, {
-    id: chatId,
-    type,
-    title: title.slice(0, 100),
-    description: description.slice(0, 300),
-    avatarUrl: avatarUrl.slice(0, 65536),
-    createdBy: creator.uid,
-    memberIds,
-    ...(typeof options?.adminOnlyPost === 'boolean'
-      ? { adminOnlyPost: options.adminOnlyPost }
-      : {}),
-    ...(inviteCode ? { inviteCode: inviteCode.slice(0, 32) } : {}),
-    lastMessageCiphertext: envelope.ciphertext.slice(0, 2048),
-    lastMessageIv: envelope.iv,
-    lastMessageSenderId: creator.uid,
-    lastMessageType: 'text',
-    lastMessageDeliveredToIds: [creator.uid],
-    lastMessageReadByIds: [creator.uid],
-    lastMessageAt: serverTimestamp(),
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp()
-  });
+  // Check if a deterministic direct chat or orphaned preference/messages still exist in Firestore
+  const [existingChatSnap, existingMyMemberSnap, existingPrefSnap] = await Promise.all([
+    getDoc(chatRef).catch(() => null),
+    getDoc(myMemberRef).catch(() => null),
+    getDoc(myPrefRef).catch(() => null)
+  ]);
 
-  batch.set(myMemberRef, {
-    chatId,
-    uid: creator.uid,
-    role: 'admin',
-    displayName: creator.displayName.slice(0, 80),
-    avatarUrl: creator.avatarUrl.slice(0, 65536),
-    publicKeyJwk: creatorPublicKey,
-    isTyping: false,
-    joinedAt: serverTimestamp(),
-    updatedAt: serverTimestamp()
-  });
+  const existingClearedAtMs =
+    existingPrefSnap?.exists() && typeof existingPrefSnap.data()?.clearedAtMs === 'number'
+      ? (existingPrefSnap.data()!.clearedAtMs as number)
+      : 0;
 
-  for (const contact of invitedContacts.slice(0, 49)) {
-    if (!contact.uid || contact.uid === creator.uid) continue;
-    const contactPublicKey = sanitizePublicKeyJwk(contact.publicKeyJwk);
-    if (!contactPublicKey) continue;
-    const contactMemberRef = doc(db, 'chats', chatId, 'members', contact.uid);
-    batch.set(contactMemberRef, {
-      chatId,
-      uid: contact.uid,
-      role: 'member',
-      displayName: contact.displayName.slice(0, 80),
-      avatarUrl: (contact.avatarUrl || '').slice(0, 65536),
-      publicKeyJwk: contactPublicKey,
-      isTyping: false,
-      joinedAt: serverTimestamp(),
+  let resolvedClearedAtMs = existingClearedAtMs;
+  const existingChatData = existingChatSnap?.exists() ? existingChatSnap.data() : null;
+
+  if (existingChatData && existingChatData.type === 'direct') {
+    const prevLastMsgMs = toMillis(existingChatData.lastMessageAt);
+    if (!existingMyMemberSnap?.exists() && prevLastMsgMs > resolvedClearedAtMs) {
+      resolvedClearedAtMs = prevLastMsgMs;
+    }
+
+    batch.update(chatRef, {
+      title: title.slice(0, 100),
+      description: description.slice(0, 300),
+      avatarUrl: avatarUrl.slice(0, 65536),
+      lastMessageCiphertext: envelope.ciphertext.slice(0, 2048),
+      lastMessageIv: envelope.iv,
+      lastMessageSenderId: creator.uid,
+      lastMessageType: 'text',
+      lastMessageDeliveredToIds: [creator.uid],
+      lastMessageReadByIds: [creator.uid],
+      lastMessageAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
+
+    if (existingMyMemberSnap?.exists()) {
+      batch.update(myMemberRef, {
+        displayName: creator.displayName.slice(0, 80),
+        avatarUrl: creator.avatarUrl.slice(0, 65536),
+        publicKeyJwk: creatorPublicKey,
+        isTyping: false,
+        updatedAt: serverTimestamp()
+      });
+    } else {
+      batch.set(myMemberRef, {
+        chatId,
+        uid: creator.uid,
+        role: existingChatData.createdBy === creator.uid ? 'admin' : 'member',
+        displayName: creator.displayName.slice(0, 80),
+        avatarUrl: creator.avatarUrl.slice(0, 65536),
+        publicKeyJwk: creatorPublicKey,
+        isTyping: false,
+        joinedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+    }
+  } else {
+    // When recreating a deterministic direct chat deleted earlier, hide any residual peer messages from before deletion
+    if (type === 'direct') {
+      try {
+        const oldMsgsSnap = await getDocs(
+          query(
+            collection(db, 'chats', chatId, 'messages'),
+            where('viewerIds', 'array-contains', creator.uid)
+          )
+        );
+        let maxOldMsgMs = resolvedClearedAtMs;
+        for (const msgDoc of oldMsgsSnap.docs) {
+          const ms = toMillis(msgDoc.data().createdAt);
+          if (ms > maxOldMsgMs) maxOldMsgMs = ms;
+        }
+        resolvedClearedAtMs = maxOldMsgMs;
+      } catch {
+        // Ignore if index or permission check not applicable
+      }
+    }
+
+    batch.set(chatRef, {
+      id: chatId,
+      type,
+      title: title.slice(0, 100),
+      description: description.slice(0, 300),
+      avatarUrl: avatarUrl.slice(0, 65536),
+      createdBy: creator.uid,
+      memberIds,
+      ...(typeof options?.adminOnlyPost === 'boolean'
+        ? { adminOnlyPost: options.adminOnlyPost }
+        : {}),
+      ...(inviteCode ? { inviteCode: inviteCode.slice(0, 32) } : {}),
+      lastMessageCiphertext: envelope.ciphertext.slice(0, 2048),
+      lastMessageIv: envelope.iv,
+      lastMessageSenderId: creator.uid,
+      lastMessageType: 'text',
+      lastMessageDeliveredToIds: [creator.uid],
+      lastMessageReadByIds: [creator.uid],
+      lastMessageAt: serverTimestamp(),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+
+    if (existingMyMemberSnap?.exists() && existingMyMemberSnap.data()?.role === 'admin') {
+      batch.update(myMemberRef, {
+        displayName: creator.displayName.slice(0, 80),
+        avatarUrl: creator.avatarUrl.slice(0, 65536),
+        publicKeyJwk: creatorPublicKey,
+        isTyping: false,
+        updatedAt: serverTimestamp()
+      });
+    } else {
+      batch.set(myMemberRef, {
+        chatId,
+        uid: creator.uid,
+        role: 'admin',
+        displayName: creator.displayName.slice(0, 80),
+        avatarUrl: creator.avatarUrl.slice(0, 65536),
+        publicKeyJwk: creatorPublicKey,
+        isTyping: false,
+        joinedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+    }
+
+    for (const contact of invitedContacts.slice(0, 49)) {
+      if (!contact.uid || contact.uid === creator.uid) continue;
+      const contactPublicKey = sanitizePublicKeyJwk(contact.publicKeyJwk);
+      if (!contactPublicKey) continue;
+      const contactMemberRef = doc(db, 'chats', chatId, 'members', contact.uid);
+      batch.set(contactMemberRef, {
+        chatId,
+        uid: contact.uid,
+        role: 'member',
+        displayName: contact.displayName.slice(0, 80),
+        avatarUrl: (contact.avatarUrl || '').slice(0, 65536),
+        publicKeyJwk: contactPublicKey,
+        isTyping: false,
+        joinedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+    }
   }
 
   batch.set(myPrefRef, {
@@ -888,8 +983,14 @@ export async function createChatInFirestore(
     unreadCount: 0,
     disappearingSeconds: 0,
     wallpaper: '',
+    clearedAtMs: Math.max(0, Math.min(9999999999999, Math.floor(resolvedClearedAtMs))),
     updatedAt: serverTimestamp()
   });
+
+  const resolvedViewerIds =
+    existingChatData && Array.isArray(existingChatData.memberIds) && existingChatData.memberIds.length > 0
+      ? Array.from(new Set([creator.uid, ...(existingChatData.memberIds as string[])])).slice(0, 50)
+      : memberIds;
 
   batch.set(msgRef, {
     id: msgId,
@@ -900,7 +1001,7 @@ export async function createChatInFirestore(
     ciphertext: envelope.ciphertext,
     iv: envelope.iv,
     algorithm: 'AES-GCM-256',
-    viewerIds: memberIds,
+    viewerIds: resolvedViewerIds,
     deliveredToIds: [creator.uid],
     readByIds: [creator.uid],
     reactions: {},
@@ -1262,10 +1363,15 @@ export async function saveChatPrefToFirestore(
     unreadCount: number;
     disappearingSeconds: number;
     wallpaper?: string;
+    clearedAtMs?: number;
   }
 ): Promise<void> {
   const path = `users/${uid}/chatPrefs/${chatId}`;
   const normalizedWallpaper = normalizeChatWallpaper(pref.wallpaper);
+  const safeClearedAtMs =
+    typeof pref.clearedAtMs === 'number' && Number.isFinite(pref.clearedAtMs)
+      ? Math.max(0, Math.min(9999999999999, Math.floor(pref.clearedAtMs)))
+      : 0;
   try {
     await setDoc(doc(db, 'users', uid, 'chatPrefs', chatId), {
       chatId,
@@ -1277,6 +1383,7 @@ export async function saveChatPrefToFirestore(
       unreadCount: Math.max(0, Math.min(10000, Math.floor(pref.unreadCount))),
       disappearingSeconds: Math.max(0, Math.min(7776000, Math.floor(pref.disappearingSeconds))),
       wallpaper: normalizedWallpaper,
+      clearedAtMs: safeClearedAtMs,
       updatedAt: serverTimestamp()
     });
   } catch (error) {
@@ -1355,12 +1462,17 @@ export function subscribeUserChatsFromFirestore(
         'sent'
       );
 
+      const clearedAtMs = typeof pref.clearedAtMs === 'number' ? pref.clearedAtMs : 0;
+      const lastMessageAtMs = toMillis(c.lastMessageAt);
+      const isLastCleared = clearedAtMs > 0 && lastMessageAtMs <= clearedAtMs;
+
       const hasUnreadCloud =
+        !isLastCleared &&
         Boolean(senderId) &&
         senderId !== uid &&
         !readIds?.includes(uid);
       const prefUnread = typeof pref.unreadCount === 'number' ? pref.unreadCount : 0;
-      const resolvedUnread = hasUnreadCloud ? Math.max(1, prefUnread) : 0;
+      const resolvedUnread = isLastCleared ? 0 : hasUnreadCloud ? Math.max(1, prefUnread) : 0;
 
       list.push({
         id: chatId,
@@ -1382,15 +1494,16 @@ export function subscribeUserChatsFromFirestore(
         disappearingSeconds:
           typeof pref.disappearingSeconds === 'number' ? pref.disappearingSeconds : 0,
         wallpaper: normalizeChatWallpaper(pref.wallpaper),
+        clearedAtMs,
         ...(typeof c.adminOnlyPost === 'boolean' ? { adminOnlyPost: c.adminOnlyPost } : {}),
         ...(typeof c.inviteCode === 'string' ? { inviteCode: c.inviteCode } : {}),
-        lastMessagePreview: slot.previewText,
+        lastMessagePreview: isLastCleared ? 'تم مسح الدردشة' : slot.previewText,
         lastMessageType: (c.lastMessageType as MessageType) || 'text',
-        lastMessageSenderId: senderId,
+        lastMessageSenderId: isLastCleared ? '' : senderId,
         lastMessageStatus,
         ...(deliveredIds ? { lastMessageDeliveredToIds: deliveredIds } : {}),
         ...(readIds ? { lastMessageReadByIds: readIds } : {}),
-        lastMessageAtMs: toMillis(c.lastMessageAt),
+        lastMessageAtMs,
         roomSeed: chatId,
         ...(typeof c.createdBy === 'string' ? { createdBy: c.createdBy } : {})
       });
@@ -2405,18 +2518,65 @@ export async function deleteChatInFirestore(
   uid: string,
   isCreator = false
 ): Promise<void> {
-  try {
-    // 1. Remove user membership so chat disappears from live query
-    await deleteDoc(doc(db, 'chats', chatId, 'members', uid)).catch(() => {});
-    // 2. Remove user chat preference
-    await deleteDoc(doc(db, 'users', uid, 'chatPrefs', chatId)).catch(() => {});
-    // 3. If creator, attempt to delete root chat document
-    if (isCreator) {
-      await deleteDoc(doc(db, 'chats', chatId)).catch(() => {});
-    }
-  } catch (error) {
-    console.warn(`deleteChatInFirestore failed for chat ${chatId}:`, error);
+  const existing = inFlightChatDeletes.get(chatId);
+  if (existing) {
+    await existing.catch(() => {});
   }
+
+  const runDelete = async () => {
+    try {
+      // 1. Delete caller's own messages while membership still exists
+      try {
+        const msgSnap = await getDocs(
+          query(collection(db, 'chats', chatId, 'messages'), where('viewerIds', 'array-contains', uid))
+        );
+        const ownMsgs = msgSnap.docs.filter((d) => d.data().senderId === uid);
+        await Promise.all(ownMsgs.map((d) => deleteDoc(d.ref).catch(() => {})));
+      } catch {
+        // Non-fatal
+      }
+
+      // 2. If creator, fetch root chat & remove other members FIRST while isChatAdmin(chatId) is still true
+      let shouldDeleteRoot = isCreator;
+      try {
+        const chatSnap = await getDoc(doc(db, 'chats', chatId));
+        if (chatSnap.exists()) {
+          const data = chatSnap.data();
+          if (data.createdBy === uid) {
+            shouldDeleteRoot = true;
+            const memberIds = Array.isArray(data.memberIds) ? (data.memberIds as string[]) : [];
+            const otherMemberIds = memberIds.filter((id) => id && id !== uid);
+            await Promise.all(
+              otherMemberIds.map((mId) =>
+                deleteDoc(doc(db, 'chats', chatId, 'members', mId)).catch(() => {})
+              )
+            );
+          }
+        }
+      } catch {
+        // Non-fatal
+      }
+
+      // 3. Remove user membership so chat disappears from live query
+      await deleteDoc(doc(db, 'chats', chatId, 'members', uid)).catch(() => {});
+      // 4. Remove user chat preference
+      await deleteDoc(doc(db, 'users', uid, 'chatPrefs', chatId)).catch(() => {});
+      // 5. If creator, delete root chat document cleanly
+      if (shouldDeleteRoot) {
+        await deleteDoc(doc(db, 'chats', chatId)).catch(() => {});
+      }
+    } catch (error) {
+      console.warn(`deleteChatInFirestore failed for chat ${chatId}:`, error);
+    }
+  };
+
+  const task = runDelete().finally(() => {
+    if (inFlightChatDeletes.get(chatId) === task) {
+      inFlightChatDeletes.delete(chatId);
+    }
+  });
+  inFlightChatDeletes.set(chatId, task);
+  await task;
 }
 
 export async function backupUserDataToFirestore(uid: string, backupPayload: Record<string, any>): Promise<void> {

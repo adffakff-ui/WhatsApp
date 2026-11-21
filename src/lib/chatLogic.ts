@@ -56,7 +56,7 @@ export function filterAndSortChats(
   showArchived: boolean,
   lockedChatIds: string[] = []
 ): ChatRoom[] {
-  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const normalizedQuery = foldForSearch(searchQuery.trim());
 
   return chats
     .filter((chat) => {
@@ -73,9 +73,11 @@ export function filterAndSortChats(
       if (filter === 'groups' && chat.type === 'direct') return false;
 
       if (normalizedQuery) {
-        const matchesTitle = chat.title.toLowerCase().includes(normalizedQuery);
-        const matchesPreview = chat.lastMessagePreview.toLowerCase().includes(normalizedQuery);
-        if (!matchesTitle && !matchesPreview) return false;
+        const matchesTitle = foldForSearch(chat.title).includes(normalizedQuery);
+        const matchesPreview = foldForSearch(chat.lastMessagePreview).includes(normalizedQuery);
+        const matchesDesc = foldForSearch(chat.description || '').includes(normalizedQuery);
+        const matchesAbout = foldForSearch(chat.peerAbout || '').includes(normalizedQuery);
+        if (!matchesTitle && !matchesPreview && !matchesDesc && !matchesAbout) return false;
       }
       return true;
     })
@@ -676,7 +678,9 @@ export function searchAllChatsMessages(
 
   for (const chat of chats) {
     if (excludedSet.has(chat.id)) continue;
-    const msgs = messagesMap[chat.id] || [];
+    const msgs = (messagesMap[chat.id] || []).filter(
+      (m) => !chat.clearedAtMs || m.createdAtMs > chat.clearedAtMs
+    );
     const matched = searchMessagesInChat(msgs, query, filterType);
     for (const message of matched) {
       const snippet = getMessageSearchableText(message) || message.payload.text || '';

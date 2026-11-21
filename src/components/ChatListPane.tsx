@@ -65,7 +65,7 @@ interface ChatListPaneProps {
   showStoriesTray: boolean;
   dndMode: boolean;
   onToggleDndMode: () => void;
-  onOpenNewChat: () => void;
+  onOpenNewChat: (prefillQuery?: string) => void;
   onOpenNewGroup: () => void;
   onOpenNewChannel?: () => void;
   onOpenBroadcast: () => void;
@@ -173,7 +173,7 @@ export function ChatListPane({
       listScrollRef.current.scrollTop = 0;
     }
     setScrollTop(0);
-  }, [filter, showArchived]);
+  }, [filter, showArchived, searchQuery, msgFilter]);
 
   useEffect(() => {
     return () => {
@@ -331,7 +331,7 @@ export function ChatListPane({
             type="button"
             aria-label="دردشة جديدة"
             title="دردشة جديدة"
-            onClick={onOpenNewChat}
+            onClick={() => onOpenNewChat()}
             className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-[#F0F2F5] dark:hover:bg-[#202C33] transition-colors cursor-pointer"
           >
             <MessageSquarePlus className="w-5 h-5" aria-hidden="true" />
@@ -759,26 +759,41 @@ export function ChatListPane({
                 ابحث بالمعرّف الخاص (@) للطرف الآخر أو شارك معرفك لبدء محادثة مشفرة فورية.
               </p>
             )}
-            <button
-              type="button"
-              onClick={
-                hasSearchQuery || msgFilter !== 'all'
-                  ? () => {
-                      onSearchChange('');
-                      setMsgFilter('all');
-                    }
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+              {hasSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => onOpenNewChat(searchQuery.trim())}
+                  className="px-4 py-2 rounded-full bg-[var(--wa-accent)] text-white text-xs font-semibold hover:brightness-95 transition-all cursor-pointer"
+                >
+                  بحث بالمعرّف وبدء محادثة: «{searchQuery.trim()}»
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={
+                  hasSearchQuery || msgFilter !== 'all'
+                    ? () => {
+                        onSearchChange('');
+                        setMsgFilter('all');
+                      }
+                    : filter === 'locked'
+                      ? () => onChangeFilter('all')
+                      : () => onOpenNewChat()
+                }
+                className={`px-4 py-2 rounded-full text-xs font-semibold hover:brightness-95 transition-all cursor-pointer ${
+                  hasSearchQuery
+                    ? 'bg-[#F0F2F5] dark:bg-[#202C33] text-[#111B21] dark:text-[#E9EDEF]'
+                    : 'bg-[var(--wa-accent)] text-white'
+                }`}
+              >
+                {hasSearchQuery || msgFilter !== 'all'
+                  ? 'إعادة ضبط البحث'
                   : filter === 'locked'
-                    ? () => onChangeFilter('all')
-                    : onOpenNewChat
-              }
-              className="mt-3 px-4 py-2 rounded-full bg-[var(--wa-accent)] text-white text-xs font-semibold hover:brightness-95 transition-all cursor-pointer"
-            >
-              {hasSearchQuery || msgFilter !== 'all'
-                ? 'إعادة ضبط البحث'
-                : filter === 'locked'
-                  ? 'عرض جميع الدردشات'
-                  : 'بدء محادثة بالمعرّف @'}
-            </button>
+                    ? 'عرض جميع الدردشات'
+                    : 'بدء محادثة بالمعرّف @'}
+              </button>
+            </div>
           </div>
         ) : (
           <>
@@ -1079,6 +1094,18 @@ export function ChatListPane({
                     ))}
                   </ul>
                 )}
+              </div>
+            )}
+            {hasSearchQuery && (
+              <div className="px-4 py-3 border-t border-[#F0F2F5] dark:border-[#222D34] text-center">
+                <button
+                  type="button"
+                  onClick={() => onOpenNewChat(searchQuery.trim())}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[var(--wa-accent-soft)] text-[var(--wa-accent-strong)] text-xs font-bold hover:brightness-95 transition-all cursor-pointer"
+                >
+                  <MessageSquarePlus className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>بحث بالمعرّف وبدء محادثة جديدة: «{searchQuery.trim()}»</span>
+                </button>
               </div>
             )}
           </>

@@ -593,3 +593,82 @@ test('normalizeWasilId, validateWasilId, and suggestWasilIdFromName enforce clea
   const suggestedFromArabic = suggestWasilIdFromName('أكرم حسن', '99xyz');
   assert.equal(suggestedFromArabic, '@wasil_99xy');
 });
+
+test('filterAndSortChats folds Arabic hamza/alef and searches description & peerAbout', () => {
+  const arabicChats: ChatRoom[] = [
+    {
+      ...sampleChats[0],
+      id: 'c_ahmad',
+      title: 'أحمد العتيبي',
+      peerAbout: 'مهندس برمجيات سحابية',
+      lastMessagePreview: 'إرسال التقرير النهائي'
+    },
+    {
+      ...sampleChats[1],
+      id: 'c_group_desc',
+      title: 'مجموعة التصميم',
+      description: 'مناقشة واجهات المستخدم وتجربة الاستخدام',
+      lastMessagePreview: 'أهلاً بكم'
+    }
+  ];
+
+  assert.deepEqual(
+    filterAndSortChats(arabicChats, 'all', 'احمد', false).map((c) => c.id),
+    ['c_ahmad']
+  );
+  assert.deepEqual(
+    filterAndSortChats(arabicChats, 'all', 'ارسال', false).map((c) => c.id),
+    ['c_ahmad']
+  );
+  assert.deepEqual(
+    filterAndSortChats(arabicChats, 'all', 'برمجيات', false).map((c) => c.id),
+    ['c_ahmad']
+  );
+  assert.deepEqual(
+    filterAndSortChats(arabicChats, 'all', 'واجهات', false).map((c) => c.id),
+    ['c_group_desc']
+  );
+});
+
+test('searchAllChatsMessages excludes messages created at or before clearedAtMs', () => {
+  const clearedChat: ChatRoom = {
+    ...sampleChats[0],
+    id: 'c_cleared',
+    clearedAtMs: 2500
+  };
+  const makeMsg = (id: string, text: string, createdAtMs: number): DecryptedMessage => ({
+    id,
+    chatId: 'c_cleared',
+    senderId: 'me',
+    senderName: 'أنا',
+    type: 'text',
+    payload: { text },
+    ciphertext: 'c',
+    iv: 'iv',
+    algorithm: 'AES-GCM-256',
+    reactions: {},
+    reactionsCount: 0,
+    starredBy: [],
+    isDeleted: false,
+    status: 'read',
+    createdAtMs
+  });
+
+  const results = searchAllChatsMessages(
+    {
+      c_cleared: [
+        makeMsg('m_old', 'رسالة قديمة مشروع', 2000),
+        makeMsg('m_boundary', 'رسالة حدية مشروع', 2500),
+        makeMsg('m_new', 'رسالة جديدة مشروع', 3000)
+      ]
+    },
+    [clearedChat],
+    'مشروع'
+  );
+
+  assert.deepEqual(
+    results.map((r) => r.message.id),
+    ['m_new']
+  );
+});
+
