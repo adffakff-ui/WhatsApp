@@ -776,34 +776,6 @@ export function ChatWindow({
 
           <button
             type="button"
-            aria-label="البحث داخل المحادثة"
-            title="البحث داخل المحادثة محلياً"
-            onClick={() => {
-              setShowInChatSearch((v) => {
-                const next = !v;
-                if (next) {
-                  if (externalSearchQuery) setInChatSearchQuery(externalSearchQuery);
-                  window.requestAnimationFrame(() => inChatSearchInputRef.current?.focus());
-                } else {
-                  setInChatSearchQuery('');
-                  setInChatFilterType('all');
-                  onClearExternalHighlight?.();
-                }
-                return next;
-              });
-            }}
-            className={`hidden md:flex items-center gap-1.5 px-3 h-9 rounded-full text-xs font-medium transition-all cursor-pointer ${
-              showInChatSearch
-                ? 'bg-[var(--wa-accent-soft)] text-[var(--wa-accent-strong)]'
-                : 'bg-[#E9EDEF]/70 dark:bg-[#2A3942] text-[#54656F] dark:text-[#AEBAC1] hover:bg-[#E9EDEF] dark:hover:bg-[#31434D]'
-            }`}
-          >
-            <Search className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>بحث داخل المحادثة</span>
-          </button>
-
-          <button
-            type="button"
             aria-label="البحث في الرسائل"
             title="بحث داخل المحادثة"
             onClick={() => {

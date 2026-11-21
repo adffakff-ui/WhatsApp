@@ -147,23 +147,6 @@ export function RightDrawer({
   const [groupError, setGroupError] = useState<string | null>(null);
   const [showInvitePicker, setShowInvitePicker] = useState(false);
   const [mediaTab, setMediaTab] = useState<'media' | 'links' | 'docs'>('media');
-  const [copiedSecurityTarget, setCopiedSecurityTarget] = useState<"safety" | "payload" | null>(null);
-  const copySecurityValue = async (value: string, target: "safety" | "payload") => {
-    try {
-      await navigator.clipboard?.writeText(value);
-    } catch {
-      const ta = document.createElement("textarea");
-      ta.value = value;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      document.body.removeChild(ta);
-    }
-    setCopiedSecurityTarget(target);
-    window.setTimeout(() => {
-      setCopiedSecurityTarget((prev) => (prev === target ? null : prev));
-    }, 1800);
-  };
   const [lightboxMedia, setLightboxMedia] = useState<SharedMediaItem | null>(null);
 
   const iconInputRef = useRef<HTMLInputElement>(null);
@@ -983,24 +966,7 @@ export function RightDrawer({
             <div className="space-y-2">
               <div className="flex items-center gap-2 text-xs font-semibold text-[#111B21] dark:text-[#E9EDEF]">
                 <KeyRound className="w-4 h-4 text-[#00A884]" aria-hidden="true" />
-                <span className="flex-1">رقم الأمان (60 خانة)</span>
-                <button
-                  type="button"
-                  onClick={() => copySecurityValue(safetyCode, "safety")}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] bg-[#F0F2F5] dark:bg-[#202C33] text-[#111B21] dark:text-[#E9EDEF] hover:opacity-90 cursor-pointer"
-                >
-                  {copiedSecurityTarget === "safety" ? (
-                    <>
-                      <Check className="w-3.5 h-3.5 text-[#00A884]" aria-hidden="true" />
-                      <span>تم النسخ</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>نسخ</span>
-                    </>
-                  )}
-                </button>
+                <span>رقم الأمان (60 خانة للتحقق)</span>
               </div>
               <div
                 dir="ltr"
@@ -1009,68 +975,6 @@ export function RightDrawer({
                 {safetyCode}
               </div>
             </div>
-            {(() => {
-              const latestEncrypted = [...messages]
-                .reverse()
-                .find((m) => m.ciphertext && m.iv);
-              if (!latestEncrypted) return null;
-              return (
-                <div className="space-y-2 pt-2 border-t border-[#F0F2F5] dark:border-[#222D34]">
-                  <div className="flex items-center gap-2 text-xs font-semibold text-[#111B21] dark:text-[#E9EDEF]">
-                    <Lock className="w-4 h-4 text-[#00A884]" aria-hidden="true" />
-                    <span className="flex-1">بيانات آخر حمولة مشفرة</span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        copySecurityValue(
-                          JSON.stringify(
-                            {
-                              algorithm: latestEncrypted?.algorithm ?? "",
-                              iv: latestEncrypted?.iv ?? "",
-                              ciphertext: latestEncrypted.ciphertext,
-                            },
-                            null,
-                            2
-                          ),
-                          "payload"
-                        )
-                      }
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] bg-[#F0F2F5] dark:bg-[#202C33] text-[#111B21] dark:text-[#E9EDEF] hover:opacity-90 cursor-pointer"
-                    >
-                      {copiedSecurityTarget === "payload" ? (
-                        <>
-                          <Check className="w-3.5 h-3.5 text-[#00A884]" aria-hidden="true" />
-                          <span>تم النسخ</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span>نسخ الحمولة</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                  <div
-                    dir="ltr"
-                    className="rounded-xl bg-[#0C1317] text-[#E9EDEF] p-3.5 space-y-2 text-[11px] font-mono-code"
-                  >
-                    <div>
-                      <span className="text-[#06CF9C]">Algorithm:</span>{" "}
-                      {latestEncrypted?.algorithm ?? ""}
-                    </div>
-                    <div className="break-all">
-                      <span className="text-[#06CF9C]">IV (96-bit):</span>{" "}
-                      {latestEncrypted?.iv ?? ""}
-                    </div>
-                    <div className="break-all">
-                      <span className="text-[#06CF9C]">Ciphertext:</span>{" "}
-                      {(latestEncrypted?.ciphertext ?? "").slice(0, 120)}
-                      {(latestEncrypted?.ciphertext ?? "").length > 120 ? "..." : ""}
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
 
             {inspectedMsg && (
               <div className="space-y-2 pt-2 border-t border-[#F0F2F5] dark:border-[#222D34]">

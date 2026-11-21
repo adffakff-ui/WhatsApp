@@ -183,7 +183,6 @@ export function StatusView({
   const [resolvedVideoSrc, setResolvedVideoSrc] = useState<string | null>(null);
   const [downloadedId, setDownloadedId] = useState<string | null>(null);
   const [quickReply, setQuickReply] = useState('');
-  const [showViewersModal, setShowViewersModal] = useState(false);
 
   const [showComposer, setShowComposer] = useState(false);
   const [composeMode, setComposeMode] = useState<'text' | 'image' | 'video'>('text');
@@ -1254,50 +1253,26 @@ export function StatusView({
                 </div>
               )}
 
-              {/* Quick Reply & Emoji Reactions for contact stories */}
+              {/* Quick Reply Input for contact stories */}
               {activeStory.authorId !== currentUser.uid && onReplyToStatus && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-center gap-2" role="group" aria-label="التفاعل السريع بالرموز التعبيرية">
-                    {['❤️', '🔥', '👏', '😂', '👍', '😮'].map((emoji) => (
-                      <button
-                        key={emoji}
-                        type="button"
-                        aria-label={`تفاعل سريع بـ ${emoji}`}
-                        onClick={() => {
-                          onReplyToStatus(
-                            activeStory.authorId,
-                            activeStory.authorName,
-                            emoji,
-                            activeStory.content || 'حالة مصورة'
-                          );
-                          void exitViewer();
-                        }}
-                        className="w-9 h-9 rounded-full bg-white/20 hover:bg-white/35 flex items-center justify-center text-base transition-transform hover:scale-110 cursor-pointer shadow-md"
-                      >
-                        {emoji}
-                      </button>
-                    ))}
-                  </div>
-
-                  <form onSubmit={handleSendStatusReply} className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={quickReply}
-                      onChange={(e) => setQuickReply(e.target.value)}
-                      placeholder={`رد على حالة ${activeStory.authorName}...`}
-                      aria-label={`رد سريع على حالة ${activeStory.authorName}`}
-                      className="flex-1 min-h-[42px] px-4 rounded-full bg-white/15 backdrop-blur-sm border border-white/20 text-xs sm:text-sm text-white placeholder:text-white/65 focus:outline-none focus:ring-2 focus:ring-[var(--wa-accent)]"
-                    />
-                    <button
-                      type="submit"
-                      disabled={!quickReply.trim()}
-                      aria-label="إرسال الرد على الحالة"
-                      className="w-10 h-10 rounded-full bg-[var(--wa-accent)] text-white flex items-center justify-center disabled:opacity-40 cursor-pointer"
-                    >
-                      <SendHorizontal className="w-4 h-4 rotate-180" aria-hidden="true" />
-                    </button>
-                  </form>
-                </div>
+                <form onSubmit={handleSendStatusReply} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={quickReply}
+                    onChange={(e) => setQuickReply(e.target.value)}
+                    placeholder={`رد على حالة ${activeStory.authorName}...`}
+                    aria-label={`رد سريع على حالة ${activeStory.authorName}`}
+                    className="flex-1 min-h-[42px] px-4 rounded-full bg-white/15 backdrop-blur-sm border border-white/20 text-xs sm:text-sm text-white placeholder:text-white/65 focus:outline-none focus:ring-2 focus:ring-[var(--wa-accent)]"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!quickReply.trim()}
+                    aria-label="إرسال الرد على الحالة"
+                    className="w-10 h-10 rounded-full bg-[var(--wa-accent)] text-white flex items-center justify-center disabled:opacity-40 cursor-pointer"
+                  >
+                    <SendHorizontal className="w-4 h-4 rotate-180" aria-hidden="true" />
+                  </button>
+                </form>
               )}
 
               <div className="flex items-center justify-between pt-1">
@@ -1311,23 +1286,14 @@ export function StatusView({
                   <ChevronRight className="w-5 h-5" aria-hidden="true" />
                 </button>
                 <div className="flex items-center gap-3 text-xs text-white/85 font-mono-code">
-                  <button
-                    type="button"
-                    aria-label="عرض قائمة مشاهدين الحالة"
-                    onClick={() => {
-                      setIsPaused(true);
-                      setShowViewersModal(true);
-                    }}
-                    className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/15 hover:bg-white/25 transition-colors cursor-pointer text-xs text-white/95 font-mono-code"
-                    title="انقر لعرض قائمة المشاهدين"
-                  >
+                  <span className="flex items-center gap-1">
                     {hideViewStatus ? (
                       <EyeOff className="w-4 h-4 text-amber-300" aria-hidden="true" />
                     ) : (
-                      <Eye className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+                      <Eye className="w-4 h-4" aria-hidden="true" />
                     )}
-                    <span>{hideViewStatus ? 'تصفح خفي' : `${activeStory.viewCount} مشاهدة`}</span>
-                  </button>
+                    {hideViewStatus ? 'تصفح خفي' : `${activeStory.viewCount} مشاهدة`}
+                  </span>
                   <span className="flex items-center gap-1">
                     <Users className="w-3.5 h-3.5" aria-hidden="true" />
                     {Math.max(0, activeStory.viewerIds.length - 1)} جهة
@@ -1350,94 +1316,6 @@ export function StatusView({
           </footer>
         </div>
       )}
-
-      {/* Status Viewers Modal */}
-      {showViewersModal && activeStory && (() => {
-        const effectiveViewedUids = activeStory.viewedByIds && activeStory.viewedByIds.length > 0
-          ? activeStory.viewedByIds
-          : activeStory.viewCount > 0
-            ? [...contacts.slice(0, Math.min(activeStory.viewCount, contacts.length)).map(c => c.uid), currentUser.uid]
-            : [currentUser.uid];
-
-        return (
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="قائمة مشاهدين الحالة"
-            className="fixed inset-0 z-60 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4"
-          >
-            <div className="w-full max-w-sm bg-white dark:bg-[#202C33] rounded-2xl shadow-2xl border border-[#E9EDEF] dark:border-[#374248] overflow-hidden flex flex-col max-h-[85dvh]">
-              <div className="px-4 py-3.5 border-b border-[#E9EDEF] dark:border-[#2A3942] flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Users className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
-                  <h3 className="font-display text-sm font-bold text-[#111B21] dark:text-[#E9EDEF]">
-                    مشاهدوا الحالة ({effectiveViewedUids.length})
-                  </h3>
-                </div>
-                <button
-                  type="button"
-                  aria-label="إغلاق قائمة المشاهدين"
-                  onClick={() => {
-                    setShowViewersModal(false);
-                    setIsPaused(false);
-                  }}
-                  className="w-7 h-7 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 cursor-pointer"
-                >
-                  <X className="w-4 h-4" aria-hidden="true" />
-                </button>
-              </div>
-
-              <div className="overflow-y-auto p-3 space-y-2 flex-1">
-                {effectiveViewedUids.length === 0 ? (
-                  <div className="py-10 text-center text-xs text-[#667781] dark:text-[#8696A0]">
-                    لم يقم أي شخص بمشاهدة هذه الحالة بعد.
-                  </div>
-                ) : (
-                  effectiveViewedUids.map((uid) => {
-                    const contact = contacts.find((c) => c.uid === uid);
-                    const isSelf = uid === currentUser.uid;
-                    const name = isSelf ? 'أنت' : contact?.displayName || `مستخدم (${uid.slice(0, 6)})`;
-                    const avatar = isSelf ? currentUser.avatarUrl : contact?.avatarUrl || '';
-                    const about = isSelf ? currentUser.about : contact?.about || 'متصل عبر تواصل';
-                    return (
-                      <div
-                        key={uid}
-                        className="p-2.5 rounded-xl bg-[#F0F2F5] dark:bg-[#111B21] flex items-center gap-3"
-                      >
-                        <Avatar src={avatar} name={name} size="md" />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
-                            {name}
-                          </p>
-                          <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate mt-0.5">
-                            {about}
-                          </p>
-                        </div>
-                        <span className="text-[10px] font-mono-code text-[var(--wa-accent)] shrink-0">
-                          مشاهدة
-                        </span>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-
-              <div className="p-3 border-t border-[#E9EDEF] dark:border-[#2A3942] bg-[#F8FAFB] dark:bg-[#182229] text-center">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowViewersModal(false);
-                    setIsPaused(false);
-                  }}
-                  className="w-full py-2 rounded-xl bg-[var(--wa-accent)] text-white text-xs font-bold hover:brightness-95 cursor-pointer"
-                >
-                  تم
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
 
       {/* Compose Status Modal (Text + Image + 3-Minute Video) */}
       {showComposer && (

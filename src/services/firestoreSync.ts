@@ -1454,10 +1454,10 @@ export function subscribeUserChatsFromFirestore(
           const parsed = JSON.parse(raw) as MessagePayload;
           slot.previewText = parsed.text || 'رسالة مشفرة';
         } catch {
-          slot.previewText = "🔒 رسالة مشفرة بمفتاح مختلف";
+          slot.previewText = 'رسالة مشفرة 🔒';
         }
       } else {
-        slot.previewText = "🔒 رسالة مشفرة بمفتاح مختلف";
+        slot.previewText = 'رسالة مشفرة 🔒';
       }
       scheduleEmit();
     };
@@ -1603,7 +1603,7 @@ export function subscribeChatMessagesFromFirestore(
           const decoded = await decryptPayloadWithAnyKey(d.ciphertext, d.iv, candidateKeys);
           payload = JSON.parse(decoded) as MessagePayload;
         } catch {
-          payload = { text: "🔒 رسالة مشفرة بمفتاح مختلف" };
+          payload = { text: '🔒 رسالة مشفرة بمفتاح مختلف' };
         }
 
         const rawPollVotes =
