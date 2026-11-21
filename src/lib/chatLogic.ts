@@ -8,7 +8,7 @@ import type {
 } from '../types/chat';
 
 export const STATUS_TTL_MS = 24 * 60 * 60 * 1000;
-export const MAX_STATUS_MEDIA_BYTES = 262144;
+export const MAX_STATUS_MEDIA_BYTES = 720000;
 export const MAX_STATUS_VIDEO_SECONDS = 180; // 3 minutes max video clip duration
 
 export function validateStatusVideoDuration(durationSeconds: number): {
@@ -247,6 +247,127 @@ export function formatRemainingStatusTime(
     return `يتبقى ${hours} ساعة`;
   }
   return `يتبقى ${totalMinutes} دقيقة`;
+}
+
+export interface StoryUserGroup {
+  authorId: string;
+  authorName: string;
+  authorAvatar: string;
+  stories: StatusItem[];
+  unviewedCount: number;
+  hasPinned: boolean;
+  latestCreatedAtMs: number;
+  earliestExpiresAtMs: number;
+  firstUnviewedIndex: number;
+}
+
+/**
+ * Groups active (non-expired) stories by author for user-centric Stories feed & multi-user navigation.
+ * Stories inside each user group play chronologically (oldest -> newest).
+ * Groups order: self first (if present), then users with unviewed stories, then viewed users.
+ */
+export function groupStoriesByUser(
+  statuses: StatusItem[],
+  myUid: string,
+  nowMs = Date.now()
+): StoryUserGroup[] {
+  const byAuthor = new Map<string, StatusItem[]>();
+  for (const st of statuses) {
+    if (isStatusExpired(st, nowMs)) continue;
+    const list = byAuthor.get(st.authorId);
+    if (list) {
+      list.push(st);
+    } else {
+      byAuthor.set(st.authorId, [st]);
+    }
+  }
+
+  const groups: StoryUserGroup[] = [];
+  for (const [authorId, rawStories] of byAuthor.entries()) {
+    const stories = [...rawStories].sort((a, b) => a.createdAtMs - b.createdAtMs);
+    const unviewedCount =
+      authorId === myUid ? 0 : stories.filter((s) => !s.viewedByMe).length;
+    const firstUnviewedIdx =
+      authorId === myUid
+        ? 0
+        : Math.max(
+            0,
+            stories.findIndex((s) => !s.viewedByMe)
+          );
+    const latest = stories[stories.length - 1];
+    let earliestExpiry = latest.expiresAtMs;
+    let hasPinned = false;
+    for (const s of stories) {
+      if (s.expiresAtMs < earliestExpiry) earliestExpiry = s.expiresAtMs;
+      if (s.pinned) hasPinned = true;
+    }
+
+    groups.push({
+      authorId,
+      authorName: latest.authorName,
+      authorAvatar: latest.authorAvatar,
+      stories,
+      unviewedCount,
+      hasPinned,
+      latestCreatedAtMs: latest.createdAtMs,
+      earliestExpiresAtMs: earliestExpiry,
+      firstUnviewedIndex: firstUnviewedIdx
+    });
+  }
+
+  return groups.sort((a, b) => {
+    if (a.authorId === myUid && b.authorId !== myUid) return -1;
+    if (b.authorId === myUid && a.authorId !== myUid) return 1;
+    const aUnviewed = a.unviewedCount > 0;
+    const bUnviewed = b.unviewedCount > 0;
+    if (aUnviewed !== bUnviewed) return aUnviewed ? -1 : 1;
+    if (a.hasPinned !== b.hasPinned) return a.hasPinned ? -1 : 1;
+    return b.latestCreatedAtMs - a.latestCreatedAtMs;
+  });
+}
+
+/**
+ * Computes next/previous story coordinates seamlessly across user boundaries.
+ * Returns null when stepping past the last story of the last user (caller exits viewer)
+ * or before the first story of the first user.
+ */
+export function stepStoryViewerPosition(
+  groups: StoryUserGroup[],
+  currentUserIdx: number,
+  currentStoryIdx: number,
+  direction: 'next' | 'prev'
+): { userIdx: number; storyIdx: number } | null {
+  if (groups.length === 0) return null;
+  if (currentUserIdx < 0 || currentUserIdx >= groups.length) return null;
+  const currentGroup = groups[currentUserIdx];
+  if (!currentGroup || currentGroup.stories.length === 0) return null;
+
+  if (direction === 'next') {
+    if (currentStoryIdx + 1 < currentGroup.stories.length) {
+      return { userIdx: currentUserIdx, storyIdx: currentStoryIdx + 1 };
+    }
+    if (currentUserIdx + 1 < groups.length) {
+      const nextGroup = groups[currentUserIdx + 1];
+      const nextIdx = Math.min(
+        Math.max(0, nextGroup.firstUnviewedIndex),
+        Math.max(0, nextGroup.stories.length - 1)
+      );
+      return { userIdx: currentUserIdx + 1, storyIdx: nextIdx };
+    }
+    return null;
+  }
+
+  if (currentStoryIdx > 0) {
+    return { userIdx: currentUserIdx, storyIdx: currentStoryIdx - 1 };
+  }
+  if (currentUserIdx > 0) {
+    const prevGroup = groups[currentUserIdx - 1];
+    return {
+      userIdx: currentUserIdx - 1,
+      storyIdx: Math.max(0, prevGroup.stories.length - 1)
+    };
+  }
+  return null;
 }
 
 export function extractContactsFromChats(
@@ -621,7 +742,10 @@ export function splitTextByHighlight(
 
 export function getMessageSearchableText(msg: DecryptedMessage): string {
   const parts: string[] = [];
-  if (msg.payload.text) parts.push(msg.payload.text);
+  if (msg.payload.stickerLabel) parts.push(`ملصق: ${msg.payload.stickerLabel}`);
+  if (msg.payload.text && msg.payload.text !== `ملصق: ${msg.payload.stickerLabel || ''}`) {
+    parts.push(msg.payload.text);
+  }
   if (msg.payload.fileName && msg.payload.fileName !== msg.payload.text) {
     parts.push(msg.payload.fileName);
   }
@@ -763,4 +887,106 @@ export function suggestWasilIdFromName(displayName?: string | null, suffixSeed?:
   const suffix = cleanSeed.length >= 3 ? cleanSeed : Math.random().toString(36).slice(2, 6);
   return normalizeWasilId(`${safeBase}_${suffix}`);
 }
+
+export const SWIPE_REPLY_TRIGGER_PX = 56;
+export const SWIPE_REPLY_MAX_PX = 84;
+
+export function computeSwipeReplyOffset(deltaX: number): number {
+  if (!Number.isFinite(deltaX) || deltaX >= 0) return 0;
+  const abs = Math.abs(deltaX);
+  if (abs <= SWIPE_REPLY_TRIGGER_PX) {
+    return -Math.round(abs * 10) / 10;
+  }
+  const extra = abs - SWIPE_REPLY_TRIGGER_PX;
+  const maxExtra = SWIPE_REPLY_MAX_PX - SWIPE_REPLY_TRIGGER_PX;
+  const damped = SWIPE_REPLY_TRIGGER_PX + Math.min(maxExtra, extra * 0.35);
+  return -Math.round(damped * 10) / 10;
+}
+
+export function isSwipeReplyThresholdMet(offsetX: number): boolean {
+  return Number.isFinite(offsetX) && offsetX <= -SWIPE_REPLY_TRIGGER_PX;
+}
+
+export function formatReplyPreviewText(msg: DecryptedMessage): string {
+  if (msg.payload.stickerLabel) {
+    return `ملصق: ${msg.payload.stickerLabel}`;
+  }
+  if (msg.payload.lottieId || msg.payload.lottieData) {
+    return 'ملصق متحرك';
+  }
+  if (msg.type === 'image') {
+    const caption = (msg.payload.text || '').trim();
+    return caption ? `صورة: ${caption.slice(0, 100)}` : 'صورة مرفقة';
+  }
+  if (msg.type === 'voice') {
+    return (msg.payload.text || 'رسالة صوتية').slice(0, 120);
+  }
+  if (msg.type === 'file') {
+    if (msg.payload.fileName) return `ملف: ${msg.payload.fileName.slice(0, 100)}`;
+    return (msg.payload.text || 'مستند مرفق').slice(0, 120);
+  }
+  if (msg.type === 'poll') {
+    if (msg.payload.pollQuestion) return `استطلاع: ${msg.payload.pollQuestion.slice(0, 100)}`;
+    return (msg.payload.text || 'استطلاع رأي').slice(0, 120);
+  }
+  return (msg.payload.text || '').trim().slice(0, 120);
+}
+
+export function buildQuickReplySuggestions(
+  msg: DecryptedMessage,
+  customTemplates: string[] = []
+): string[] {
+  const rawText = (msg.payload.text || '').trim();
+  const normalized = foldForSearch(rawText);
+
+  let contextual: string[];
+  if (
+    msg.payload.stickerId ||
+    msg.payload.stickerLabel ||
+    msg.payload.lottieId ||
+    msg.payload.lottieData
+  ) {
+    contextual = ['تسلم يا غالي 🤍', 'حياك الله', 'رائع ✨', 'شكراً لك'];
+  } else if (msg.type === 'image') {
+    contextual = ['صورة رائعة! ✨', 'وصلت، شكراً', 'ممتاز 👍', 'واضح تماماً'];
+  } else if (msg.type === 'voice') {
+    contextual = ['سمعتك، تمام 👍', 'مفهوم، سأرد عليك حالاً', 'شكراً على التوضيح', 'تم'];
+  } else if (msg.type === 'file') {
+    contextual = ['تم استلام الملف 👍', 'جاري المراجعة الآن', 'شكراً جزيلاً', 'ممتاز'];
+  } else if (msg.type === 'poll') {
+    contextual = ['تم التصويت ✅', 'خيار ممتاز', 'أوافقك الرأي', 'شكراً'];
+  } else if (rawText.includes('؟') || rawText.includes('?')) {
+    contextual = ['نعم، بالتأكيد ✅', 'مناسب جداً', 'دقائق وأرد عليك', 'دعنا نؤكد لاحقاً'];
+  } else if (
+    normalized.includes('سلام') ||
+    normalized.includes('مرحب') ||
+    normalized.includes('هلا') ||
+    normalized.includes('اهلا') ||
+    normalized.includes('صباح') ||
+    normalized.includes('مساء')
+  ) {
+    contextual = ['وعليكم السلام ورحمة الله', 'أهلاً بك، حياك الله', 'الحمد لله بخير، وأنت؟', 'نورت 🌟'];
+  } else if (
+    normalized.includes('شكر') ||
+    normalized.includes('ممنون') ||
+    normalized.includes('تسلم') ||
+    normalized.includes('جزاك')
+  ) {
+    contextual = ['العفو، بالخدمة 🤍', 'وإياكم يا رب', 'أهلاً وسهلاً', 'بكل سرور'];
+  } else {
+    contextual = ['تمام، وصلت 👍', 'موافق ✅', 'شكراً لك', 'سأتواصل معك قريباً'];
+  }
+
+  const seen = new Set<string>();
+  const combined: string[] = [];
+  for (const item of [...contextual, ...customTemplates]) {
+    const clean = item.trim();
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    combined.push(clean);
+    if (combined.length >= 8) break;
+  }
+  return combined;
+}
+
 

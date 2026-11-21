@@ -43,13 +43,19 @@ import { Avatar } from './Avatar';
 import { HighlightText } from './HighlightText';
 import { ImageViewerModal } from './ImageViewerModal';
 import { ScheduleMessageModal } from './ScheduleMessageModal';
+import { LottieStickerPlayer } from './LottieStickerPlayer';
 import { resolveBundledAssetUrl } from '../data/assets';
 import {
+  SWIPE_REPLY_TRIGGER_PX,
+  buildQuickReplySuggestions,
+  computeSwipeReplyOffset,
   filterExpiredDisappearingMessages,
   formatCallDuration,
   formatDisappearingLabel,
+  formatReplyPreviewText,
   formatWhatsAppTime,
   getMessageReceiptDetails,
+  isSwipeReplyThresholdMet,
   searchMessagesInChat,
   type MessageSearchFilter
 } from '../lib/chatLogic';
@@ -63,6 +69,15 @@ import {
   type TranslationLangCode,
   type TranslationResult
 } from '../lib/translation';
+import {
+  filterStickersByCategory,
+  getStickerById,
+  isLottieSticker,
+  STICKER_CATEGORIES,
+  type StickerCategoryId,
+  type StickerDefinition
+} from '../lib/stickers';
+import { getLottieAnimationById, isValidLottieData } from '../lib/lottieStickers';
 import type {
   ChatRoom,
   DecryptedMessage,
@@ -91,6 +106,7 @@ interface ChatWindowProps {
   onStartCall: (callType: 'audio' | 'video') => void;
   onOpenRightPanel: (mode: RightPanelMode, inspectMessageId?: string) => void;
   onClearChat: (chatId: string) => void;
+  onDeleteChat?: (chatId: string) => Promise<void> | void;
   onSetDisappearing: (chatId: string, seconds: number) => void;
   onToggleLockChat?: (chatId: string) => void;
   onTypingChange?: (isTyping: boolean) => void;
@@ -141,7 +157,130 @@ async function compressChatImageToDataUrl(file: File): Promise<string> {
   });
 }
 
-const EMOJI_PALETTE = ['❤️', '👍', '😂', '😮', '🙏', '🔥', '🎉', '👏', '💯', '✅', '🔒', '✨'];
+const EMOJI_PALETTE = [
+  '❤️', '👍', '😂', '😮', '🙏', '🔥',
+  '🎉', '👏', '💯', '✅', '🔒', '✨',
+  '😍', '🥳', '🤝', '🌟', '💐', '☕',
+  '🕌', '🌙', '☀️', '😎', '🤔', '😅',
+  '🙌', '💪', '👌', '👀', '💬', '📌',
+  '🚀', '🎯', '💡', '⚡', '🫶', '🤍'
+];
+
+interface FloatingAnchorRect {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+interface FloatingPopoverState {
+  msgId: string;
+  left: number;
+  top?: number;
+  bottom?: number;
+  maxHeight: number;
+  triggerRect: FloatingAnchorRect;
+}
+
+function computeClampedFloatingPosition(
+  rect: FloatingAnchorRect,
+  menuWidth: number,
+  preferredHeight: number
+): Omit<FloatingPopoverState, 'msgId'> {
+  const pad = 12;
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 390;
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const safeWidth = Math.min(menuWidth, vw - pad * 2);
+  const clampedLeft = Math.max(pad, Math.min(rect.left, vw - safeWidth - pad));
+  const spaceBelow = Math.max(0, vh - rect.bottom - pad);
+  const spaceAbove = Math.max(0, rect.top - pad);
+
+  if (spaceBelow >= preferredHeight || spaceBelow >= spaceAbove) {
+    return {
+      left: clampedLeft,
+      top: Math.max(pad, rect.bottom + 6),
+      maxHeight: Math.max(160, Math.min(440, spaceBelow - 6)),
+      triggerRect: rect
+    };
+  }
+  return {
+    left: clampedLeft,
+    bottom: Math.max(pad, vh - rect.top + 6),
+    maxHeight: Math.max(160, Math.min(440, spaceAbove - 6)),
+    triggerRect: rect
+  };
+}
+
+function StickerCard({
+  sticker,
+  lottieId,
+  lottieData,
+  customLabel
+}: {
+  sticker?: StickerDefinition;
+  lottieId?: string;
+  lottieData?: unknown;
+  customLabel?: string;
+}) {
+  const effectiveLottieId = lottieId || sticker?.lottieId;
+  const hasLottie = Boolean(isValidLottieData(lottieData) || getLottieAnimationById(effectiveLottieId));
+  const bgFrom = sticker?.bgFrom || '#0F766E';
+  const bgTo = sticker?.bgTo || '#115E59';
+  const accent = sticker?.accent || '#CCFBF1';
+  const textColor = sticker?.textColor || '#FFFFFF';
+  const label = customLabel || sticker?.label || 'ملصق متحرك';
+  const subtitle = sticker?.subtitle;
+
+  return (
+    <div
+      style={{
+        background: `linear-gradient(135deg, ${bgFrom} 0%, ${bgTo} 100%)`,
+        color: textColor
+      }}
+      className="relative overflow-hidden rounded-2xl px-4 py-3.5 min-w-[176px] max-w-[236px] shadow-md select-none"
+    >
+      <svg
+        viewBox="0 0 180 110"
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 w-full h-full opacity-25"
+      >
+        <circle cx="24" cy="22" r="28" fill={accent} />
+        <circle cx="158" cy="92" r="34" fill={accent} />
+        <path
+          d="M0 86 Q 48 64 94 86 T 180 82 L 180 110 L 0 110 Z"
+          fill={accent}
+          opacity="0.35"
+        />
+      </svg>
+      <div className="relative z-10 flex flex-col items-center text-center gap-1.5">
+        {(sticker?.badge || hasLottie) && (
+          <span
+            style={{ color: accent }}
+            className="text-[10px] font-bold tracking-wide opacity-95"
+          >
+            {hasLottie ? 'Lottie · متحرك' : sticker?.badge}
+          </span>
+        )}
+        {hasLottie ? (
+          <LottieStickerPlayer
+            lottieId={effectiveLottieId}
+            lottieData={lottieData}
+            fallbackEmoji={sticker?.emoji || '✨'}
+            label={label}
+            sizeClassName="w-22 h-22"
+            interactiveReplay
+          />
+        ) : (
+          <span className="text-3xl leading-none drop-shadow-sm">{sticker?.emoji || '✨'}</span>
+        )}
+        <p className="font-display text-base font-extrabold leading-snug">{label}</p>
+        {subtitle && (
+          <p className="text-[11px] opacity-90 font-medium leading-tight">{subtitle}</p>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export function ChatWindow({
   chat,
@@ -161,6 +300,7 @@ export function ChatWindow({
   onStartCall,
   onOpenRightPanel,
   onClearChat,
+  onDeleteChat,
   onSetDisappearing,
   onToggleLockChat,
   onTypingChange,
@@ -183,11 +323,16 @@ export function ChatWindow({
   const [forwardMsg, setForwardMsg] = useState<DecryptedMessage | null>(null);
   const [forwardingToId, setForwardingToId] = useState<string | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [pickerTab, setPickerTab] = useState<'emoji' | 'stickers'>('emoji');
+  const [stickerCategory, setStickerCategory] = useState<StickerCategoryId>('all');
+  const [lottieUploadError, setLottieUploadError] = useState<string | null>(null);
   const [showTemplatesPicker, setShowTemplatesPicker] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
-  const [activeMsgMenu, setActiveMsgMenu] = useState<string | null>(null);
-  const [activeReceiptMsgId, setActiveReceiptMsgId] = useState<string | null>(null);
+  const [showDeleteChatConfirm, setShowDeleteChatConfirm] = useState(false);
+  const [isDeletingChat, setIsDeletingChat] = useState(false);
+  const [activeMsgMenu, setActiveMsgMenu] = useState<FloatingPopoverState | null>(null);
+  const [activeReceipt, setActiveReceipt] = useState<FloatingPopoverState | null>(null);
   const [showPollModal, setShowPollModal] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '', '']);
@@ -205,6 +350,11 @@ export function ChatWindow({
   >({});
   const [translatingIds, setTranslatingIds] = useState<Record<string, boolean>>({});
   const [translationErrors, setTranslationErrors] = useState<Record<string, string>>({});
+  const [swipeDragState, setSwipeDragState] = useState<{
+    msgId: string;
+    offsetX: number;
+    isSwiping: boolean;
+  } | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const prevChatIdRef = useRef<string | null>(null);
@@ -212,8 +362,19 @@ export function ChatWindow({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inChatSearchInputRef = useRef<HTMLInputElement>(null);
   const msgRefsMap = useRef<Record<string, HTMLDivElement | null>>({});
+  const swipeTrackerRef = useRef<{
+    msgId: string;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    axisLocked: 'none' | 'x' | 'y';
+    triggeredHaptic: boolean;
+    lastOffsetX: number;
+  } | null>(null);
+  const suppressClickUntilRef = useRef<number>(0);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lottieInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordChunksRef = useRef<BlobPart[]>([]);
   const recordStreamRef = useRef<MediaStream | null>(null);
@@ -258,12 +419,16 @@ export function ChatWindow({
     setShowTemplatesPicker(false);
     setShowAttachMenu(false);
     setShowMoreMenu(false);
+    setShowDeleteChatConfirm(false);
+    setIsDeletingChat(false);
     setActiveMsgMenu(null);
-    setActiveReceiptMsgId(null);
+    setActiveReceipt(null);
     setShowInChatSearch(false);
     setInChatSearchQuery('');
     setInChatFilterType('all');
     setActiveMatchIdx(0);
+    setSwipeDragState(null);
+    swipeTrackerRef.current = null;
   }, [chat?.id]);
 
   useEffect(() => {
@@ -294,8 +459,9 @@ export function ChatWindow({
       showTemplatesPicker ||
       showAttachMenu ||
       showMoreMenu ||
+      showDeleteChatConfirm ||
       Boolean(activeMsgMenu) ||
-      Boolean(activeReceiptMsgId) ||
+      Boolean(activeReceipt) ||
       showPollModal ||
       Boolean(forwardMsg) ||
       Boolean(editingMsg);
@@ -309,7 +475,7 @@ export function ChatWindow({
       setShowAttachMenu(false);
       setShowMoreMenu(false);
       setActiveMsgMenu(null);
-      setActiveReceiptMsgId(null);
+      setActiveReceipt(null);
     };
 
     const handleEscape = (e: KeyboardEvent) => {
@@ -318,8 +484,9 @@ export function ChatWindow({
         setShowTemplatesPicker(false);
         setShowAttachMenu(false);
         setShowMoreMenu(false);
+        setShowDeleteChatConfirm(false);
         setActiveMsgMenu(null);
-        setActiveReceiptMsgId(null);
+        setActiveReceipt(null);
         setShowPollModal(false);
         setForwardMsg(null);
         if (editingMsg) {
@@ -329,19 +496,27 @@ export function ChatWindow({
       }
     };
 
+    const handleResize = () => {
+      setActiveMsgMenu(null);
+      setActiveReceipt(null);
+    };
+
     document.addEventListener('mousedown', handleOutside);
     window.addEventListener('keydown', handleEscape);
+    window.addEventListener('resize', handleResize);
     return () => {
       document.removeEventListener('mousedown', handleOutside);
       window.removeEventListener('keydown', handleEscape);
+      window.removeEventListener('resize', handleResize);
     };
   }, [
     showEmojiPicker,
     showTemplatesPicker,
     showAttachMenu,
     showMoreMenu,
+    showDeleteChatConfirm,
     activeMsgMenu,
-    activeReceiptMsgId,
+    activeReceipt,
     showPollModal,
     forwardMsg,
     editingMsg
@@ -379,6 +554,123 @@ export function ChatWindow({
     return isMine ? 'rounded-xl rounded-tr-xs' : 'rounded-xl rounded-tl-xs';
   };
 
+  const isComposerReadOnly =
+    (chat.type === 'direct' && isPeerBlocked) ||
+    (chat.type === 'community' && Boolean(chat.adminOnlyPost) && chat.id.startsWith('channel_'));
+
+  const openQuickReplyForMessage = (msg: DecryptedMessage) => {
+    if (msg.isDeleted || isComposerReadOnly) return;
+    setEditingMsg(null);
+    setReplyTo(msg);
+    setActiveMsgMenu(null);
+    setActiveReceipt(null);
+    setShowEmojiPicker(false);
+    setShowAttachMenu(false);
+    setShowMoreMenu(false);
+    setShowTemplatesPicker(false);
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+    });
+  };
+
+  const handleMessagePointerDown = (
+    e: React.PointerEvent<HTMLDivElement>,
+    msg: DecryptedMessage
+  ) => {
+    if (msg.isDeleted || isComposerReadOnly) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button, a, input, select, textarea, [data-chat-floating="true"]')) {
+      return;
+    }
+    swipeTrackerRef.current = {
+      msgId: msg.id,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      axisLocked: 'none',
+      triggeredHaptic: false,
+      lastOffsetX: 0
+    };
+  };
+
+  const handleMessagePointerMove = (
+    e: React.PointerEvent<HTMLDivElement>,
+    msg: DecryptedMessage
+  ) => {
+    const tracker = swipeTrackerRef.current;
+    if (!tracker || tracker.msgId !== msg.id || tracker.pointerId !== e.pointerId) return;
+    if (tracker.axisLocked === 'y') return;
+
+    const dx = e.clientX - tracker.startX;
+    const dy = e.clientY - tracker.startY;
+
+    if (tracker.axisLocked === 'none') {
+      if (Math.abs(dy) > 8 && Math.abs(dy) >= Math.abs(dx)) {
+        tracker.axisLocked = 'y';
+        return;
+      }
+      if (dx < -6 && Math.abs(dx) > Math.abs(dy)) {
+        tracker.axisLocked = 'x';
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          // Pointer capture may fail in synthetic or touch environments
+        }
+      } else if (dx > 10) {
+        tracker.axisLocked = 'y';
+        return;
+      } else {
+        return;
+      }
+    }
+
+    const offsetX = computeSwipeReplyOffset(dx);
+    tracker.lastOffsetX = offsetX;
+    if (isSwipeReplyThresholdMet(offsetX) && !tracker.triggeredHaptic) {
+      tracker.triggeredHaptic = true;
+      try {
+        navigator.vibrate?.(12);
+      } catch {
+        // Ignore unsupported vibration API
+      }
+    }
+    setSwipeDragState({ msgId: msg.id, offsetX, isSwiping: true });
+  };
+
+  const handleMessagePointerFinish = (
+    e: React.PointerEvent<HTMLDivElement>,
+    msg: DecryptedMessage,
+    cancelled: boolean
+  ) => {
+    const tracker = swipeTrackerRef.current;
+    if (!tracker || tracker.msgId !== msg.id || tracker.pointerId !== e.pointerId) return;
+
+    const shouldOpenReply =
+      !cancelled &&
+      tracker.axisLocked === 'x' &&
+      isSwipeReplyThresholdMet(tracker.lastOffsetX);
+
+    if (tracker.axisLocked === 'x' && Math.abs(tracker.lastOffsetX) > 8) {
+      suppressClickUntilRef.current = Date.now() + 260;
+    }
+
+    try {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+    } catch {
+      // Ignore release errors
+    }
+
+    swipeTrackerRef.current = null;
+    setSwipeDragState(null);
+
+    if (shouldOpenReply) {
+      openQuickReplyForMessage(msg);
+    }
+  };
+
   const handleSendText = async (overrideText?: string) => {
     const raw = typeof overrideText === 'string' ? overrideText : text;
     const trimmed = raw.trim();
@@ -400,13 +692,85 @@ export function ChatWindow({
         text: trimmed,
         ...(currentReply
           ? {
-              replyToText: currentReply.payload.text.slice(0, 120),
+              replyToText: formatReplyPreviewText(currentReply),
               replyToSender: currentReply.senderId === myUid ? 'أنت' : currentReply.senderName
             }
           : {})
       },
       currentReply?.id
     );
+  };
+
+  const handleSendQuickReplyChip = async (replyText: string) => {
+    if (!replyTo || isComposerReadOnly) return;
+    await handleSendText(replyText);
+  };
+
+  const handleSendSticker = async (sticker: StickerDefinition) => {
+    const currentReply = replyTo;
+    setReplyTo(null);
+    setShowEmojiPicker(false);
+    setLottieUploadError(null);
+    await onSendMessage(
+      'text',
+      {
+        text: `ملصق: ${sticker.label}`,
+        stickerId: sticker.id,
+        stickerLabel: sticker.label,
+        stickerCategory: sticker.category,
+        stickerKind: sticker.kind || 'static',
+        ...(sticker.lottieId ? { lottieId: sticker.lottieId } : {}),
+        ...(currentReply
+          ? {
+              replyToText: formatReplyPreviewText(currentReply),
+              replyToSender: currentReply.senderId === myUid ? 'أنت' : currentReply.senderName
+            }
+          : {})
+      },
+      currentReply?.id
+    );
+  };
+
+  const handleLottieFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setLottieUploadError(null);
+    try {
+      const raw = await file.text();
+      if (raw.length > 32000) {
+        setLottieUploadError('حجم ملف Lottie كبير جداً للتشفير الفوري (الحد الأقصى 32 كيلوبايت).');
+        return;
+      }
+      const parsed: unknown = JSON.parse(raw);
+      if (!isValidLottieData(parsed)) {
+        setLottieUploadError('ملف JSON لا يطابق بنية ملصقات Lottie الصالحة.');
+        return;
+      }
+      const cleanName = file.name.replace(/\.json$/i, '').slice(0, 40) || 'ملصق Lottie';
+      const currentReply = replyTo;
+      setReplyTo(null);
+      setShowEmojiPicker(false);
+      await onSendMessage(
+        'text',
+        {
+          text: `ملصق: ${cleanName}`,
+          stickerLabel: cleanName,
+          stickerCategory: 'animated',
+          stickerKind: 'lottie',
+          lottieData: parsed as unknown as Record<string, unknown>,
+          ...(currentReply
+            ? {
+                replyToText: formatReplyPreviewText(currentReply),
+                replyToSender: currentReply.senderId === myUid ? 'أنت' : currentReply.senderName
+              }
+            : {})
+        },
+        currentReply?.id
+      );
+    } catch {
+      setLottieUploadError('تعذر قراءة ملف Lottie JSON.');
+    }
   };
 
   const handleStartRecording = async () => {
@@ -701,7 +1065,7 @@ export function ChatWindow({
   return (
     <section aria-label={`محادثة ${chat.title}`} className="flex-1 flex flex-col h-full w-full max-w-full min-w-0 overflow-hidden relative">
       {/* Chat Header */}
-      <header className="h-16 px-2.5 sm:px-3 md:px-4 shrink-0 bg-[#F0F2F5] dark:bg-[#202C33] border-b border-[#E9EDEF] dark:border-[#222D34] flex items-center justify-between gap-1.5 sm:gap-2 z-20 min-w-0 max-w-full">
+      <header className="h-16 px-2 sm:px-3 md:px-4 shrink-0 bg-[#F0F2F5] dark:bg-[#202C33] border-b border-[#E9EDEF] dark:border-[#222D34] flex items-center justify-between gap-1 sm:gap-2 z-20 min-w-0 max-w-full">
         <div className="flex items-center gap-1.5 sm:gap-2.5 flex-1 min-w-0">
           <button
             type="button"
@@ -715,7 +1079,7 @@ export function ChatWindow({
           <button
             type="button"
             onClick={() => onOpenRightPanel('info')}
-            className="flex items-center gap-2.5 sm:gap-3 flex-1 min-w-0 text-right hover:opacity-90 transition-opacity cursor-pointer"
+            className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0 text-right hover:opacity-90 transition-opacity cursor-pointer"
           >
             <Avatar
               src={chat.avatarUrl}
@@ -726,7 +1090,7 @@ export function ChatWindow({
             />
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
-                <h2 className="font-display text-base font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
+                <h2 className="font-display text-[15px] sm:text-base font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
                   {chat.title}
                 </h2>
                 {isLocked && (
@@ -758,7 +1122,7 @@ export function ChatWindow({
           </button>
         </div>
 
-        <div className="flex items-center gap-1 shrink-0 relative">
+        <div className="flex items-center gap-0.5 sm:gap-1 shrink-0 relative">
           <button
             type="button"
             aria-label="التحقق من التشفير التام"
@@ -776,9 +1140,9 @@ export function ChatWindow({
             title={isPeerBlocked ? 'جهة الاتصال محظورة' : 'مكالمة مرئية'}
             disabled={isPeerBlocked}
             onClick={() => onStartCall('video')}
-            className="w-10 h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
+            className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
           >
-            <Video className="w-5 h-5" aria-hidden="true" />
+            <Video className="w-4.5 h-4.5 sm:w-5 sm:h-5" aria-hidden="true" />
           </button>
 
           <button
@@ -787,9 +1151,9 @@ export function ChatWindow({
             title={isPeerBlocked ? 'جهة الاتصال محظورة' : 'مكالمة صوتية'}
             disabled={isPeerBlocked}
             onClick={() => onStartCall('audio')}
-            className="w-10 h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
+            className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
           >
-            <Phone className="w-5 h-5" aria-hidden="true" />
+            <Phone className="w-4.5 h-4.5 sm:w-5 sm:h-5" aria-hidden="true" />
           </button>
 
           <button
@@ -827,6 +1191,7 @@ export function ChatWindow({
               onClick={() => {
                 setShowMoreMenu((v) => !v);
                 setActiveMsgMenu(null);
+                setActiveReceipt(null);
                 setShowEmojiPicker(false);
                 setShowAttachMenu(false);
                 setShowTemplatesPicker(false);
@@ -839,7 +1204,7 @@ export function ChatWindow({
             {showMoreMenu && (
               <div
                 role="menu"
-                className="absolute left-0 top-12 z-30 w-56 rounded-xl bg-white dark:bg-[#233138] shadow-xl border border-[#E9EDEF] dark:border-[#374248] py-1.5 text-sm"
+                className="absolute left-0 top-12 z-40 w-56 max-w-[calc(100vw-1.5rem)] max-h-[calc(100dvh-5.5rem)] overflow-y-auto rounded-xl bg-white dark:bg-[#233138] shadow-xl border border-[#E9EDEF] dark:border-[#374248] py-1.5 text-sm"
               >
               <button
                 type="button"
@@ -984,6 +1349,23 @@ export function ChatWindow({
               >
                 مسح محتوى الدردشة
               </button>
+              {onDeleteChat && (
+                <>
+                  <div className="my-1 border-t border-[#E9EDEF] dark:border-[#374248]" />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setShowMoreMenu(false);
+                      setShowDeleteChatConfirm(true);
+                    }}
+                    className="w-full px-4 py-2.5 text-right flex items-center gap-2 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 font-semibold cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4 shrink-0" aria-hidden="true" />
+                    <span>حذف المحادثة</span>
+                  </button>
+                </>
+              )}
               </div>
             )}
           </div>
@@ -1127,7 +1509,13 @@ export function ChatWindow({
               className={`pointer-events-none absolute inset-0 z-0 transition-all duration-200 ${resolvedWallpaper.className}`}
               style={resolvedWallpaper.style}
             />
-            <div className="relative z-10 flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-3 sm:px-4 md:px-10 py-4 space-y-2.5">
+            <div
+              onScroll={() => {
+                if (activeMsgMenu) setActiveMsgMenu(null);
+                if (activeReceipt) setActiveReceipt(null);
+              }}
+              className="relative z-10 flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-3 sm:px-4 md:px-10 py-4 space-y-2.5"
+            >
         {/* E2EE Encryption Notice Banner */}
         <div className="flex justify-center my-2">
           <button
@@ -1150,6 +1538,10 @@ export function ChatWindow({
           const reactionEntries = Object.entries(msg.reactions).filter(([, users]) => users.length > 0);
           const showPreservedDeleted = msg.isDeleted && omarSettings.antiDeleteMessages && Boolean(msg.payload.text);
           const isFocusedHighlight = focusedMatchId === msg.id;
+          const isSwipingThis = swipeDragState?.msgId === msg.id && swipeDragState.isSwiping;
+          const activeSwipeOffset = isSwipingThis ? swipeDragState.offsetX : 0;
+          const swipeProgress = Math.min(1, Math.abs(activeSwipeOffset) / SWIPE_REPLY_TRIGGER_PX);
+          const swipeThresholdMet = isSwipeReplyThresholdMet(activeSwipeOffset);
 
           return (
             <div
@@ -1157,12 +1549,48 @@ export function ChatWindow({
               ref={(el) => {
                 msgRefsMap.current[msg.id] = el;
               }}
-              className={`flex flex-col ${isMine ? 'items-start' : 'items-end'}`}
+              className={`relative flex flex-col touch-pan-y select-none ${isMine ? 'items-start' : 'items-end'}`}
             >
+              {activeSwipeOffset < -4 && (
+                <div
+                  aria-hidden="true"
+                  style={{
+                    opacity: Math.max(0.2, swipeProgress),
+                    transform: `translate3d(0, -50%, 0) scale(${0.78 + swipeProgress * 0.28})`
+                  }}
+                  className="pointer-events-none absolute right-1.5 top-1/2 z-0 flex items-center gap-1.5"
+                >
+                  <span
+                    className={`w-8 h-8 rounded-full flex items-center justify-center shadow-sm transition-colors ${
+                      swipeThresholdMet
+                        ? 'bg-[var(--wa-accent)] text-white'
+                        : 'bg-white/95 dark:bg-[#233138] text-[#54656F] dark:text-[#AEBAC1] border border-[#E9EDEF] dark:border-[#374248]'
+                    }`}
+                  >
+                    <Reply className="w-4 h-4" />
+                  </span>
+                  {swipeThresholdMet && (
+                    <span className="px-2 py-0.5 rounded-md bg-[var(--wa-accent)] text-white text-[10px] font-bold shadow-xs whitespace-nowrap">
+                      أفلت للرد
+                    </span>
+                  )}
+                </div>
+              )}
               <div
-                className={`group relative max-w-[88%] sm:max-w-[70%] md:max-w-[62%] ${
+                onPointerDown={(e) => handleMessagePointerDown(e, msg)}
+                onPointerMove={(e) => handleMessagePointerMove(e, msg)}
+                onPointerUp={(e) => handleMessagePointerFinish(e, msg, false)}
+                onPointerCancel={(e) => handleMessagePointerFinish(e, msg, true)}
+                style={{
+                  transform:
+                    activeSwipeOffset < 0 ? `translate3d(${activeSwipeOffset}px, 0, 0)` : undefined,
+                  transition: isSwipingThis
+                    ? 'none'
+                    : 'transform 180ms cubic-bezier(0.16, 1, 0.3, 1)'
+                }}
+                className={`group relative z-10 max-w-[88%] sm:max-w-[70%] md:max-w-[62%] will-change-transform ${
                   msg.isDeleted ? 'px-3' : 'pl-8 pr-3'
-                } py-2 shadow-xs transition-all ${getBubbleRadiusClass(
+                } py-2 shadow-xs transition-[box-shadow,background-color] ${getBubbleRadiusClass(
                   isMine
                 )} ${
                   isMine
@@ -1220,7 +1648,10 @@ export function ChatWindow({
                       src={resolveBundledAssetUrl(msg.payload.mediaUrl)}
                       alt={msg.payload.text || 'صورة مرفقة'}
                       referrerPolicy="no-referrer"
-                      onClick={() => setLightboxImage({ mediaUrl: msg.payload.mediaUrl!, caption: msg.payload.text })}
+                      onClick={() => {
+                        if (suppressClickUntilRef.current > Date.now()) return;
+                        setLightboxImage({ mediaUrl: msg.payload.mediaUrl!, caption: msg.payload.text });
+                      }}
                       className="rounded-lg max-h-72 w-full object-cover bg-black/10 cursor-pointer hover:opacity-95 transition-opacity"
                       title="انقر لتكبير الصورة"
                     />
@@ -1356,15 +1787,50 @@ export function ChatWindow({
                       })}
                     </div>
                   </div>
-                ) : (
-                  <p className={`${fontSizeClass} leading-relaxed whitespace-pre-wrap break-words`}>
-                    <HighlightText
-                      text={msg.payload.text}
-                      query={activeHighlightQuery}
-                      active={isFocusedHighlight}
-                    />
-                  </p>
-                )}
+                ) : msg.payload.decryptionFailed ? (
+                  <div className="rounded-xl bg-amber-500/10 dark:bg-amber-950/35 border border-amber-300/60 dark:border-amber-700/50 px-3 py-2 space-y-1.5">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-amber-800 dark:text-amber-300">
+                      <Lock className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                      <span>رسالة مشفرة بمفتاح جلسة سابق</span>
+                    </div>
+                    <p className="text-[11px] text-[#54656F] dark:text-[#AEBAC1] leading-relaxed">
+                      تعذر فك التشفير لاختلاف مفتاح الجهاز وقت الإرسال — الرسائل الجديدة متزامنة تلقائياً.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => onOpenRightPanel('encryption', msg.id)}
+                      className="text-[11px] font-semibold text-[var(--wa-accent-strong)] hover:underline cursor-pointer"
+                    >
+                      التحقق من المفاتيح والتشفير
+                    </button>
+                  </div>
+                ) : (() => {
+                  const stickerDef =
+                    msg.type === 'text' ? getStickerById(msg.payload.stickerId) : undefined;
+                  const hasCustomLottie =
+                    msg.type === 'text' &&
+                    (isValidLottieData(msg.payload.lottieData) ||
+                      Boolean(getLottieAnimationById(msg.payload.lottieId)));
+                  if (stickerDef || hasCustomLottie) {
+                    return (
+                      <StickerCard
+                        sticker={stickerDef}
+                        lottieId={msg.payload.lottieId || stickerDef?.lottieId}
+                        lottieData={msg.payload.lottieData}
+                        customLabel={msg.payload.stickerLabel}
+                      />
+                    );
+                  }
+                  return (
+                    <p className={`${fontSizeClass} leading-relaxed whitespace-pre-wrap break-words`}>
+                      <HighlightText
+                        text={msg.payload.text}
+                        query={activeHighlightQuery}
+                        active={isFocusedHighlight}
+                      />
+                    </p>
+                  );
+                })()}
 
                 {/* Per-Message Live Translation Result / Status */}
                 {!msg.isDeleted && translatingIds[msg.id] && (
@@ -1455,7 +1921,7 @@ export function ChatWindow({
                       if (!isGroupChat && chat.title) return chat.title;
                       return `${peerId.slice(0, 6)}…`;
                     };
-                    const isPopoverOpen = activeReceiptMsgId === msg.id;
+                    const isPopoverOpen = activeReceipt?.msgId === msg.id;
 
                     if (receipt.status === 'sending') {
                       return (
@@ -1496,7 +1962,19 @@ export function ChatWindow({
                           onClick={(e) => {
                             e.stopPropagation();
                             setActiveMsgMenu(null);
-                            setActiveReceiptMsgId((curr) => (curr === msg.id ? null : msg.id));
+                            if (activeReceipt?.msgId === msg.id) {
+                              setActiveReceipt(null);
+                              return;
+                            }
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setActiveReceipt({
+                              msgId: msg.id,
+                              ...computeClampedFloatingPosition(
+                                { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
+                                256,
+                                200
+                              )
+                            });
                           }}
                           className={`inline-flex items-center gap-0.5 rounded px-0.5 py-0.5 transition-colors cursor-pointer hover:bg-black/5 dark:hover:bg-white/10 ${
                             receipt.status === 'read'
@@ -1525,98 +2003,6 @@ export function ChatWindow({
                                   </span>
                                 ))}
                         </button>
-
-                        {isPopoverOpen && (
-                          <div
-                            role="dialog"
-                            aria-label="تفاصيل حالة الرسالة"
-                            className="absolute bottom-8 right-2 z-40 w-60 rounded-xl bg-white dark:bg-[#233138] shadow-xl border border-[#E9EDEF] dark:border-[#374248] p-3 text-right font-sans text-xs text-[#111B21] dark:text-[#E9EDEF]"
-                          >
-                            <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-[#E9EDEF] dark:border-[#374248]">
-                              <span className="font-bold text-[12px]">حالة الرسالة</span>
-                              <span
-                                className={`text-[11px] font-semibold ${
-                                  receipt.status === 'read'
-                                    ? 'text-[#0284C7] dark:text-[#53BDEB]'
-                                    : receipt.status === 'delivered'
-                                      ? 'text-[var(--wa-accent-strong)]'
-                                      : 'text-[#667781] dark:text-[#AEBAC1]'
-                                }`}
-                              >
-                                {receipt.label}
-                              </span>
-                            </div>
-
-                            <div className="space-y-2 text-[11px]">
-                              <div className="flex items-start gap-2">
-                                <Check
-                                  className="w-3.5 h-3.5 mt-0.5 shrink-0 text-[#54656F] dark:text-[#AEBAC1]"
-                                  aria-hidden="true"
-                                />
-                                <div className="min-w-0 flex-1">
-                                  <p className="font-semibold">مرسلة</p>
-                                  <p className="text-[#667781] dark:text-[#8696A0]">
-                                    تم الإرسال في {formatWhatsAppTime(msg.createdAtMs)}
-                                  </p>
-                                </div>
-                              </div>
-
-                              <div className="flex items-start gap-2">
-                                <CheckCheck
-                                  className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${
-                                    receipt.deliveredPeerIds.length > 0
-                                      ? 'text-[#54656F] dark:text-[#E9EDEF]'
-                                      : 'text-[#8696A0]/45'
-                                  }`}
-                                  aria-hidden="true"
-                                />
-                                <div className="min-w-0 flex-1">
-                                  <p
-                                    className={`font-semibold ${
-                                      receipt.deliveredPeerIds.length > 0
-                                        ? ''
-                                        : 'text-[#8696A0] dark:text-[#667781]'
-                                    }`}
-                                  >
-                                    مستلمة ({receipt.deliveredPeerIds.length})
-                                  </p>
-                                  <p className="text-[#667781] dark:text-[#8696A0] truncate">
-                                    {receipt.deliveredPeerIds.length > 0
-                                      ? receipt.deliveredPeerIds.map(resolvePeerName).join('، ')
-                                      : 'لم تصل إلى جهاز الطرف الآخر بعد'}
-                                  </p>
-                                </div>
-                              </div>
-
-                              <div className="flex items-start gap-2">
-                                <CheckCheck
-                                  className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${
-                                    receipt.readPeerIds.length > 0
-                                      ? 'text-[#0284C7] dark:text-[#53BDEB]'
-                                      : 'text-[#8696A0]/45'
-                                  }`}
-                                  aria-hidden="true"
-                                />
-                                <div className="min-w-0 flex-1">
-                                  <p
-                                    className={`font-semibold ${
-                                      receipt.readPeerIds.length > 0
-                                        ? 'text-[#0284C7] dark:text-[#53BDEB]'
-                                        : 'text-[#8696A0] dark:text-[#667781]'
-                                    }`}
-                                  >
-                                    مقروءة ({receipt.readPeerIds.length})
-                                  </p>
-                                  <p className="text-[#667781] dark:text-[#8696A0] truncate">
-                                    {receipt.readPeerIds.length > 0
-                                      ? receipt.readPeerIds.map(resolvePeerName).join('، ')
-                                      : 'في انتظار القراءة'}
-                                  </p>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        )}
                       </div>
                     );
                   })()}
@@ -1628,165 +2014,31 @@ export function ChatWindow({
                     <button
                       type="button"
                       aria-label="خيارات الرسالة"
-                      onClick={() => {
-                        setActiveMsgMenu((curr) => (curr === msg.id ? null : msg.id));
+                      onClick={(e) => {
+                        e.stopPropagation();
                         setShowMoreMenu(false);
                         setShowEmojiPicker(false);
                         setShowAttachMenu(false);
                         setShowTemplatesPicker(false);
+                        setActiveReceipt(null);
+                        if (activeMsgMenu?.msgId === msg.id) {
+                          setActiveMsgMenu(null);
+                          return;
+                        }
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        setActiveMsgMenu({
+                          msgId: msg.id,
+                          ...computeClampedFloatingPosition(
+                            { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
+                            216,
+                            360
+                          )
+                        });
                       }}
                       className="opacity-75 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 absolute top-1.5 left-1.5 w-6 h-6 rounded-full bg-white/90 dark:bg-[#233138] shadow-xs flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] transition-opacity cursor-pointer"
                     >
                       <MoreVertical className="w-3.5 h-3.5" aria-hidden="true" />
                     </button>
-
-                    {/* Per-Message Action Menu */}
-                    {activeMsgMenu === msg.id && (
-                      <div
-                        role="menu"
-                        className="absolute top-8 left-2 z-30 w-52 rounded-xl bg-white dark:bg-[#233138] shadow-xl border border-[#E9EDEF] dark:border-[#374248] py-1.5 text-xs"
-                      >
-                    {/* Quick emoji reaction strip */}
-                    <div className="px-2.5 py-1.5 flex items-center justify-between border-b border-[#E9EDEF] dark:border-[#374248]">
-                      {['❤️', '👍', '😂', '😮', '🙏'].map((emoji) => (
-                        <button
-                          key={emoji}
-                          type="button"
-                          onClick={() => {
-                            onReactMessage(msg.id, emoji);
-                            setActiveMsgMenu(null);
-                          }}
-                          className="w-7 h-7 rounded-full hover:bg-[#F0F2F5] dark:hover:bg-[#182229] flex items-center justify-center text-base cursor-pointer"
-                        >
-                          {emoji}
-                        </button>
-                      ))}
-                    </div>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setReplyTo(msg);
-                        setActiveMsgMenu(null);
-                      }}
-                      className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer"
-                    >
-                      <Reply className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>رد على الرسالة</span>
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setForwardMsg(msg);
-                        setActiveMsgMenu(null);
-                      }}
-                      className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer"
-                    >
-                      <Forward className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>تحويل الرسالة</span>
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        onToggleStarMessage(msg.id);
-                        setActiveMsgMenu(null);
-                      }}
-                      className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer"
-                    >
-                      <Star className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>{isStarred ? 'إزالة النجمة' : 'تمييز بنجمة'}</span>
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        void navigator.clipboard?.writeText(msg.payload.text);
-                        setActiveMsgMenu(null);
-                      }}
-                      className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer"
-                    >
-                      <Copy className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>نسخ النص</span>
-                    </button>
-                    {Boolean(getTranslatableMessageText(msg)) && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          setActiveMsgMenu(null);
-                          if (translatedMessages[msg.id]) {
-                            handleHideTranslation(msg.id);
-                          } else {
-                            void handleTranslateMessage(msg);
-                          }
-                        }}
-                        className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
-                      >
-                        <Languages className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
-                        <span>{translatedMessages[msg.id] ? 'إخفاء الترجمة' : 'ترجمة الرسالة'}</span>
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        onOpenRightPanel('encryption', msg.id);
-                        setActiveMsgMenu(null);
-                      }}
-                      className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[var(--wa-accent-strong)] cursor-pointer"
-                    >
-                      <Lock className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>معاينة النص المشفر</span>
-                    </button>
-                    {isMine && !msg.isDeleted && msg.status !== 'sending' && msg.status !== 'failed' && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          setActiveMsgMenu(null);
-                          setActiveReceiptMsgId(msg.id);
-                        }}
-                        className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer"
-                      >
-                        <CheckCheck className="w-3.5 h-3.5 text-[#0284C7] dark:text-[#53BDEB]" aria-hidden="true" />
-                        <span>حالة الاستلام والقراءة</span>
-                      </button>
-                    )}
-                    {isMine && !msg.isDeleted && (msg.type === 'text' || msg.type === 'image') && onEditMessage && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          setEditingMsg(msg);
-                          setReplyTo(null);
-                          setText(msg.payload.text);
-                          setActiveMsgMenu(null);
-                          window.requestAnimationFrame(() => textareaRef.current?.focus());
-                        }}
-                        className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer"
-                      >
-                        <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span>تعديل الرسالة</span>
-                      </button>
-                    )}
-                    {isMine && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          onDeleteMessage(msg.id);
-                          setActiveMsgMenu(null);
-                        }}
-                        className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-red-50 dark:hover:bg-red-950/40 text-red-600 dark:text-red-400 cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span>حذف للجميع</span>
-                      </button>
-                    )}
-                      </div>
-                    )}
                   </div>
                 )}
               </div>
@@ -1816,36 +2068,72 @@ export function ChatWindow({
         );
       })()}
 
-      {/* Reply / Edit Preview Strip */}
-      {(replyTo || editingMsg) && (
-        <div className="px-4 py-2 bg-[#F0F2F5] dark:bg-[#202C33] border-t border-[#E9EDEF] dark:border-[#222D34] flex items-center justify-between gap-3">
-          <div className="flex-1 min-w-0 bg-white dark:bg-[#111B21] rounded-lg px-3 py-2 border-r-4 border-[var(--wa-accent)]">
-            <p className="text-xs font-semibold text-[var(--wa-accent-strong)]">
-              {editingMsg
-                ? 'تعديل الرسالة'
-                : `الرد على ${replyTo!.senderId === myUid ? 'نفسك' : replyTo!.senderName}`}
-            </p>
-            <p className="text-xs text-[#54656F] dark:text-[#8696A0] truncate">
-              {editingMsg ? editingMsg.payload.text : replyTo!.payload.text}
-            </p>
-          </div>
-          <button
-            type="button"
-            aria-label={editingMsg ? 'إلغاء التعديل' : 'إلغاء الرد'}
-            onClick={() => {
-              if (editingMsg) {
-                setEditingMsg(null);
-                setText('');
-              } else {
-                setReplyTo(null);
-              }
-            }}
-            className="w-8 h-8 rounded-full flex items-center justify-center text-[#54656F] hover:bg-black/5 cursor-pointer"
+      {/* Reply / Edit Preview Strip + Direct Quick Replies List */}
+      {(replyTo || editingMsg) && (() => {
+        const quickSuggestions =
+          replyTo && !editingMsg
+            ? buildQuickReplySuggestions(replyTo, omarSettings.quickTemplates)
+            : [];
+        return (
+          <div
+            data-chat-floating="true"
+            className="px-3 sm:px-4 py-2 bg-[#F0F2F5] dark:bg-[#202C33] border-t border-[#E9EDEF] dark:border-[#222D34] space-y-2 shrink-0"
           >
-            <X className="w-4 h-4" aria-hidden="true" />
-          </button>
-        </div>
-      )}
+            <div className="flex items-center justify-between gap-2.5">
+              <div className="flex-1 min-w-0 bg-white dark:bg-[#111B21] rounded-lg px-3 py-2 border-r-4 border-[var(--wa-accent)]">
+                <p className="text-xs font-semibold text-[var(--wa-accent-strong)] flex items-center gap-1.5">
+                  <Reply className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                  <span>
+                    {editingMsg
+                      ? 'تعديل الرسالة'
+                      : `الرد على ${replyTo!.senderId === myUid ? 'نفسك' : replyTo!.senderName}`}
+                  </span>
+                </p>
+                <p className="text-xs text-[#54656F] dark:text-[#8696A0] truncate mt-0.5">
+                  {editingMsg ? editingMsg.payload.text : formatReplyPreviewText(replyTo!)}
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label={editingMsg ? 'إلغاء التعديل' : 'إلغاء الرد'}
+                onClick={() => {
+                  if (editingMsg) {
+                    setEditingMsg(null);
+                    setText('');
+                  } else {
+                    setReplyTo(null);
+                  }
+                }}
+                className="w-10 h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/10 shrink-0 cursor-pointer"
+              >
+                <X className="w-4 h-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            {quickSuggestions.length > 0 && !isComposerReadOnly && (
+              <div
+                aria-label="قائمة الردود السريعة"
+                className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5"
+              >
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[var(--wa-accent-strong)] shrink-0 pl-1">
+                  <Zap className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>ردود سريعة:</span>
+                </span>
+                {quickSuggestions.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() => void handleSendQuickReplyChip(suggestion)}
+                    className="px-3 py-1.5 rounded-lg bg-white dark:bg-[#111B21] border border-[#DCE3E7] dark:border-[#374248] text-xs font-medium text-[#111B21] dark:text-[#E9EDEF] hover:border-[var(--wa-accent)] hover:bg-[var(--wa-accent-soft)]/40 active:scale-[0.98] transition-all shrink-0 cursor-pointer"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Composer Bar */}
       <footer
@@ -1878,17 +2166,131 @@ export function ChatWindow({
         ) : (
           <>
         {showEmojiPicker && (
-          <div className="absolute bottom-16 right-4 z-30 p-3 rounded-2xl bg-white dark:bg-[#233138] shadow-xl border border-[#E9EDEF] dark:border-[#374248] grid grid-cols-6 gap-1.5">
-            {EMOJI_PALETTE.map((emoji) => (
+          <div className="absolute bottom-16 right-2 left-2 sm:left-auto sm:right-4 sm:w-[340px] max-w-[calc(100vw-1rem)] z-40 rounded-2xl bg-white dark:bg-[#233138] shadow-2xl border border-[#E9EDEF] dark:border-[#374248] overflow-hidden">
+            {/* Picker Tabs */}
+            <div className="flex items-center justify-between px-3 py-2 border-b border-[#E9EDEF] dark:border-[#374248] bg-[#F8FAFB] dark:bg-[#182229]">
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setPickerTab('emoji')}
+                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                    pickerTab === 'emoji'
+                      ? 'bg-[var(--wa-accent)] text-white'
+                      : 'text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/5'
+                  }`}
+                >
+                  رموز تعبيرية
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPickerTab('stickers')}
+                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                    pickerTab === 'stickers'
+                      ? 'bg-[var(--wa-accent)] text-white'
+                      : 'text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/5'
+                  }`}
+                >
+                  ملصقات عربية
+                </button>
+              </div>
               <button
-                key={emoji}
                 type="button"
-                onClick={() => setText((t) => `${t}${emoji}`)}
-                className="w-9 h-9 rounded-lg hover:bg-[#F0F2F5] dark:hover:bg-[#182229] text-lg flex items-center justify-center cursor-pointer"
+                aria-label="إغلاق لوحة الرموز والملصقات"
+                onClick={() => setShowEmojiPicker(false)}
+                className="p-1 rounded-full text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
               >
-                {emoji}
+                <X className="w-3.5 h-3.5" aria-hidden="true" />
               </button>
-            ))}
+            </div>
+
+            {pickerTab === 'emoji' ? (
+              <div className="p-3 grid grid-cols-6 gap-1.5 max-h-60 overflow-y-auto">
+                {EMOJI_PALETTE.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    onClick={() => setText((t) => `${t}${emoji}`)}
+                    className="w-10 h-10 rounded-lg hover:bg-[#F0F2F5] dark:hover:bg-[#182229] text-xl flex items-center justify-center cursor-pointer mx-auto"
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="p-2.5 space-y-2.5">
+                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+                  {STICKER_CATEGORIES.map((cat) => (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setStickerCategory(cat.id)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                        stickerCategory === cat.id
+                          ? 'bg-[var(--wa-accent-soft)] text-[var(--wa-accent-strong)]'
+                          : 'bg-[#F0F2F5] dark:bg-[#182229] text-[#54656F] dark:text-[#AEBAC1]'
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto pl-0.5">
+                  {filterStickersByCategory(stickerCategory).map((stk) => {
+                    const isAnimated = isLottieSticker(stk);
+                    return (
+                      <button
+                        key={stk.id}
+                        type="button"
+                        onClick={() => void handleSendSticker(stk)}
+                        style={{
+                          background: `linear-gradient(135deg, ${stk.bgFrom} 0%, ${stk.bgTo} 100%)`,
+                          color: stk.textColor
+                        }}
+                        className="relative rounded-xl px-2.5 py-2.5 text-center shadow-xs hover:brightness-105 active:scale-[0.98] transition-all flex flex-col items-center justify-center gap-1 cursor-pointer"
+                      >
+                        {isAnimated && (
+                          <span className="text-[9px] font-bold opacity-90 tracking-wide">
+                            Lottie · متحرك
+                          </span>
+                        )}
+                        {isAnimated ? (
+                          <LottieStickerPlayer
+                            lottieId={stk.lottieId}
+                            fallbackEmoji={stk.emoji}
+                            label={stk.label}
+                            sizeClassName="w-12 h-12"
+                            interactiveReplay={false}
+                          />
+                        ) : (
+                          <span className="text-2xl leading-none">{stk.emoji}</span>
+                        )}
+                        <span className="font-display text-xs font-bold leading-tight">
+                          {stk.label}
+                        </span>
+                        {stk.subtitle && (
+                          <span className="text-[10px] opacity-85 line-clamp-1">{stk.subtitle}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="pt-1 border-t border-[#E9EDEF] dark:border-[#374248] flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => lottieInputRef.current?.click()}
+                    className="w-full py-1.5 px-3 rounded-lg bg-[#F0F2F5] dark:bg-[#182229] hover:bg-[#E4E8EB] dark:hover:bg-[#202C33] text-[11px] font-semibold text-[#111B21] dark:text-[#E9EDEF] flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
+                    <span>استيراد ملصق Lottie (.json)</span>
+                  </button>
+                </div>
+                {lottieUploadError && (
+                  <p className="text-[11px] text-red-600 dark:text-red-400 text-center">
+                    {lottieUploadError}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -1998,6 +2400,13 @@ export function ChatWindow({
           onChange={handleFilePick}
           className="hidden"
         />
+        <input
+          ref={lottieInputRef}
+          type="file"
+          accept=".json,application/json"
+          onChange={(e) => void handleLottieFilePick(e)}
+          className="hidden"
+        />
 
         {isRecording ? (
           <div className="flex items-center justify-between gap-3 bg-white dark:bg-[#2A3942] rounded-xl px-4 h-11">
@@ -2031,13 +2440,15 @@ export function ChatWindow({
           <div className="flex items-end gap-1.5 sm:gap-2">
             <button
               type="button"
-              aria-label="الرموز التعبيرية"
+              aria-label="الرموز التعبيرية والملصقات"
+              title="الرموز التعبيرية والملصقات"
               onClick={() => {
                 setShowEmojiPicker((v) => !v);
                 setShowAttachMenu(false);
                 setShowTemplatesPicker(false);
                 setShowMoreMenu(false);
                 setActiveMsgMenu(null);
+                setActiveReceipt(null);
               }}
               className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/10 shrink-0 cursor-pointer"
             >
@@ -2312,6 +2723,347 @@ export function ChatWindow({
             setText('');
           }}
         />
+      )}
+
+      {/* Viewport-Clamped Fixed Per-Message Action Menu */}
+      {activeMsgMenu && (() => {
+        const msg = visibleMessages.find((m) => m.id === activeMsgMenu.msgId);
+        if (!msg || msg.isDeleted) return null;
+        const isMine = msg.senderId === myUid;
+        const isStarred = msg.starredBy.includes(myUid);
+        const isStickerMsg =
+          msg.type === 'text' &&
+          (Boolean(getStickerById(msg.payload.stickerId)) ||
+            Boolean(msg.payload.lottieId) ||
+            isValidLottieData(msg.payload.lottieData));
+        return (
+          <div
+            data-chat-floating="true"
+            role="menu"
+            style={{
+              left: activeMsgMenu.left,
+              ...(activeMsgMenu.top !== undefined
+                ? { top: activeMsgMenu.top }
+                : { bottom: activeMsgMenu.bottom }),
+              maxHeight: activeMsgMenu.maxHeight
+            }}
+            className="fixed z-50 w-54 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl bg-white dark:bg-[#233138] shadow-2xl border border-[#E9EDEF] dark:border-[#374248] py-1.5 text-xs text-[#111B21] dark:text-[#E9EDEF]"
+          >
+            <div className="px-2.5 py-1.5 flex items-center justify-between border-b border-[#E9EDEF] dark:border-[#374248]">
+              {['❤️', '👍', '😂', '😮', '🙏'].map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  onClick={() => {
+                    onReactMessage(msg.id, emoji);
+                    setActiveMsgMenu(null);
+                  }}
+                  className="w-7 h-7 rounded-full hover:bg-[#F0F2F5] dark:hover:bg-[#182229] flex items-center justify-center text-base cursor-pointer"
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => openQuickReplyForMessage(msg)}
+              className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer"
+            >
+              <Reply className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span>رد على الرسالة</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setForwardMsg(msg);
+                setActiveMsgMenu(null);
+              }}
+              className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer"
+            >
+              <Forward className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span>تحويل الرسالة</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onToggleStarMessage(msg.id);
+                setActiveMsgMenu(null);
+              }}
+              className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer"
+            >
+              <Star className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span>{isStarred ? 'إزالة النجمة' : 'تمييز بنجمة'}</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                void navigator.clipboard?.writeText(msg.payload.text);
+                setActiveMsgMenu(null);
+              }}
+              className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer"
+            >
+              <Copy className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span>نسخ النص</span>
+            </button>
+            {Boolean(getTranslatableMessageText(msg)) && !isStickerMsg && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setActiveMsgMenu(null);
+                  if (translatedMessages[msg.id]) {
+                    handleHideTranslation(msg.id);
+                  } else {
+                    void handleTranslateMessage(msg);
+                  }
+                }}
+                className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer"
+              >
+                <Languages className="w-3.5 h-3.5 text-[var(--wa-accent)] shrink-0" aria-hidden="true" />
+                <span>{translatedMessages[msg.id] ? 'إخفاء الترجمة' : 'ترجمة الرسالة'}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onOpenRightPanel('encryption', msg.id);
+                setActiveMsgMenu(null);
+              }}
+              className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[var(--wa-accent-strong)] cursor-pointer"
+            >
+              <Lock className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span>معاينة النص المشفر</span>
+            </button>
+            {isMine && msg.status !== 'sending' && msg.status !== 'failed' && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const anchorRect = activeMsgMenu.triggerRect;
+                  setActiveMsgMenu(null);
+                  setActiveReceipt({
+                    msgId: msg.id,
+                    ...computeClampedFloatingPosition(anchorRect, 256, 200)
+                  });
+                }}
+                className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer"
+              >
+                <CheckCheck className="w-3.5 h-3.5 text-[#0284C7] dark:text-[#53BDEB] shrink-0" aria-hidden="true" />
+                <span>حالة الاستلام والقراءة</span>
+              </button>
+            )}
+            {isMine &&
+              !isStickerMsg &&
+              !msg.payload.decryptionFailed &&
+              (msg.type === 'text' || msg.type === 'image') &&
+              onEditMessage && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setEditingMsg(msg);
+                    setReplyTo(null);
+                    setText(msg.payload.text);
+                    setActiveMsgMenu(null);
+                    window.requestAnimationFrame(() => textareaRef.current?.focus());
+                  }}
+                  className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer"
+                >
+                  <Pencil className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                  <span>تعديل الرسالة</span>
+                </button>
+              )}
+            {isMine && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  onDeleteMessage(msg.id);
+                  setActiveMsgMenu(null);
+                }}
+                className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-red-50 dark:hover:bg-red-950/40 text-red-600 dark:text-red-400 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                <span>حذف للجميع</span>
+              </button>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Viewport-Clamped Fixed Receipt Details Popover */}
+      {activeReceipt && (() => {
+        const msg = visibleMessages.find((m) => m.id === activeReceipt.msgId);
+        if (!msg || msg.isDeleted) return null;
+        const isGroupChat = chat.type !== 'direct';
+        const receipt = getMessageReceiptDetails(msg, isGroupChat);
+        const resolvePeerName = (peerId: string) => {
+          const match = contacts.find((c) => c.uid === peerId);
+          if (match?.displayName) return match.displayName;
+          if (!isGroupChat && chat.title) return chat.title;
+          return `${peerId.slice(0, 6)}…`;
+        };
+        return (
+          <div
+            data-chat-floating="true"
+            role="dialog"
+            aria-label="تفاصيل حالة الرسالة"
+            style={{
+              left: activeReceipt.left,
+              ...(activeReceipt.top !== undefined
+                ? { top: activeReceipt.top }
+                : { bottom: activeReceipt.bottom }),
+              maxHeight: activeReceipt.maxHeight
+            }}
+            className="fixed z-50 w-64 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl bg-white dark:bg-[#233138] shadow-2xl border border-[#E9EDEF] dark:border-[#374248] p-3 text-right font-sans text-xs text-[#111B21] dark:text-[#E9EDEF]"
+          >
+            <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-[#E9EDEF] dark:border-[#374248]">
+              <span className="font-bold text-[12px]">حالة الرسالة</span>
+              <span
+                className={`text-[11px] font-semibold ${
+                  receipt.status === 'read'
+                    ? 'text-[#0284C7] dark:text-[#53BDEB]'
+                    : receipt.status === 'delivered'
+                      ? 'text-[var(--wa-accent-strong)]'
+                      : 'text-[#667781] dark:text-[#AEBAC1]'
+                }`}
+              >
+                {receipt.label}
+              </span>
+            </div>
+
+            <div className="space-y-2 text-[11px]">
+              <div className="flex items-start gap-2">
+                <Check
+                  className="w-3.5 h-3.5 mt-0.5 shrink-0 text-[#54656F] dark:text-[#AEBAC1]"
+                  aria-hidden="true"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold">مرسلة</p>
+                  <p className="text-[#667781] dark:text-[#8696A0]">
+                    تم الإرسال في {formatWhatsAppTime(msg.createdAtMs)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2">
+                <CheckCheck
+                  className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${
+                    receipt.deliveredPeerIds.length > 0
+                      ? 'text-[#54656F] dark:text-[#E9EDEF]'
+                      : 'text-[#8696A0]/45'
+                  }`}
+                  aria-hidden="true"
+                />
+                <div className="min-w-0 flex-1">
+                  <p
+                    className={`font-semibold ${
+                      receipt.deliveredPeerIds.length > 0
+                        ? ''
+                        : 'text-[#8696A0] dark:text-[#667781]'
+                    }`}
+                  >
+                    مستلمة ({receipt.deliveredPeerIds.length})
+                  </p>
+                  <p className="text-[#667781] dark:text-[#8696A0] truncate">
+                    {receipt.deliveredPeerIds.length > 0
+                      ? receipt.deliveredPeerIds.map(resolvePeerName).join('، ')
+                      : 'لم تصل إلى جهاز الطرف الآخر بعد'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2">
+                <CheckCheck
+                  className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${
+                    receipt.readPeerIds.length > 0
+                      ? 'text-[#0284C7] dark:text-[#53BDEB]'
+                      : 'text-[#8696A0]/45'
+                  }`}
+                  aria-hidden="true"
+                />
+                <div className="min-w-0 flex-1">
+                  <p
+                    className={`font-semibold ${
+                      receipt.readPeerIds.length > 0
+                        ? 'text-[#0284C7] dark:text-[#53BDEB]'
+                        : 'text-[#8696A0] dark:text-[#667781]'
+                    }`}
+                  >
+                    مقروءة ({receipt.readPeerIds.length})
+                  </p>
+                  <p className="text-[#667781] dark:text-[#8696A0] truncate">
+                    {receipt.readPeerIds.length > 0
+                      ? receipt.readPeerIds.map(resolvePeerName).join('، ')
+                      : 'في انتظار القراءة'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Delete Chat Confirmation Modal */}
+      {showDeleteChatConfirm && onDeleteChat && (
+        <div
+          data-chat-floating="true"
+          role="dialog"
+          aria-modal="true"
+          aria-label="تأكيد حذف المحادثة"
+          className="fixed inset-0 z-50 bg-black/55 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div className="w-full max-w-sm bg-white dark:bg-[#202C33] rounded-2xl p-6 shadow-2xl border border-[#E9EDEF] dark:border-[#374248] space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-full bg-rose-100 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" aria-hidden="true" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-display text-base font-bold text-[#111B21] dark:text-[#E9EDEF]">
+                  حذف المحادثة نهائياً
+                </h3>
+                <p className="text-xs text-[#54656F] dark:text-[#8696A0] truncate">
+                  {chat.title}
+                </p>
+              </div>
+            </div>
+            <p className="text-xs text-[#54656F] dark:text-[#AEBAC1] leading-relaxed">
+              هل أنت متأكد من حذف هذه المحادثة؟ سيتم إزالتها من قائمة محادثاتك مع إمكانية بدء محادثة جديدة مع نفس جهة الاتصال لاحقاً.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                disabled={isDeletingChat}
+                onClick={() => setShowDeleteChatConfirm(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingChat}
+                onClick={() => {
+                  setIsDeletingChat(true);
+                  Promise.resolve(onDeleteChat(chat.id))
+                    .catch(() => {})
+                    .finally(() => {
+                      setIsDeletingChat(false);
+                      setShowDeleteChatConfirm(false);
+                    });
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 disabled:opacity-60 flex items-center gap-1.5 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>{isDeletingChat ? 'جاري الحذف...' : 'حذف المحادثة'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );

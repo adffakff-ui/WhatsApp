@@ -32,6 +32,7 @@ import { NetworkLatencyBadge } from './NetworkLatencyBadge';
 import { PWAInstallButton, PWAInstallGuideModal } from './PWAInstallButton';
 import {
   formatWhatsAppTime,
+  groupStoriesByUser,
   searchAllChatsMessages,
   type MessageSearchFilter
 } from '../lib/chatLogic';
@@ -136,6 +137,7 @@ export function ChatListPane({
   onDeleteMultipleChats
 }: ChatListPaneProps) {
   const [menuChatId, setMenuChatId] = useState<string | null>(null);
+  const [menuOpensUp, setMenuOpensUp] = useState(false);
   const [showHeaderMenu, setShowHeaderMenu] = useState(false);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [fabOpen, setFabOpen] = useState(false);
@@ -264,13 +266,13 @@ export function ChatListPane({
     { id: 'locked', label: 'المقفلة', count: lockedCount }
   ];
 
-  // Deduplicate contact stories for the top quick stories tray
-  const uniqueStoryAuthors = statuses.reduce<StatusItem[]>((acc, st) => {
-    if (!acc.some((existing) => existing.authorId === st.authorId)) {
-      acc.push(st);
-    }
-    return acc;
-  }, []);
+  // Group active 24h stories per author for the top quick stories tray
+  const storyUserGroups = useMemo(
+    () => groupStoriesByUser(statuses, myUid),
+    [statuses, myUid]
+  );
+  const myStoryGroup = storyUserGroups.find((g) => g.authorId === myUid);
+  const contactStoryGroups = storyUserGroups.filter((g) => g.authorId !== myUid);
 
   return (
     <section
@@ -599,51 +601,72 @@ export function ChatListPane({
         )}
       </div>
 
-      {/* Omar Stories Tray (Instagram/WhatsApp Omar Style) */}
+      {/* Stories Tray (Grouped by User, 24h Ephemeral Stories) */}
       {!showArchived && showStoriesTray && (
         <div className="px-3 pb-2.5 shrink-0">
           <div className="flex items-center gap-3 overflow-x-auto no-scrollbar py-1">
-            <button
-              type="button"
-              onClick={() => onOpenStatusTab()}
-              className="flex flex-col items-center gap-1 shrink-0 w-14 cursor-pointer group"
-            >
+            <div className="flex flex-col items-center gap-1 shrink-0 w-14 relative">
               <div className="relative">
-                <div className="p-0.5 rounded-full border-2 border-dashed border-[var(--wa-accent)]">
-                  <Avatar src={currentUser.avatarUrl} name={currentUser.displayName} size="md" />
-                </div>
-                <span className="absolute -bottom-0.5 -left-0.5 w-4.5 h-4.5 rounded-full bg-[var(--wa-accent)] text-white flex items-center justify-center ring-2 ring-white dark:ring-[#111B21]">
-                  <Plus className="w-3 h-3" aria-hidden="true" />
-                </span>
-              </div>
-              <span className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate w-full text-center">
-                حالتي
-              </span>
-            </button>
-
-            {uniqueStoryAuthors
-              .filter((st) => st.authorId !== myUid)
-              .map((st) => (
                 <button
-                  key={st.id}
                   type="button"
-                  onClick={() => onOpenStatusTab(st.authorId)}
-                  className="flex flex-col items-center gap-1 shrink-0 w-14 cursor-pointer"
+                  aria-label={myStoryGroup ? 'عرض قصتي النشطة' : 'إضافة قصة جديدة'}
+                  onClick={() => onOpenStatusTab(myStoryGroup ? myUid : undefined)}
+                  className="cursor-pointer block rounded-full focus-visible:outline-2 focus-visible:outline-[var(--wa-accent)]"
                 >
                   <div
                     className={`p-0.5 rounded-full border-2 ${
-                      st.viewedByMe
-                        ? 'border-[#8696A0]/50'
-                        : 'border-[var(--wa-accent)]'
+                      myStoryGroup
+                        ? 'border-[var(--wa-accent)]'
+                        : 'border-dashed border-[var(--wa-accent)]'
                     }`}
                   >
-                    <Avatar src={st.authorAvatar} name={st.authorName} size="md" />
+                    <Avatar src={currentUser.avatarUrl} name={currentUser.displayName} size="md" />
                   </div>
-                  <span className="text-[11px] font-medium text-[#111B21] dark:text-[#E9EDEF] truncate w-full text-center">
-                    {st.authorName.split(' ')[0]}
-                  </span>
                 </button>
-              ))}
+                <button
+                  type="button"
+                  aria-label="نشر قصة جديدة"
+                  title="نشر قصة جديدة"
+                  onClick={() => onOpenStatusTab()}
+                  className="absolute -bottom-0.5 -left-0.5 w-4.5 h-4.5 rounded-full bg-[var(--wa-accent)] text-white flex items-center justify-center ring-2 ring-white dark:ring-[#111B21] cursor-pointer hover:brightness-95"
+                >
+                  <Plus className="w-3 h-3" aria-hidden="true" />
+                </button>
+              </div>
+              <span className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate w-full text-center">
+                {myStoryGroup ? `قصتي (${myStoryGroup.stories.length})` : 'قصتي'}
+              </span>
+            </div>
+
+            {contactStoryGroups.map((group) => (
+              <button
+                key={group.authorId}
+                type="button"
+                aria-label={`عرض قصص ${group.authorName} (${group.stories.length})`}
+                onClick={() => onOpenStatusTab(group.authorId)}
+                className="flex flex-col items-center gap-1 shrink-0 w-14 cursor-pointer"
+              >
+                <div className="relative">
+                  <div
+                    className={`p-0.5 rounded-full border-2 ${
+                      group.unviewedCount > 0
+                        ? 'border-[var(--wa-accent)]'
+                        : 'border-[#8696A0]/50'
+                    }`}
+                  >
+                    <Avatar src={group.authorAvatar} name={group.authorName} size="md" />
+                  </div>
+                  {group.stories.length > 1 && (
+                    <span className="absolute -bottom-0.5 -left-0.5 min-w-[16px] h-4 px-1 rounded-full bg-[#202C33] dark:bg-[#2A3942] text-white text-[9px] font-bold font-mono-code flex items-center justify-center ring-2 ring-white dark:ring-[#111B21]">
+                      {group.stories.length}
+                    </span>
+                  )}
+                </div>
+                <span className="text-[11px] font-medium text-[#111B21] dark:text-[#E9EDEF] truncate w-full text-center">
+                  {group.authorName.split(' ')[0]}
+                </span>
+              </button>
+            ))}
           </div>
         </div>
       )}
@@ -930,6 +953,12 @@ export function ChatListPane({
                       aria-label={`خيارات المحادثة ${chat.title}`}
                       onClick={(e) => {
                         e.stopPropagation();
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const openUp =
+                          typeof window !== 'undefined' &&
+                          window.innerHeight - rect.bottom < 270 &&
+                          rect.top > 240;
+                        setMenuOpensUp(openUp);
                         setMenuChatId((curr) => (curr === chat.id ? null : chat.id));
                         setShowHeaderMenu(false);
                         setFabOpen(false);
@@ -942,7 +971,9 @@ export function ChatListPane({
                     {menuChatId === chat.id && (
                       <div
                         role="menu"
-                        className="absolute left-3 top-14 z-30 w-48 rounded-xl bg-white dark:bg-[#233138] shadow-lg border border-[#E9EDEF] dark:border-[#374248] py-1.5 text-sm"
+                        className={`absolute left-3 z-40 w-48 max-w-[calc(100vw-2rem)] rounded-xl bg-white dark:bg-[#233138] shadow-xl border border-[#E9EDEF] dark:border-[#374248] py-1.5 text-sm ${
+                          menuOpensUp ? 'bottom-14' : 'top-14'
+                        }`}
                       >
                       <button
                         type="button"

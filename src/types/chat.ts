@@ -84,6 +84,13 @@ export interface MessagePayload {
   pollOptions?: PollOption[];
   replyToText?: string;
   replyToSender?: string;
+  stickerId?: string;
+  stickerLabel?: string;
+  stickerCategory?: string;
+  stickerKind?: 'static' | 'lottie';
+  lottieId?: string;
+  lottieData?: Record<string, unknown>;
+  decryptionFailed?: boolean;
   forwarded?: boolean;
   edited?: boolean;
 }

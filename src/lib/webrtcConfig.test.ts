@@ -42,6 +42,9 @@ test('buildMediaConstraints configures studio 48kHz stereo audio and target vide
   assert.deepEqual(videoTrack.width, { ideal: 1280, max: 1280 });
   assert.deepEqual(videoTrack.height, { ideal: 720, max: 720 });
   assert.equal(videoTrack.facingMode, 'environment');
+
+  const specificMic = buildMediaConstraints('audio', 'ultra', 'user', 'mic_usb_1');
+  assert.deepEqual((specificMic.audio as MediaTrackConstraints).deviceId, { exact: 'mic_usb_1' });
 });
 
 test('enhanceSdpMediaQuality boosts Opus bitrate/stereo/FEC and video b=AS bandwidth', () => {
@@ -60,6 +63,6 @@ test('enhanceSdpMediaQuality boosts Opus bitrate/stereo/FEC and video b=AS bandw
   ].join('\r\n');
 
   const enhanced = enhanceSdpMediaQuality(sampleSdp, 'ultra');
-  assert.ok(enhanced.includes('a=fmtp:111 minptime=10;maxaveragebitrate=128000;stereo=1;sprop-stereo=1;useinbandfec=1;usedtx=0'));
+  assert.ok(enhanced.includes('a=fmtp:111 minptime=10;maxaveragebitrate=128000;stereo=1;sprop-stereo=1;useinbandfec=1;usedtx=0;maxplaybackrate=48000'));
   assert.ok(enhanced.includes('c=IN IP4 0.0.0.0\r\nb=AS:2500'));
 });

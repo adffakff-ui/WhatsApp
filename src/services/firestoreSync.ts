@@ -23,6 +23,9 @@ import {
   deriveCandidateRoomKeysForDecryption,
   deriveRoomKeyFromSeed,
   encryptPayload,
+  getArchivedIdentityKeys,
+  mergeArchivedIdentityKeys,
+  readStoredIdentityKeysForUid,
   type IdentityKeys,
   type RoomKeyHint
 } from '../lib/crypto';
@@ -72,6 +75,43 @@ function sanitizePublicKeyJwk(value?: string | null): string {
   return '';
 }
 
+function sanitizePublicKeyList(raw: unknown, excludeKey?: string): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    const valid = sanitizePublicKeyJwk(typeof item === 'string' ? item : '');
+    if (valid && valid !== excludeKey && !out.includes(valid)) {
+      out.push(valid);
+      if (out.length >= 6) break;
+    }
+  }
+  return out;
+}
+
+function parseArchivedKeysJson(raw: unknown): IdentityKeys[] {
+  if (typeof raw !== 'string' || raw.length < 2) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (item): item is IdentityKeys =>
+        Boolean(item) &&
+        typeof item === 'object' &&
+        typeof (item as IdentityKeys).publicKeyJwk === 'string' &&
+        typeof (item as IdentityKeys).privateKeyJwk === 'string' &&
+        (item as IdentityKeys).publicKeyJwk.length >= 10 &&
+        (item as IdentityKeys).privateKeyJwk.length >= 20
+    );
+  } catch {
+    return [];
+  }
+}
+
+function formatMessagePreviewText(payload: MessagePayload): string {
+  if (payload.stickerLabel) return `ملصق: ${payload.stickerLabel}`;
+  return payload.text || 'رسالة مشفرة';
+}
+
 export interface HydratedUserAccount {
   wasilId: string;
   displayName: string;
@@ -80,6 +120,7 @@ export interface HydratedUserAccount {
   privacy: PrivacySettings;
   theme: ThemeMode;
   identityKeys?: IdentityKeys;
+  previousIdentityKeys?: IdentityKeys[];
 }
 
 export async function checkWasilIdAvailability(
@@ -268,6 +309,44 @@ export async function syncUserProfileToFirestore(
       ? cloudSafetyCode
       : safetyCode.slice(0, 120);
 
+    const cloudPreviousIdentityKeys = parseArchivedKeysJson(existingPriv?.previousIdentityKeysJson);
+    const localCandidateIdentity: IdentityKeys | null =
+      safeLocalPublicKey && privateKeyJwk && privateKeyJwk.length >= 20
+        ? {
+            publicKeyJwk: safeLocalPublicKey,
+            privateKeyJwk: privateKeyJwk.slice(0, 1024),
+            safetyCode: safetyCode.slice(0, 120)
+          }
+        : null;
+
+    const mergedPreviousIdentities = mergeArchivedIdentityKeys(
+      [
+        ...cloudPreviousIdentityKeys,
+        ...(hasCloudIdentityKeys && localCandidateIdentity && safeLocalPublicKey !== cloudPubKey
+          ? [localCandidateIdentity]
+          : []),
+        ...getArchivedIdentityKeys(user.uid)
+      ],
+      user.uid
+    ).filter((item) => item.publicKeyJwk !== safePublicKey);
+
+    let previousIdentityKeysJson =
+      mergedPreviousIdentities.length > 0 ? JSON.stringify(mergedPreviousIdentities) : '';
+    while (previousIdentityKeysJson.length > 8192 && mergedPreviousIdentities.length > 0) {
+      mergedPreviousIdentities.pop();
+      previousIdentityKeysJson =
+        mergedPreviousIdentities.length > 0 ? JSON.stringify(mergedPreviousIdentities) : '';
+    }
+
+    const previousPublicKeys = sanitizePublicKeyList(
+      [
+        ...(Array.isArray(existingPub?.previousPublicKeys) ? existingPub.previousPublicKeys : []),
+        ...(typeof existingPub?.publicKeyJwk === 'string' ? [existingPub.publicKeyJwk] : []),
+        ...mergedPreviousIdentities.map((k) => k.publicKeyJwk)
+      ],
+      safePublicKey
+    );
+
     const existingWasilRaw =
       (existingPriv?.wasilId as string) || (existingPub?.wasilId as string) || '';
     const existingValid = existingWasilRaw ? validateWasilId(existingWasilRaw) : null;
@@ -316,6 +395,7 @@ export async function syncUserProfileToFirestore(
         about: resolvedAbout,
         avatarUrl,
         publicKeyJwk: safePublicKey,
+        ...(previousPublicKeys.length > 0 ? { previousPublicKeys } : {}),
         safetyCode: resolvedSafetyCode,
         isOnline: true,
         lastSeen: serverTimestamp(),
@@ -339,6 +419,7 @@ export async function syncUserProfileToFirestore(
         identityPublicKeyJwk: safePublicKey,
         ...(resolvedPrivateKey ? { identityPrivateKeyJwk: resolvedPrivateKey } : {}),
         identitySafetyCode: resolvedSafetyCode,
+        ...(previousIdentityKeysJson ? { previousIdentityKeysJson } : {}),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
@@ -355,6 +436,13 @@ export async function syncUserProfileToFirestore(
         privUpdates.identityPublicKeyJwk = safePublicKey;
         privUpdates.identityPrivateKeyJwk = resolvedPrivateKey;
         privUpdates.identitySafetyCode = resolvedSafetyCode;
+        needsPrivUpdate = true;
+      }
+      if (
+        previousIdentityKeysJson &&
+        existingPriv?.previousIdentityKeysJson !== previousIdentityKeysJson
+      ) {
+        privUpdates.previousIdentityKeysJson = previousIdentityKeysJson;
         needsPrivUpdate = true;
       }
       if (needsPrivUpdate) {
@@ -391,7 +479,10 @@ export async function syncUserProfileToFirestore(
       avatarUrl,
       privacy: hydratedPrivacy,
       theme: privData.theme === 'dark' ? 'dark' : 'light',
-      ...(hydratedKeys ? { identityKeys: hydratedKeys } : {})
+      ...(hydratedKeys ? { identityKeys: hydratedKeys } : {}),
+      ...(mergedPreviousIdentities.length > 0
+        ? { previousIdentityKeys: mergedPreviousIdentities }
+        : {})
     };
   } catch (error) {
     const errStr = error instanceof Error ? error.message : String(error);
@@ -648,6 +739,10 @@ export function subscribeOwnPrivateInfoFromFirestore(
         typeof d.identitySafetyCode === 'string' && d.identitySafetyCode.length >= 10
           ? d.identitySafetyCode
           : '';
+      const cloudArchived = parseArchivedKeysJson(d.previousIdentityKeysJson);
+      if (cloudArchived.length > 0) {
+        mergeArchivedIdentityKeys(cloudArchived, uid);
+      }
       onUpdate({
         ...(typeof d.wasilId === 'string' ? { wasilId: d.wasilId } : {}),
         theme: d.theme === 'dark' ? 'dark' : 'light',
@@ -699,6 +794,11 @@ export async function updateProfileInFirestore(
       updatedAt: serverTimestamp()
     };
 
+    const existingPubSnap = await getDoc(pubRef).catch(() => null);
+    const existingPrevKeys = existingPubSnap?.exists()
+      ? sanitizePublicKeyList(existingPubSnap.data().previousPublicKeys, safePublicKey)
+      : [];
+
     // Atomic batch commit keeps users/{uid}/public/profile and wasil_registry consistent
     const batch = writeBatch(db);
     batch.set(doc(db, 'wasil_registry', normalizedWasil), regPayload);
@@ -710,6 +810,7 @@ export async function updateProfileInFirestore(
       about: updates.about.slice(0, 200),
       avatarUrl: updates.avatarUrl.slice(0, 65536),
       publicKeyJwk: safePublicKey,
+      ...(existingPrevKeys.length > 0 ? { previousPublicKeys: existingPrevKeys } : {}),
       safetyCode: currentProfile.safetyCode.slice(0, 120),
       isOnline: true,
       lastSeen: serverTimestamp(),
@@ -820,6 +921,7 @@ export async function createChatInFirestore(
     type === 'direct'
       ? invitedContacts.find((c) => c.uid && c.uid !== creator.uid)
       : undefined;
+  const recipientPublicKey = sanitizePublicKeyJwk(directPeer?.publicKeyJwk);
   const key = await deriveRoomKeyFromSeed(
     chatId,
     directPeer
@@ -860,6 +962,8 @@ export async function createChatInFirestore(
       lastMessageCiphertext: envelope.ciphertext.slice(0, 2048),
       lastMessageIv: envelope.iv,
       lastMessageSenderId: creator.uid,
+      lastMessageSenderPublicKeyJwk: creatorPublicKey,
+      ...(recipientPublicKey ? { lastMessageRecipientPublicKeyJwk: recipientPublicKey } : {}),
       lastMessageType: 'text',
       lastMessageDeliveredToIds: [creator.uid],
       lastMessageReadByIds: [creator.uid],
@@ -924,6 +1028,8 @@ export async function createChatInFirestore(
       lastMessageCiphertext: envelope.ciphertext.slice(0, 2048),
       lastMessageIv: envelope.iv,
       lastMessageSenderId: creator.uid,
+      lastMessageSenderPublicKeyJwk: creatorPublicKey,
+      ...(recipientPublicKey ? { lastMessageRecipientPublicKeyJwk: recipientPublicKey } : {}),
       lastMessageType: 'text',
       lastMessageDeliveredToIds: [creator.uid],
       lastMessageReadByIds: [creator.uid],
@@ -1001,6 +1107,8 @@ export async function createChatInFirestore(
     ciphertext: envelope.ciphertext,
     iv: envelope.iv,
     algorithm: 'AES-GCM-256',
+    senderPublicKeyJwk: creatorPublicKey,
+    ...(recipientPublicKey ? { recipientPublicKeyJwk: recipientPublicKey } : {}),
     viewerIds: resolvedViewerIds,
     deliveredToIds: [creator.uid],
     readByIds: [creator.uid],
@@ -1130,6 +1238,9 @@ export async function sendEncryptedMessageToFirestore(
   const msgId = customMsgId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const key = await deriveRoomKeyFromSeed(roomSeed, roomKeyHint);
   const envelope = await encryptPayload(JSON.stringify(payload), key);
+  const storedOwnKeys = readStoredIdentityKeysForUid(sender.uid);
+  const senderPublicKey = sanitizePublicKeyJwk(storedOwnKeys?.publicKeyJwk || sender.publicKeyJwk);
+  const recipientPublicKey = sanitizePublicKeyJwk(roomKeyHint?.peerPublicKeyJwk);
 
   const batch = writeBatch(db);
   const msgRef = doc(db, 'chats', chatId, 'messages', msgId);
@@ -1146,6 +1257,8 @@ export async function sendEncryptedMessageToFirestore(
     ciphertext: envelope.ciphertext,
     iv: envelope.iv,
     algorithm: 'AES-GCM-256',
+    ...(senderPublicKey ? { senderPublicKeyJwk: senderPublicKey } : {}),
+    ...(recipientPublicKey ? { recipientPublicKeyJwk: recipientPublicKey } : {}),
     viewerIds: boundedViewers,
     ...(replyToId ? { replyToId } : {}),
     deliveredToIds: [sender.uid],
@@ -1162,6 +1275,8 @@ export async function sendEncryptedMessageToFirestore(
     lastMessageCiphertext: envelope.ciphertext.slice(0, 2048),
     lastMessageIv: envelope.iv,
     lastMessageSenderId: sender.uid,
+    ...(senderPublicKey ? { lastMessageSenderPublicKeyJwk: senderPublicKey } : {}),
+    ...(recipientPublicKey ? { lastMessageRecipientPublicKeyJwk: recipientPublicKey } : {}),
     lastMessageType: type,
     lastMessageDeliveredToIds: [sender.uid],
     lastMessageReadByIds: [sender.uid],
@@ -1247,17 +1362,24 @@ export async function editEncryptedMessageInFirestore(
     JSON.stringify({ ...newPayload, edited: true }),
     key
   );
+  const ownKeys = readStoredIdentityKeysForUid();
+  const senderPublicKey = sanitizePublicKeyJwk(ownKeys?.publicKeyJwk);
+  const recipientPublicKey = sanitizePublicKeyJwk(roomKeyHint?.peerPublicKeyJwk);
   try {
     if (updateChatLastMessage) {
       const batch = writeBatch(db);
       batch.update(doc(db, 'chats', chatId, 'messages', messageId), {
         ciphertext: envelope.ciphertext,
         iv: envelope.iv,
+        ...(senderPublicKey ? { senderPublicKeyJwk: senderPublicKey } : {}),
+        ...(recipientPublicKey ? { recipientPublicKeyJwk: recipientPublicKey } : {}),
         updatedAt: serverTimestamp()
       });
       batch.update(doc(db, 'chats', chatId), {
         lastMessageCiphertext: envelope.ciphertext.slice(0, 2048),
         lastMessageIv: envelope.iv,
+        ...(senderPublicKey ? { lastMessageSenderPublicKeyJwk: senderPublicKey } : {}),
+        ...(recipientPublicKey ? { lastMessageRecipientPublicKeyJwk: recipientPublicKey } : {}),
         updatedAt: serverTimestamp()
       });
       await batch.commit();
@@ -1265,6 +1387,8 @@ export async function editEncryptedMessageInFirestore(
       await updateDoc(doc(db, 'chats', chatId, 'messages', messageId), {
         ciphertext: envelope.ciphertext,
         iv: envelope.iv,
+        ...(senderPublicKey ? { senderPublicKeyJwk: senderPublicKey } : {}),
+        ...(recipientPublicKey ? { recipientPublicKeyJwk: recipientPublicKey } : {}),
         updatedAt: serverTimestamp()
       });
     }
@@ -1550,14 +1674,20 @@ export function subscribeUserChatsFromFirestore(
         (slot.peerProfileData?.publicKeyJwk as string) ||
         (slot.peerMemberData?.publicKeyJwk as string) ||
         undefined;
-      const sig = `${c.lastMessageCiphertext || ''}|${c.lastMessageIv || ''}|${peerKeyHint || ''}`;
+      const peerPrevKeys = sanitizePublicKeyList(slot.peerProfileData?.previousPublicKeys);
+      const lastSenderPub = sanitizePublicKeyJwk(c.lastMessageSenderPublicKeyJwk as string | undefined);
+      const lastRecipientPub = sanitizePublicKeyJwk(c.lastMessageRecipientPublicKeyJwk as string | undefined);
+      const sig = `${c.lastMessageCiphertext || ''}|${c.lastMessageIv || ''}|${peerKeyHint || ''}|${lastSenderPub}|${lastRecipientPub}|${peerPrevKeys.join(',')}`;
       if (!force && sig === slot.lastCipherSignature) return;
       slot.lastCipherSignature = sig;
       if (c.lastMessageCiphertext && c.lastMessageIv) {
         try {
           const candidateKeys = await deriveCandidateRoomKeysForDecryption(chatId, {
             peerUid: slot.peerUid,
-            peerPublicKeyJwk: peerKeyHint
+            peerPublicKeyJwk: peerKeyHint,
+            senderPublicKeyJwk: lastSenderPub || undefined,
+            recipientPublicKeyJwk: lastRecipientPub || undefined,
+            additionalPeerKeys: peerPrevKeys
           });
           const raw = await decryptPayloadWithAnyKey(
             c.lastMessageCiphertext as string,
@@ -1565,7 +1695,7 @@ export function subscribeUserChatsFromFirestore(
             candidateKeys
           );
           const parsed = JSON.parse(raw) as MessagePayload;
-          slot.previewText = parsed.text || 'رسالة مشفرة';
+          slot.previewText = formatMessagePreviewText(parsed);
         } catch {
           slot.previewText = 'رسالة مشفرة 🔒';
         }
@@ -1708,6 +1838,7 @@ export function subscribeChatMessagesFromFirestore(
     q,
     async (snapshot) => {
       const candidateKeys = await deriveCandidateRoomKeysForDecryption(roomSeed, roomKeyHint);
+      const perMessageKeysCache = new Map<string, CryptoKey[]>();
       const list: DecryptedMessage[] = [];
       for (const docSnap of snapshot.docs) {
         const d = docSnap.data({ serverTimestamps: 'estimate' });
@@ -1716,7 +1847,31 @@ export function subscribeChatMessagesFromFirestore(
           const decoded = await decryptPayloadWithAnyKey(d.ciphertext, d.iv, candidateKeys);
           payload = JSON.parse(decoded) as MessagePayload;
         } catch {
-          payload = { text: '🔒 رسالة مشفرة بمفتاح مختلف' };
+          const msgSenderPub = sanitizePublicKeyJwk(d.senderPublicKeyJwk as string | undefined);
+          const msgRecipPub = sanitizePublicKeyJwk(d.recipientPublicKeyJwk as string | undefined);
+          let decryptedWithProvenance = false;
+          if (msgSenderPub || msgRecipPub) {
+            const cacheKey = `${msgSenderPub}|${msgRecipPub}`;
+            let extraKeys = perMessageKeysCache.get(cacheKey);
+            if (!extraKeys) {
+              extraKeys = await deriveCandidateRoomKeysForDecryption(roomSeed, {
+                ...roomKeyHint,
+                ...(msgSenderPub ? { senderPublicKeyJwk: msgSenderPub } : {}),
+                ...(msgRecipPub ? { recipientPublicKeyJwk: msgRecipPub } : {})
+              });
+              perMessageKeysCache.set(cacheKey, extraKeys);
+            }
+            try {
+              const decoded = await decryptPayloadWithAnyKey(d.ciphertext, d.iv, extraKeys);
+              payload = JSON.parse(decoded) as MessagePayload;
+              decryptedWithProvenance = true;
+            } catch {
+              decryptedWithProvenance = false;
+            }
+          }
+          if (!decryptedWithProvenance) {
+            payload = { text: '🔒 رسالة مشفرة بمفتاح مختلف', decryptionFailed: true };
+          }
         }
 
         const rawPollVotes =

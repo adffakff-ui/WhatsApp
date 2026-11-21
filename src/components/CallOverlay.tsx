@@ -1,22 +1,38 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Activity,
+  AudioLines,
+  Headphones,
   Lock,
   Mic,
   MicOff,
   MonitorUp,
+  Music,
   Phone,
   PhoneOff,
   RefreshCw,
   SlidersHorizontal,
+  Sparkles,
+  Square,
   SunMedium,
   Video,
   VideoOff,
   Volume2,
-  VolumeX
+  VolumeX,
+  X
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { formatCallDuration, isRemoteFirebaseUid } from '../lib/chatLogic';
+import {
+  computeNormalizedBandLevels,
+  createMixedAudioRelay,
+  createRemoteAudioEnhancer,
+  isSpeechActiveFromLevels,
+  LISTENING_BOOST_PRESETS,
+  type ListeningBoostLevel,
+  type MixedAudioRelaySession,
+  type RemoteAudioEnhancerHandle
+} from '../lib/callAudioEngine';
 import {
   calculateAutoExposureFromLuminance,
   computeMeanLuminance,
@@ -33,6 +49,7 @@ import {
   CALL_QUALITY_PRESETS,
   enhanceSdpMediaQuality,
   extractTelemetryFromRtcStats,
+  prioritizeOpusAudioCodec,
   type CallTelemetryStats
 } from '../lib/webrtcConfig';
 import {
@@ -95,10 +112,24 @@ export function CallOverlay({
     DEFAULT_AUTO_EXPOSURE
   );
   const [showStatsHud, setShowStatsHud] = useState(false);
+  const [showAudioStudioPanel, setShowAudioStudioPanel] = useState(false);
+  const [isVoiceClarityOn, setIsVoiceClarityOn] = useState(true);
+  const [listeningBoost, setListeningBoost] = useState<ListeningBoostLevel>('clear');
+  const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
+  const [audioOutputs, setAudioOutputs] = useState<MediaDeviceInfo[]>([]);
+  const [selectedMicId, setSelectedMicId] = useState<string>('');
+  const [selectedSpeakerId, setSelectedSpeakerId] = useState<string>('');
+  const [sharedAudioClipName, setSharedAudioClipName] = useState<string | null>(null);
+  const [audioTransferError, setAudioTransferError] = useState<string | null>(null);
+  const [peerAudioState, setPeerAudioState] = useState<{
+    isMuted: boolean;
+    sharingAudioClip: string | null;
+  }>({ isMuted: false, sharingAudioClip: null });
   const [iceStatusLabel, setIceStatusLabel] = useState(
     isP2PRemoteCall ? 'جاري تهيئة قناة P2P...' : 'اتصال محلي مشفر'
   );
-  const [voiceLevels, setVoiceLevels] = useState<number[]>([22, 34, 48, 30, 20]);
+  const [voiceLevels, setVoiceLevels] = useState<number[]>([20, 32, 44, 28, 18]);
+  const [remoteVoiceLevels, setRemoteVoiceLevels] = useState<number[]>([16, 18, 22, 18, 16]);
   const [telemetry, setTelemetry] = useState<CallTelemetryStats>({
     rttMs: null,
     packetLossPct: null,
@@ -112,7 +143,14 @@ export function CallOverlay({
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const sharedAudioElRef = useRef<HTMLAudioElement>(null);
+  const sharedAudioInputRef = useRef<HTMLInputElement>(null);
+  const sharedAudioObjectUrlRef = useRef<string | null>(null);
+  const mixedAudioRelayRef = useRef<MixedAudioRelaySession | null>(null);
+  const remoteEnhancerRef = useRef<RemoteAudioEnhancerHandle | null>(null);
+  const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const rawMicTrackRef = useRef<MediaStreamTrack | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
@@ -163,16 +201,91 @@ export function CallOverlay({
   const peerAvatar =
     activeCall.direction === 'outgoing' ? activeCall.calleeAvatar : activeCall.callerAvatar;
 
+  const syncPeerMetaChannel = (
+    overrides?: Partial<{ isMuted: boolean; sharingAudioClip: string | null }>
+  ) => {
+    const ch = dataChannelRef.current;
+    if (!ch || ch.readyState !== 'open') return;
+    try {
+      ch.send(
+        JSON.stringify({
+          type: 'audio-state',
+          isMuted: overrides?.isMuted ?? isMuted,
+          sharingAudioClip:
+            overrides && 'sharingAudioClip' in overrides
+              ? overrides.sharingAudioClip
+              : sharedAudioClipName
+        })
+      );
+    } catch {
+      // Ignore transient datachannel send failures
+    }
+  };
+
+  const refreshAudioDevices = async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      setAudioInputs(devices.filter((d) => d.kind === 'audioinput'));
+      setAudioOutputs(devices.filter((d) => d.kind === 'audiooutput'));
+    } catch {
+      // Ignore permission-restricted enumeration
+    }
+  };
+
+  useEffect(() => {
+    const enhancer = createRemoteAudioEnhancer({
+      clarityEnabled: isVoiceClarityOn,
+      boostLevel: listeningBoost
+    });
+    remoteEnhancerRef.current = enhancer;
+    void refreshAudioDevices();
+
+    const handleDeviceChange = () => {
+      void refreshAudioDevices();
+    };
+    navigator.mediaDevices?.addEventListener?.('devicechange', handleDeviceChange);
+
+    return () => {
+      navigator.mediaDevices?.removeEventListener?.('devicechange', handleDeviceChange);
+      enhancer?.dispose();
+      remoteEnhancerRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    remoteEnhancerRef.current?.setOptions({
+      clarityEnabled: isVoiceClarityOn,
+      boostLevel: listeningBoost
+    });
+  }, [isVoiceClarityOn, listeningBoost]);
+
   const tryPlayRemoteAudio = () => {
     const audioEl = remoteAudioRef.current;
     const remoteStream = remoteStreamRef.current;
     if (!audioEl || !remoteStream) return;
-    if (audioEl.srcObject !== remoteStream) {
-      audioEl.srcObject = remoteStream;
+
+    const liveAudioTracks = remoteStream.getAudioTracks().filter((t) => t.readyState === 'live');
+    const enhancer = remoteEnhancerRef.current;
+    if (enhancer && liveAudioTracks.length > 0) {
+      enhancer.updateStream(remoteStream);
+      void enhancer.resume();
+    }
+
+    const processedStream =
+      enhancer && liveAudioTracks.length > 0 ? enhancer.getProcessedStream() : null;
+    const targetAudioStream =
+      processedStream && processedStream.getAudioTracks().length > 0
+        ? processedStream
+        : remoteStream;
+
+    if (audioEl.srcObject !== targetAudioStream) {
+      audioEl.srcObject = targetAudioStream;
     }
     audioEl.volume = 1;
     audioEl.muted = !isSpeakerOnRef.current;
-    if (remoteStream.getAudioTracks().length > 0) {
+    if (liveAudioTracks.length > 0 || remoteStream.getAudioTracks().length > 0) {
       void audioEl
         .play()
         .then(() => {
@@ -278,48 +391,62 @@ export function CallOverlay({
     };
   }, [callState, activeCall.direction]);
 
-  // Real Microphone Audio Energy Visualizer via Web Audio API
+  // Real-Time Local & Remote Audio Energy Visualizers via Web Audio API
   useEffect(() => {
     const stream = localStreamRef.current;
-    if (!stream || stream.getAudioTracks().length === 0 || isMuted) {
-      setVoiceLevels([18, 22, 26, 22, 18]);
-      return;
+    const hasLocalAudio = Boolean(stream && stream.getAudioTracks().length > 0 && !isMuted);
+    if (!hasLocalAudio) {
+      setVoiceLevels([16, 18, 22, 18, 16]);
     }
 
     let rafId = 0;
     let audioCtx: AudioContext | null = null;
+    let analyser: AnalyserNode | null = null;
+    let data: Uint8Array<ArrayBuffer> | null = null;
 
-    try {
-      const AudioCtx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (!AudioCtx) return;
-      audioCtx = new AudioCtx();
-      const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 32;
-      source.connect(analyser);
-      const data = new Uint8Array(analyser.frequencyBinCount);
+    if (hasLocalAudio && stream) {
+      try {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        if (AudioCtx) {
+          audioCtx = new AudioCtx();
+          const source = audioCtx.createMediaStreamSource(
+            new MediaStream(stream.getAudioTracks())
+          );
+          analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 64;
+          analyser.smoothingTimeConstant = 0.7;
+          source.connect(analyser);
+          data = new Uint8Array(analyser.frequencyBinCount) as Uint8Array<ArrayBuffer>;
+        }
+      } catch {
+        // Headless fallback
+      }
+    }
 
-      const tick = () => {
+    const tick = () => {
+      if (analyser && data) {
         analyser.getByteFrequencyData(data);
-        const bars = [1, 2, 3, 4, 5].map((i) => {
-          const val = data[i] || 0;
-          return Math.max(18, Math.min(100, Math.round((val / 255) * 100)));
-        });
-        setVoiceLevels(bars);
-        rafId = window.requestAnimationFrame(tick);
-      };
+        setVoiceLevels(computeNormalizedBandLevels(data, 5, 16));
+      }
+      if (remoteEnhancerRef.current && hasRemoteAudio) {
+        setRemoteVoiceLevels(remoteEnhancerRef.current.getBandLevels());
+      } else {
+        setRemoteVoiceLevels([16, 18, 20, 18, 16]);
+      }
       rafId = window.requestAnimationFrame(tick);
-    } catch {
-      // Headless fallback
+    };
+
+    if (hasLocalAudio || hasRemoteAudio) {
+      rafId = window.requestAnimationFrame(tick);
     }
 
     return () => {
       if (rafId) window.cancelAnimationFrame(rafId);
       void audioCtx?.close().catch(() => {});
     };
-  }, [hasLocalVideo, isMuted, callState, streamTick]);
+  }, [hasLocalVideo, hasRemoteAudio, isMuted, callState, streamTick]);
 
   // Unified WebRTC Setup & Firestore Signaling Lifecycle (Caller + Callee)
   useEffect(() => {
@@ -339,6 +466,16 @@ export function CallOverlay({
       if (statsTimer) window.clearInterval(statsTimer);
       if (ringTimeoutTimer) window.clearTimeout(ringTimeoutTimer);
       if (disconnectGraceTimer) window.clearTimeout(disconnectGraceTimer);
+      mixedAudioRelayRef.current?.stop();
+      mixedAudioRelayRef.current = null;
+      if (sharedAudioObjectUrlRef.current) {
+        URL.revokeObjectURL(sharedAudioObjectUrlRef.current);
+        sharedAudioObjectUrlRef.current = null;
+      }
+      dataChannelRef.current?.close();
+      dataChannelRef.current = null;
+      rawMicTrackRef.current?.stop();
+      rawMicTrackRef.current = null;
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
       remoteStreamRef.current?.getTracks().forEach((t) => t.stop());
       pcRef.current?.close();
@@ -403,6 +540,45 @@ export function CallOverlay({
 
       const pc = new RTCPeerConnection(buildRtcConfiguration());
       pcRef.current = pc;
+
+      const bindMetaDataChannel = (channel: RTCDataChannel) => {
+        dataChannelRef.current = channel;
+        channel.onopen = () => {
+          syncPeerMetaChannel();
+        };
+        channel.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(String(ev.data)) as {
+              type?: string;
+              isMuted?: boolean;
+              sharingAudioClip?: string | null;
+            };
+            if (msg.type === 'audio-state') {
+              setPeerAudioState({
+                isMuted: Boolean(msg.isMuted),
+                sharingAudioClip:
+                  typeof msg.sharingAudioClip === 'string' ? msg.sharingAudioClip : null
+              });
+            }
+          } catch {
+            // Ignore malformed control payload
+          }
+        };
+      };
+
+      if (role === 'caller') {
+        try {
+          bindMetaDataChannel(pc.createDataChannel('wasil-call-meta', { ordered: true }));
+        } catch {
+          // Ignore if datachannel unavailable
+        }
+      } else {
+        pc.ondatachannel = (event) => {
+          if (event.channel.label === 'wasil-call-meta') {
+            bindMetaDataChannel(event.channel);
+          }
+        };
+      }
 
       const remoteStream = new MediaStream();
       remoteStreamRef.current = remoteStream;
@@ -571,6 +747,8 @@ export function CallOverlay({
 
       if (acquired.stream) {
         localStreamRef.current = acquired.stream;
+        rawMicTrackRef.current = acquired.stream.getAudioTracks()[0] || null;
+        void refreshAudioDevices();
         const localHasVid = activeCall.callType === 'video' && acquired.hasVideo;
         hasLocalVideoRef.current = localHasVid;
         setHasLocalVideo(localHasVid);
@@ -612,6 +790,7 @@ export function CallOverlay({
               pc.addTrack(track, localStream);
             }
           }
+          prioritizeOpusAudioCodec(pc);
           await applySenderQualityPreset(pc, qualityPreset);
         }
 
@@ -639,6 +818,7 @@ export function CallOverlay({
               }
             }
           }
+          prioritizeOpusAudioCodec(pc);
         }
       };
 
@@ -872,7 +1052,8 @@ export function CallOverlay({
   }, [isAutoExposureEnabled, hasRemoteVideo, swapStreams, isVideoEnabled, streamTick]);
 
   const handleAcceptIncomingCall = async () => {
-    // Synchronously unlock audio & mark call accepted in parent state before async signaling
+    // Synchronously unlock audio & Web Audio DSP context before async signaling
+    void remoteEnhancerRef.current?.resume();
     if (remoteAudioRef.current) {
       remoteAudioRef.current.muted = !isSpeakerOn;
       void remoteAudioRef.current.play().catch(() => {});
@@ -895,9 +1076,131 @@ export function CallOverlay({
   const toggleMute = () => {
     const next = !isMuted;
     setIsMuted(next);
+    rawMicTrackRef.current && (rawMicTrackRef.current.enabled = !next);
     localStreamRef.current?.getAudioTracks().forEach((t) => {
       t.enabled = !next;
     });
+    syncPeerMetaChannel({ isMuted: next });
+  };
+
+  const handleSelectMicDevice = async (deviceId: string) => {
+    setSelectedMicId(deviceId);
+    setAudioTransferError(null);
+    if (!navigator.mediaDevices?.getUserMedia) return;
+    try {
+      const nextStream = await navigator.mediaDevices.getUserMedia(
+        buildMediaConstraints('audio', qualityPreset, facingMode, deviceId)
+      );
+      const newTrack = nextStream.getAudioTracks()[0];
+      if (!newTrack) return;
+      newTrack.enabled = !isMuted;
+
+      const oldTrack = rawMicTrackRef.current || localStreamRef.current?.getAudioTracks()[0];
+      if (oldTrack && oldTrack !== newTrack) {
+        oldTrack.stop();
+        localStreamRef.current?.removeTrack(oldTrack);
+      }
+      rawMicTrackRef.current = newTrack;
+      if (!localStreamRef.current) {
+        localStreamRef.current = new MediaStream();
+      }
+      localStreamRef.current.addTrack(newTrack);
+
+      const audioSender = pcRef.current
+        ?.getSenders()
+        .find((s) => s.track?.kind === 'audio');
+      if (audioSender && !mixedAudioRelayRef.current) {
+        await audioSender.replaceTrack(newTrack);
+        await applySenderQualityPreset(pcRef.current!, qualityPreset);
+      }
+      setStreamTick((t) => t + 1);
+    } catch {
+      setAudioTransferError('تعذر التبديل إلى الميكروفون المحدد.');
+    }
+  };
+
+  const handleSelectSpeakerDevice = async (deviceId: string) => {
+    setSelectedSpeakerId(deviceId);
+    setAudioTransferError(null);
+    const audioEl = remoteAudioRef.current as
+      | (HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> })
+      | null;
+    if (!audioEl || typeof audioEl.setSinkId !== 'function') {
+      setAudioTransferError('تبديل مخرج السماعة غير مدعوم في هذا المتصفح.');
+      return;
+    }
+    try {
+      await audioEl.setSinkId(deviceId);
+    } catch {
+      setAudioTransferError('تعذر توجيه الصوت إلى السماعة المحددة.');
+    }
+  };
+
+  const handleStopSharedAudioTransfer = async () => {
+    mixedAudioRelayRef.current?.stop();
+    mixedAudioRelayRef.current = null;
+    if (sharedAudioElRef.current) {
+      sharedAudioElRef.current.pause();
+      sharedAudioElRef.current.removeAttribute('src');
+    }
+    if (sharedAudioObjectUrlRef.current) {
+      URL.revokeObjectURL(sharedAudioObjectUrlRef.current);
+      sharedAudioObjectUrlRef.current = null;
+    }
+    setSharedAudioClipName(null);
+    syncPeerMetaChannel({ sharingAudioClip: null });
+
+    const micTrack = rawMicTrackRef.current || localStreamRef.current?.getAudioTracks()[0] || null;
+    const audioSender = pcRef.current?.getSenders().find((s) => s.track?.kind === 'audio');
+    if (audioSender && micTrack) {
+      await audioSender.replaceTrack(micTrack).catch(() => {});
+    }
+  };
+
+  const handlePickAudioFileToTransfer = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setAudioTransferError(null);
+    await handleStopSharedAudioTransfer();
+
+    const audioEl = sharedAudioElRef.current;
+    if (!audioEl) return;
+
+    try {
+      const objUrl = URL.createObjectURL(file);
+      sharedAudioObjectUrlRef.current = objUrl;
+      audioEl.src = objUrl;
+      audioEl.loop = false;
+
+      const micTrack = rawMicTrackRef.current || localStreamRef.current?.getAudioTracks()[0] || null;
+      const relay = createMixedAudioRelay(micTrack, audioEl);
+      if (!relay) {
+        setAudioTransferError('تعذر بدء نقل الصوت المباشر عبر المتصفح.');
+        URL.revokeObjectURL(objUrl);
+        sharedAudioObjectUrlRef.current = null;
+        return;
+      }
+
+      mixedAudioRelayRef.current = relay;
+      const audioSender = pcRef.current?.getSenders().find((s) => s.track?.kind === 'audio');
+      if (audioSender) {
+        await audioSender.replaceTrack(relay.mixedTrack);
+      } else if (pcRef.current) {
+        pcRef.current.addTrack(relay.mixedTrack, new MediaStream([relay.mixedTrack]));
+      }
+
+      audioEl.onended = () => {
+        void handleStopSharedAudioTransfer();
+      };
+      await audioEl.play();
+      const shortName = file.name.slice(0, 36);
+      setSharedAudioClipName(shortName);
+      syncPeerMetaChannel({ sharingAudioClip: shortName });
+    } catch {
+      setAudioTransferError('تعذر تشغيل ونقل الملف الصوتي المختار.');
+      await handleStopSharedAudioTransfer();
+    }
   };
 
   const toggleVideo = async () => {
@@ -1087,8 +1390,16 @@ export function CallOverlay({
       aria-label={`مكالمة ${activeCall.callType === 'video' ? 'مرئية' : 'صوتية'} مع ${peerName}`}
       className="fixed inset-0 z-[60] w-full max-w-full h-[100dvh] bg-[#0B141A] text-white flex flex-col justify-between p-4 sm:p-6 overflow-hidden select-none"
     >
-      {/* Hidden Remote Audio Element for Full-Duplex Stereo P2P Audio */}
+      {/* Hidden Remote Audio Element (DSP-enhanced Stereo P2P) & Local Audio Transfer Element */}
       <audio ref={remoteAudioRef} autoPlay playsInline className="sr-only" />
+      <audio ref={sharedAudioElRef} playsInline className="sr-only" />
+      <input
+        ref={sharedAudioInputRef}
+        type="file"
+        accept="audio/*"
+        onChange={(e) => void handlePickAudioFileToTransfer(e)}
+        className="hidden"
+      />
 
       {/* Top Encryption, Quality Preset & Stats HUD Bar */}
       <header className="relative z-20 flex flex-wrap items-center justify-between gap-2">
@@ -1101,17 +1412,45 @@ export function CallOverlay({
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap justify-end">
           {audioPlayBlocked && (
             <button
               type="button"
-              onClick={tryPlayRemoteAudio}
+              onClick={() => {
+                void remoteEnhancerRef.current?.resume();
+                tryPlayRemoteAudio();
+              }}
               className="min-h-[38px] px-3 py-1.5 rounded-full bg-amber-500 text-black text-xs font-bold flex items-center gap-1.5 shadow-md animate-pulse cursor-pointer"
             >
               <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>تفعيل الصوت</span>
+              <span>تفعيل السماع</span>
             </button>
           )}
+
+          <button
+            type="button"
+            aria-label="نقل الصوت وتحسين السماع"
+            aria-expanded={showAudioStudioPanel}
+            onClick={() => {
+              void remoteEnhancerRef.current?.resume();
+              void refreshAudioDevices();
+              setShowStatsHud(false);
+              setShowAudioStudioPanel((v) => !v);
+            }}
+            className={`min-h-[38px] px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+              showAudioStudioPanel || sharedAudioClipName
+                ? 'bg-[#00A884] text-white'
+                : isVoiceClarityOn
+                  ? 'bg-[#00A884]/25 text-[#06CF9C] border border-[#06CF9C]/40 hover:bg-[#00A884]/35'
+                  : 'bg-white/10 text-white/85 hover:bg-white/20'
+            }`}
+          >
+            <Headphones className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+            <span className="hidden sm:inline">الصوت والنقل</span>
+            <span className="font-mono-code text-[10px] opacity-90">
+              {LISTENING_BOOST_PRESETS[listeningBoost].badge}
+            </span>
+          </button>
 
           {(activeCall.callType === 'video' || hasRemoteVideo) && (
             <button
@@ -1149,7 +1488,10 @@ export function CallOverlay({
             type="button"
             aria-label="إحصائيات جودة الاتصال"
             aria-expanded={showStatsHud}
-            onClick={() => setShowStatsHud((v) => !v)}
+            onClick={() => {
+              setShowAudioStudioPanel(false);
+              setShowStatsHud((v) => !v);
+            }}
             className={`min-h-[38px] min-w-[38px] rounded-full flex items-center justify-center transition-colors cursor-pointer ${
               showStatsHud ? 'bg-[var(--wa-accent)] text-white' : 'bg-white/10 hover:bg-white/20'
             }`}
@@ -1158,9 +1500,157 @@ export function CallOverlay({
           </button>
         </div>
 
+        {/* Audio Clarity, Boost, Device Routing & Live Peer Audio Transfer Drawer */}
+        {showAudioStudioPanel && (
+          <div className="absolute top-12 left-0 right-0 sm:right-auto w-full sm:w-88 max-w-[calc(100vw-2rem)] rounded-2xl bg-[#111B21]/95 backdrop-blur-md border border-white/15 p-4 text-xs space-y-3.5 shadow-2xl z-30">
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <div className="flex items-center gap-2 font-bold text-[#06CF9C]">
+                <AudioLines className="w-4 h-4" aria-hidden="true" />
+                <span>تحسين السماع ونقل الصوت</span>
+              </div>
+              <button
+                type="button"
+                aria-label="إغلاق إعدادات الصوت"
+                onClick={() => setShowAudioStudioPanel(false)}
+                className="p-1 rounded-full hover:bg-white/10 text-white/70 cursor-pointer"
+              >
+                <X className="w-4 h-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            {/* DSP Voice Clarity Toggle */}
+            <div className="flex items-center justify-between gap-3 bg-white/5 rounded-xl p-2.5">
+              <div>
+                <p className="font-semibold text-white flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-[#06CF9C]" aria-hidden="true" />
+                  <span>تنقية ووضوح الصوت (DSP)</span>
+                </p>
+                <p className="text-[11px] text-white/60 mt-0.5">
+                  عزل الضوضاء المنخفضة وتعزيز وضوح الكلام
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-pressed={isVoiceClarityOn}
+                onClick={() => setIsVoiceClarityOn((v) => !v)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer shrink-0 ${
+                  isVoiceClarityOn
+                    ? 'bg-[#00A884] text-white'
+                    : 'bg-white/10 text-white/70 hover:bg-white/20'
+                }`}
+              >
+                {isVoiceClarityOn ? 'مفعّل' : 'إيقاف'}
+              </button>
+            </div>
+
+            {/* Listening Volume Boost Presets */}
+            <div className="space-y-1.5">
+              <span className="block text-[11px] font-semibold text-white/80">
+                مستوى تضخيم سماع الطرف الآخر
+              </span>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(['normal', 'clear', 'loud'] as ListeningBoostLevel[]).map((lvl) => {
+                  const preset = LISTENING_BOOST_PRESETS[lvl];
+                  const active = listeningBoost === lvl;
+                  return (
+                    <button
+                      key={lvl}
+                      type="button"
+                      onClick={() => setListeningBoost(lvl)}
+                      className={`py-2 px-2 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                        active
+                          ? 'bg-[#00A884] text-white'
+                          : 'bg-white/10 text-white/75 hover:bg-white/15'
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Live P2P Audio File Transfer */}
+            <div className="space-y-2 bg-white/5 rounded-xl p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold text-white flex items-center gap-1.5">
+                  <Music className="w-3.5 h-3.5 text-[#06CF9C]" aria-hidden="true" />
+                  <span>نقل مقطع صوتي للطرف الآخر</span>
+                </span>
+                {sharedAudioClipName ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleStopSharedAudioTransfer()}
+                    className="px-2.5 py-1 rounded-lg bg-red-500/80 hover:bg-red-500 text-white text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Square className="w-3 h-3 fill-current" aria-hidden="true" />
+                    <span>إيقاف</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => sharedAudioInputRef.current?.click()}
+                    className="px-2.5 py-1 rounded-lg bg-[#00A884] hover:brightness-95 text-white text-[11px] font-bold cursor-pointer"
+                  >
+                    اختر صوتاً
+                  </button>
+                )}
+              </div>
+              <p className="text-[11px] text-white/60 leading-snug">
+                {sharedAudioClipName
+                  ? `جاري البث المزدوج مع الميكروفون: ${sharedAudioClipName}`
+                  : 'بث ملف صوتي مباشر داخل المكالمة مع استمرار صوتك.'}
+              </p>
+            </div>
+
+            {/* Mic & Speaker Device Routing */}
+            {audioInputs.length > 0 && (
+              <div className="space-y-1">
+                <label className="block text-[11px] text-white/75">ميكروفون الإرسال</label>
+                <select
+                  aria-label="اختيار ميكروفون الإرسال"
+                  value={selectedMicId}
+                  onChange={(e) => void handleSelectMicDevice(e.target.value)}
+                  className="w-full rounded-lg bg-[#1F2C33] border border-white/15 px-2.5 py-1.5 text-xs text-white focus:outline-none"
+                >
+                  <option value="">الميكروفون الافتراضي</option>
+                  {audioInputs.map((dev, idx) => (
+                    <option key={dev.deviceId || idx} value={dev.deviceId}>
+                      {dev.label || `ميكروفون ${idx + 1}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {audioOutputs.length > 0 && (
+              <div className="space-y-1">
+                <label className="block text-[11px] text-white/75">مخرج السماع (السماعة)</label>
+                <select
+                  aria-label="اختيار مخرج السماع"
+                  value={selectedSpeakerId}
+                  onChange={(e) => void handleSelectSpeakerDevice(e.target.value)}
+                  className="w-full rounded-lg bg-[#1F2C33] border border-white/15 px-2.5 py-1.5 text-xs text-white focus:outline-none"
+                >
+                  <option value="">السماعة الافتراضية</option>
+                  {audioOutputs.map((dev, idx) => (
+                    <option key={dev.deviceId || idx} value={dev.deviceId}>
+                      {dev.label || `سماعة ${idx + 1}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {audioTransferError && (
+              <p className="text-[11px] text-amber-300 font-medium">{audioTransferError}</p>
+            )}
+          </div>
+        )}
+
         {/* Collapsible Live WebRTC Stats Telemetry HUD */}
         {showStatsHud && (
-          <div className="absolute top-12 left-0 w-72 rounded-2xl bg-[#111B21]/95 backdrop-blur-md border border-white/15 p-3.5 text-xs space-y-2 shadow-2xl">
+          <div className="absolute top-12 left-0 w-72 rounded-2xl bg-[#111B21]/95 backdrop-blur-md border border-white/15 p-3.5 text-xs space-y-2 shadow-2xl z-30">
             <div className="flex items-center justify-between border-b border-white/10 pb-1.5">
               <span className="font-bold text-[#06CF9C]">جودة النقل الفورية (WebRTC)</span>
               <span className="font-mono-code text-[10px] text-white/70">{activePresetMeta.label}</span>
@@ -1262,25 +1752,51 @@ export function CallOverlay({
               </button>
             )}
 
-            <div className="absolute bottom-3 right-3 left-3 flex items-center justify-between pointer-events-none z-10">
+            <div className="absolute bottom-3 right-3 left-3 flex flex-wrap items-center justify-between gap-2 pointer-events-none z-10">
               <div className="bg-black/60 backdrop-blur-md px-3.5 py-1.5 rounded-full text-xs font-medium flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-[#06CF9C]" />
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    isSpeechActiveFromLevels(remoteVoiceLevels)
+                      ? 'bg-[#06CF9C] ring-4 ring-[#06CF9C]/30'
+                      : 'bg-[#06CF9C]'
+                  }`}
+                />
                 <span>
                   {peerName} · {callState === 'connected' ? formatCallDuration(elapsedSec) : 'جاري الاتصال...'}
                 </span>
+                {peerAudioState.isMuted && (
+                  <span className="text-amber-300 text-[11px] font-semibold">· مكتوم</span>
+                )}
               </div>
-              {isScreenSharing && (
-                <span className="bg-[var(--wa-accent)] px-3 py-1 rounded-full text-[11px] font-bold">
-                  مشاركة الشاشة نشطة
-                </span>
-              )}
+              <div className="flex items-center gap-1.5">
+                {peerAudioState.sharingAudioClip && (
+                  <span className="bg-[#00A884]/90 px-3 py-1 rounded-full text-[11px] font-bold flex items-center gap-1">
+                    <Music className="w-3 h-3" aria-hidden="true" />
+                    <span>ينقل لك صوتاً</span>
+                  </span>
+                )}
+                {sharedAudioClipName && (
+                  <span className="bg-indigo-600/90 px-3 py-1 rounded-full text-[11px] font-bold">
+                    نقل صوت نشط
+                  </span>
+                )}
+                {isScreenSharing && (
+                  <span className="bg-[var(--wa-accent)] px-3 py-1 rounded-full text-[11px] font-bold">
+                    مشاركة الشاشة نشطة
+                  </span>
+                )}
+              </div>
             </div>
           </div>
         ) : (
           <div className="flex flex-col items-center text-center">
             <div className="relative">
               <div
-                className={`absolute -inset-4 rounded-full border-2 border-[#00A884]/40 ${
+                className={`absolute -inset-4 rounded-full border-2 ${
+                  isSpeechActiveFromLevels(remoteVoiceLevels)
+                    ? 'border-[#06CF9C] scale-105'
+                    : 'border-[#00A884]/40'
+                } transition-transform ${
                   callState !== 'connected' ? 'animate-ping' : ''
                 }`}
               />
@@ -1298,22 +1814,67 @@ export function CallOverlay({
                   : `متصل · ${formatCallDuration(elapsedSec)}`}
             </p>
             <p className="mt-1 text-xs text-white/60">
-              {activeCall.callType === 'video' ? 'مكالمة مرئية فائقة الدقة (HD)' : 'مكالمة صوتية ستيريو Opus 48kHz'}
+              {activeCall.callType === 'video'
+                ? 'مكالمة مرئية فائقة الدقة (HD)'
+                : `مكالمة صوتية ستيريو Opus 48kHz${isVoiceClarityOn ? ' · نقاء DSP مفعّل' : ''}`}
             </p>
 
-            {/* Real-time Audio Waveform Bars */}
+            {(peerAudioState.isMuted || peerAudioState.sharingAudioClip || sharedAudioClipName) && (
+              <div className="mt-2.5 flex flex-wrap items-center justify-center gap-2 text-xs">
+                {peerAudioState.isMuted && (
+                  <span className="text-amber-300 font-semibold">
+                    {peerName} كتم الميكروفون مؤقتاً
+                  </span>
+                )}
+                {peerAudioState.sharingAudioClip && (
+                  <span className="text-[#06CF9C] font-semibold">
+                    ينقل لك صوتاً: {peerAudioState.sharingAudioClip}
+                  </span>
+                )}
+                {sharedAudioClipName && (
+                  <span className="text-sky-300 font-semibold">
+                    تنقل للطرف الآخر: {sharedAudioClipName}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Dual Real-time Local + Remote Peer Audio Waveform Bars */}
             {callState === 'connected' && (
-              <div
-                aria-hidden="true"
-                className="mt-6 flex items-end justify-center gap-1.5 h-10"
-              >
-                {voiceLevels.map((lvl, idx) => (
-                  <span
-                    key={idx}
-                    style={{ height: `${lvl}%` }}
-                    className="w-1.5 rounded-full bg-[#06CF9C] transition-all duration-100"
-                  />
-                ))}
+              <div className="mt-6 flex items-center justify-center gap-8">
+                <div className="flex flex-col items-center gap-1.5">
+                  <div
+                    aria-hidden="true"
+                    className="flex items-end justify-center gap-1.5 h-10"
+                  >
+                    {remoteVoiceLevels.map((lvl, idx) => (
+                      <span
+                        key={idx}
+                        style={{ height: `${lvl}%` }}
+                        className="w-1.5 rounded-full bg-[#38BDF8] transition-all duration-100"
+                      />
+                    ))}
+                  </div>
+                  <span className="text-[11px] text-white/70">صوت {peerName}</span>
+                </div>
+
+                <div className="flex flex-col items-center gap-1.5">
+                  <div
+                    aria-hidden="true"
+                    className="flex items-end justify-center gap-1.5 h-10"
+                  >
+                    {voiceLevels.map((lvl, idx) => (
+                      <span
+                        key={idx}
+                        style={{ height: `${lvl}%` }}
+                        className="w-1.5 rounded-full bg-[#06CF9C] transition-all duration-100"
+                      />
+                    ))}
+                  </div>
+                  <span className="text-[11px] text-white/70">
+                    {isMuted ? 'صوتك (مكتوم)' : 'صوتك'}
+                  </span>
+                </div>
               </div>
             )}
           </div>
@@ -1349,12 +1910,39 @@ export function CallOverlay({
           <button
             type="button"
             aria-label={isSpeakerOn ? 'إيقاف مكبر الصوت' : 'تشغيل مكبر الصوت'}
-            onClick={() => setIsSpeakerOn((v) => !v)}
+            onClick={() => {
+              void remoteEnhancerRef.current?.resume();
+              setIsSpeakerOn((v) => !v);
+            }}
             className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
               isSpeakerOn ? 'bg-white/15 hover:bg-white/25' : 'bg-white/5 text-white/50'
             }`}
           >
             {isSpeakerOn ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+          </button>
+
+          <button
+            type="button"
+            aria-label="نقل مقطع صوتي للطرف الآخر"
+            title={
+              sharedAudioClipName
+                ? `إيقاف نقل: ${sharedAudioClipName}`
+                : 'نقل صوت أو ملف صوتي للطرف الآخر'
+            }
+            onClick={() => {
+              if (sharedAudioClipName) {
+                void handleStopSharedAudioTransfer();
+              } else {
+                sharedAudioInputRef.current?.click();
+              }
+            }}
+            className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
+              sharedAudioClipName
+                ? 'bg-[#00A884] text-white'
+                : 'bg-white/15 hover:bg-white/25'
+            }`}
+          >
+            <Music className="w-5 h-5" aria-hidden="true" />
           </button>
 
           <button

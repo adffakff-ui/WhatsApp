@@ -74,5 +74,15 @@ test('Dirty Dozen security invariants are enforced in firestore.rules', () => {
   assert.match(rulesContent, /'clearedAtMs'/);
   assert.match(rulesContent, /existing\(\)\.type == 'direct'/);
   assert.match(rulesContent, /isChatMemberAfter\(chatId\)/);
+
+  // 17. Ephemeral 24h status stories enforce bounded short video/image media size
+  assert.match(rulesContent, /data\.mediaUrl\.size\(\) <= 720000/);
+  assert.match(rulesContent, /duration\.value\(25, 'h'\)/);
+
+  // 18. E2EE key history & message public key provenance fields are strictly bounded
+  assert.match(rulesContent, /'previousPublicKeys'/);
+  assert.match(rulesContent, /'previousIdentityKeysJson'/);
+  assert.match(rulesContent, /'senderPublicKeyJwk'/);
+  assert.match(rulesContent, /'recipientPublicKeyJwk'/);
 });
 

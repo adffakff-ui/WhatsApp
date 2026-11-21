@@ -82,13 +82,14 @@ service cloud.firestore {
     // Validation blueprints
     function isValidPublicProfile(data) {
       return data.keys().hasAll(['uid', 'wasilId', 'displayName', 'about', 'avatarUrl', 'publicKeyJwk', 'safetyCode', 'isOnline', 'lastSeen', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'wasilId', 'displayName', 'about', 'avatarUrl', 'publicKeyJwk', 'safetyCode', 'isOnline', 'lastSeen', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'wasilId', 'displayName', 'about', 'avatarUrl', 'publicKeyJwk', 'previousPublicKeys', 'safetyCode', 'isOnline', 'lastSeen', 'updatedAt'])
         && isValidId(data.uid)
         && isValidWasilId(data.wasilId)
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
         && data.about is string && data.about.size() <= 200
         && data.avatarUrl is string && data.avatarUrl.size() <= 65536
         && data.publicKeyJwk is string && data.publicKeyJwk.size() >= 10 && data.publicKeyJwk.size() <= 1024
+        && (!('previousPublicKeys' in data) || (data.previousPublicKeys is list && data.previousPublicKeys.size() <= 6))
         && data.safetyCode is string && data.safetyCode.size() >= 10 && data.safetyCode.size() <= 120
         && data.isOnline is bool
         && data.lastSeen is timestamp
@@ -97,7 +98,7 @@ service cloud.firestore {
 
     function isValidPrivateInfo(data) {
       return data.keys().hasAll(['uid', 'email', 'theme', 'readReceipts', 'lastSeenVisible', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'wasilId', 'email', 'phone', 'theme', 'readReceipts', 'lastSeenVisible', 'lastSeenMode', 'profilePhotoVisibility', 'bioVisibility', 'identityPublicKeyJwk', 'identityPrivateKeyJwk', 'identitySafetyCode', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'wasilId', 'email', 'phone', 'theme', 'readReceipts', 'lastSeenVisible', 'lastSeenMode', 'profilePhotoVisibility', 'bioVisibility', 'identityPublicKeyJwk', 'identityPrivateKeyJwk', 'identitySafetyCode', 'previousIdentityKeysJson', 'createdAt', 'updatedAt'])
         && isValidId(data.uid)
         && (!('wasilId' in data) || isValidWasilId(data.wasilId))
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
@@ -111,6 +112,7 @@ service cloud.firestore {
         && (!('identityPublicKeyJwk' in data) || (data.identityPublicKeyJwk is string && data.identityPublicKeyJwk.size() >= 10 && data.identityPublicKeyJwk.size() <= 1024))
         && (!('identityPrivateKeyJwk' in data) || (data.identityPrivateKeyJwk is string && data.identityPrivateKeyJwk.size() >= 20 && data.identityPrivateKeyJwk.size() <= 1024))
         && (!('identitySafetyCode' in data) || (data.identitySafetyCode is string && data.identitySafetyCode.size() >= 10 && data.identitySafetyCode.size() <= 120))
+        && (!('previousIdentityKeysJson' in data) || (data.previousIdentityKeysJson is string && data.previousIdentityKeysJson.size() >= 2 && data.previousIdentityKeysJson.size() <= 8192))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -169,7 +171,7 @@ service cloud.firestore {
 
     function isValidChat(data) {
       return data.keys().hasAll(['id', 'type', 'title', 'createdBy', 'lastMessageAt', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'type', 'title', 'description', 'avatarUrl', 'createdBy', 'memberIds', 'adminOnlyPost', 'inviteCode', 'lastMessageCiphertext', 'lastMessageIv', 'lastMessageSenderId', 'lastMessageType', 'lastMessageDeliveredToIds', 'lastMessageReadByIds', 'lastMessageAt', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'type', 'title', 'description', 'avatarUrl', 'createdBy', 'memberIds', 'adminOnlyPost', 'inviteCode', 'lastMessageCiphertext', 'lastMessageIv', 'lastMessageSenderId', 'lastMessageSenderPublicKeyJwk', 'lastMessageRecipientPublicKeyJwk', 'lastMessageType', 'lastMessageDeliveredToIds', 'lastMessageReadByIds', 'lastMessageAt', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && data.type in ['direct', 'group', 'community']
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 100
@@ -182,6 +184,8 @@ service cloud.firestore {
         && (!('lastMessageCiphertext' in data) || (data.lastMessageCiphertext is string && data.lastMessageCiphertext.size() <= 2048))
         && (!('lastMessageIv' in data) || (data.lastMessageIv is string && data.lastMessageIv.size() <= 64))
         && (!('lastMessageSenderId' in data) || (data.lastMessageSenderId is string && data.lastMessageSenderId.size() <= 128))
+        && (!('lastMessageSenderPublicKeyJwk' in data) || (data.lastMessageSenderPublicKeyJwk is string && data.lastMessageSenderPublicKeyJwk.size() <= 1024))
+        && (!('lastMessageRecipientPublicKeyJwk' in data) || (data.lastMessageRecipientPublicKeyJwk is string && data.lastMessageRecipientPublicKeyJwk.size() <= 1024))
         && (!('lastMessageType' in data) || data.lastMessageType in ['text', 'image', 'voice', 'file', 'poll', 'system'])
         && (!('lastMessageDeliveredToIds' in data) || (data.lastMessageDeliveredToIds is list && data.lastMessageDeliveredToIds.size() <= 50))
         && (!('lastMessageReadByIds' in data) || (data.lastMessageReadByIds is list && data.lastMessageReadByIds.size() <= 50))
@@ -207,7 +211,7 @@ service cloud.firestore {
 
     function isValidMessage(data) {
       return data.keys().hasAll(['id', 'chatId', 'senderId', 'senderName', 'type', 'ciphertext', 'iv', 'algorithm', 'viewerIds', 'reactionsCount', 'isDeleted', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'chatId', 'senderId', 'senderName', 'type', 'ciphertext', 'iv', 'algorithm', 'viewerIds', 'replyToId', 'deliveredToIds', 'readByIds', 'reactions', 'reactionsCount', 'starredBy', 'pollVotes', 'isDeleted', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'chatId', 'senderId', 'senderName', 'type', 'ciphertext', 'iv', 'algorithm', 'senderPublicKeyJwk', 'recipientPublicKeyJwk', 'viewerIds', 'replyToId', 'deliveredToIds', 'readByIds', 'reactions', 'reactionsCount', 'starredBy', 'pollVotes', 'isDeleted', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && isValidId(data.chatId)
         && isValidId(data.senderId)
@@ -216,6 +220,8 @@ service cloud.firestore {
         && data.ciphertext is string && data.ciphertext.size() >= 1 && data.ciphertext.size() <= 65536
         && data.iv is string && data.iv.size() >= 8 && data.iv.size() <= 64
         && data.algorithm == 'AES-GCM-256'
+        && (!('senderPublicKeyJwk' in data) || (data.senderPublicKeyJwk is string && data.senderPublicKeyJwk.size() <= 1024))
+        && (!('recipientPublicKeyJwk' in data) || (data.recipientPublicKeyJwk is string && data.recipientPublicKeyJwk.size() <= 1024))
         && data.viewerIds is list && data.viewerIds.size() >= 1 && data.viewerIds.size() <= 50 && data.viewerIds[0] is string
         && (!('replyToId' in data) || (data.replyToId is string && data.replyToId.size() <= 128))
         && (!('deliveredToIds' in data) || (data.deliveredToIds is list && data.deliveredToIds.size() <= 50))
@@ -241,7 +247,7 @@ service cloud.firestore {
         && (data.type != 'text' || data.content.size() >= 1)
         && data.backgroundColor is string && data.backgroundColor.size() >= 4 && data.backgroundColor.size() <= 32
         && (!('fontStyle' in data) || data.fontStyle in ['display', 'sans', 'mono'])
-        && (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 262144))
+        && (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 720000))
         && (!('posterUrl' in data) || (data.posterUrl is string && data.posterUrl.size() <= 65536))
         && (!('durationSec' in data) || (data.durationSec is int && data.durationSec >= 0 && data.durationSec <= 180))
         && (!('pinned' in data) || data.pinned is bool)
@@ -307,7 +313,7 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && ((('wasilId' in existing()) && incoming().wasilId == existing().wasilId)
           || getAfter(/databases/$(database)/documents/wasil_registry/$(incoming().wasilId)).data.uid == request.auth.uid)
-        && incoming().diff(existing()).affectedKeys().hasOnly(['wasilId', 'displayName', 'about', 'avatarUrl', 'publicKeyJwk', 'safetyCode', 'isOnline', 'lastSeen', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['wasilId', 'displayName', 'about', 'avatarUrl', 'publicKeyJwk', 'previousPublicKeys', 'safetyCode', 'isOnline', 'lastSeen', 'updatedAt']);
       allow delete: if false;
     }
 
@@ -323,7 +329,7 @@ service cloud.firestore {
         && incoming().uid == existing().uid
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['wasilId', 'phone', 'theme', 'readReceipts', 'lastSeenVisible', 'lastSeenMode', 'profilePhotoVisibility', 'bioVisibility', 'identityPublicKeyJwk', 'identityPrivateKeyJwk', 'identitySafetyCode', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['wasilId', 'phone', 'theme', 'readReceipts', 'lastSeenVisible', 'lastSeenMode', 'profilePhotoVisibility', 'bioVisibility', 'identityPublicKeyJwk', 'identityPrivateKeyJwk', 'identitySafetyCode', 'previousIdentityKeysJson', 'updatedAt']);
       allow delete: if false;
     }
 
@@ -438,10 +444,10 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           (isChatMember(chatId) && (
-            (incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageCiphertext', 'lastMessageIv', 'lastMessageSenderId', 'lastMessageType', 'lastMessageDeliveredToIds', 'lastMessageReadByIds', 'lastMessageAt', 'updatedAt'])
+            (incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageCiphertext', 'lastMessageIv', 'lastMessageSenderId', 'lastMessageSenderPublicKeyJwk', 'lastMessageRecipientPublicKeyJwk', 'lastMessageType', 'lastMessageDeliveredToIds', 'lastMessageReadByIds', 'lastMessageAt', 'updatedAt'])
               && incoming().lastMessageAt == request.time) ||
             (existing().lastMessageSenderId == request.auth.uid
-              && incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageCiphertext', 'lastMessageIv', 'updatedAt'])) ||
+              && incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageCiphertext', 'lastMessageIv', 'lastMessageSenderPublicKeyJwk', 'lastMessageRecipientPublicKeyJwk', 'updatedAt'])) ||
             (incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageDeliveredToIds', 'lastMessageReadByIds', 'updatedAt'])) ||
             (isChatAdmin(chatId) && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'avatarUrl', 'memberIds', 'adminOnlyPost', 'inviteCode', 'updatedAt']))
           )) ||
@@ -451,7 +457,7 @@ service cloud.firestore {
             && request.auth.uid in existing().memberIds
             && isChatMemberAfter(chatId)
             && incoming().lastMessageAt == request.time
-            && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'avatarUrl', 'lastMessageCiphertext', 'lastMessageIv', 'lastMessageSenderId', 'lastMessageType', 'lastMessageDeliveredToIds', 'lastMessageReadByIds', 'lastMessageAt', 'updatedAt']))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'avatarUrl', 'lastMessageCiphertext', 'lastMessageIv', 'lastMessageSenderId', 'lastMessageSenderPublicKeyJwk', 'lastMessageRecipientPublicKeyJwk', 'lastMessageType', 'lastMessageDeliveredToIds', 'lastMessageReadByIds', 'lastMessageAt', 'updatedAt']))
         );
       allow delete: if isVerifiedUser() && isValidId(chatId) && existing().createdBy == request.auth.uid;
 
@@ -514,7 +520,7 @@ service cloud.firestore {
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && (
-            (existing().senderId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['ciphertext', 'iv', 'isDeleted', 'updatedAt'])) ||
+            (existing().senderId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['ciphertext', 'iv', 'senderPublicKeyJwk', 'recipientPublicKeyJwk', 'isDeleted', 'updatedAt'])) ||
             (incoming().diff(existing()).affectedKeys().hasOnly(['reactionsCount', 'reactions', 'updatedAt'])) ||
             (incoming().diff(existing()).affectedKeys().hasOnly(['deliveredToIds', 'readByIds', 'updatedAt'])) ||
             (incoming().diff(existing()).affectedKeys().hasOnly(['starredBy', 'updatedAt'])) ||

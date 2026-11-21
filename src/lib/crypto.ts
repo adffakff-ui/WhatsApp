@@ -114,9 +114,38 @@ export async function generateIdentityKeyPair(): Promise<IdentityKeys> {
   return { publicKeyJwk: validatedPublicKey, privateKeyJwk, safetyCode };
 }
 
+function canonicalPublicKeyString(k: {
+  kty?: unknown;
+  crv?: unknown;
+  x?: unknown;
+  y?: unknown;
+}): string {
+  return JSON.stringify({
+    kty: String(k.kty || 'EC'),
+    crv: String(k.crv || 'P-256'),
+    x: String(k.x || ''),
+    y: String(k.y || '')
+  });
+}
+
+async function normalizeCanonicalPublicKey(rawKey: unknown): Promise<string | null> {
+  const valid = await validatePublicKeyJwk(rawKey);
+  if (!valid) return null;
+  try {
+    const parsed = JSON.parse(valid) as { kty?: unknown; crv?: unknown; x?: unknown; y?: unknown };
+    return canonicalPublicKeyString(parsed);
+  } catch {
+    return null;
+  }
+}
+
 export async function computeSafetyNumber(pubKeyA: string, pubKeyB: string): Promise<string> {
-  const keyA = (await validatePublicKeyJwk(pubKeyA)) || (typeof pubKeyA === 'string' && pubKeyA.length >= 5 ? pubKeyA : null);
-  const keyB = (await validatePublicKeyJwk(pubKeyB)) || (typeof pubKeyB === 'string' && pubKeyB.length >= 5 ? pubKeyB : null);
+  const keyA =
+    (await normalizeCanonicalPublicKey(pubKeyA)) ||
+    (typeof pubKeyA === 'string' && pubKeyA.length >= 5 ? pubKeyA : null);
+  const keyB =
+    (await normalizeCanonicalPublicKey(pubKeyB)) ||
+    (typeof pubKeyB === 'string' && pubKeyB.length >= 5 ? pubKeyB : null);
   if (!keyA || !keyB) {
     return '48291 09384 71625 50192 83746 19283 47561 90283 61728 39405 18273 64590';
   }
@@ -166,16 +195,17 @@ export async function derivePairwiseChatKey(
     if (!ownPublic) throw new Error('مفتاحك العام غير صالح.');
     assertIdentityKeyPair(myPrivateKeyJwk, ownPublic);
   }
+  const canonicalOwn = canonicalPublicKeyString(privateJwk);
+  const canonicalPeer = await normalizeCanonicalPublicKey(peerPublicKeyJwk);
+  if (!canonicalPeer) throw new Error('المفتاح العام للطرف الآخر غير صالح أو ليس ECDH P-256.');
+
   const [privateKey, publicKey] = await Promise.all([
     importPrivateKey(myPrivateKeyJwk),
     importPublicKey(peerPublicKeyJwk)
   ]);
   const sharedBits = await subtle.deriveBits({ name: 'ECDH', public: publicKey }, privateKey, 256);
   const hkdfKey = await subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
-  const orderedPublicKeys = [
-    JSON.stringify({ kty: privateJwk.kty, crv: privateJwk.crv, x: privateJwk.x, y: privateJwk.y }),
-    await validatePublicKeyJwk(peerPublicKeyJwk)
-  ].sort();
+  const orderedPublicKeys = [canonicalOwn, canonicalPeer].sort();
   return subtle.deriveKey(
     {
       name: 'HKDF',
@@ -190,9 +220,77 @@ export async function derivePairwiseChatKey(
   );
 }
 
+/** Backwards-compatible v2 HKDF derivation for historical messages encrypted before canonical normalization. */
+async function deriveLegacyAsymmetricPairwiseVariants(
+  myPrivateKeyJwk: string,
+  myPublicKeyJwk: string,
+  peerPublicKeyJwk: string,
+  chatId: string
+): Promise<CryptoKey[]> {
+  if (!chatId || chatId.length > 128) return [];
+  const privateJwk = parsePrivateKeyJwk(myPrivateKeyJwk);
+  const canonicalOwn = canonicalPublicKeyString(privateJwk);
+  const validPeerRaw = await validatePublicKeyJwk(peerPublicKeyJwk);
+  const canonicalPeer = await normalizeCanonicalPublicKey(peerPublicKeyJwk);
+  const validOwnRaw = (await validatePublicKeyJwk(myPublicKeyJwk)) || canonicalOwn;
+  if (!validPeerRaw || !canonicalPeer) return [];
+
+  const [privateKey, publicKey] = await Promise.all([
+    importPrivateKey(myPrivateKeyJwk),
+    importPublicKey(peerPublicKeyJwk)
+  ]);
+  const sharedBits = await subtle.deriveBits({ name: 'ECDH', public: publicKey }, privateKey, 256);
+  const hkdfKey = await subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
+  const salt = await subtle.digest('SHA-256', new TextEncoder().encode('wasil-e2ee-v2'));
+
+  const variantInfos = new Set<string>([
+    `direct-chat:${chatId}:${[canonicalOwn, validPeerRaw].sort().join(':')}`,
+    `direct-chat:${chatId}:${[validOwnRaw, canonicalPeer].sort().join(':')}`,
+    `direct-chat:${chatId}:${[validOwnRaw, validPeerRaw].sort().join(':')}`
+  ]);
+  variantInfos.delete(
+    `direct-chat:${chatId}:${[canonicalOwn, canonicalPeer].sort().join(':')}`
+  );
+
+  const out: CryptoKey[] = [];
+  for (const infoStr of variantInfos) {
+    out.push(
+      await subtle.deriveKey(
+        {
+          name: 'HKDF',
+          hash: 'SHA-256',
+          salt,
+          info: new TextEncoder().encode(infoStr)
+        },
+        hkdfKey,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['decrypt']
+      )
+    );
+  }
+  return out;
+}
+
 const PRIMARY_KEYS_STORAGE = 'wasil_identity_keys_v1';
 const PREV_KEYS_STORAGE = 'wasil_prev_identity_keys_v1';
 const PEER_PUBKEY_CACHE_STORAGE = 'wasil_peer_pubkey_cache_v1';
+
+let activeCryptoUid: string | null = null;
+
+export function setActiveCryptoUid(uid: string | null): void {
+  activeCryptoUid = uid && uid.trim() ? uid.trim() : null;
+}
+
+export function getPrimaryKeysStorageKey(uid?: string | null): string {
+  const clean = (uid ?? activeCryptoUid ?? '').trim();
+  return clean ? `${PRIMARY_KEYS_STORAGE}_${clean}` : PRIMARY_KEYS_STORAGE;
+}
+
+function getPrevKeysStorageKey(uid?: string | null): string {
+  const clean = (uid ?? activeCryptoUid ?? '').trim();
+  return clean ? `${PREV_KEYS_STORAGE}_${clean}` : PREV_KEYS_STORAGE;
+}
 
 function safeStorageGet(key: string): string | null {
   try {
@@ -212,46 +310,133 @@ function safeStorageSet(key: string, value: string): void {
   }
 }
 
+export function readStoredIdentityKeysForUid(uid?: string | null): IdentityKeys | null {
+  const scopedRaw = safeStorageGet(getPrimaryKeysStorageKey(uid));
+  if (scopedRaw) {
+    try {
+      const parsed = JSON.parse(scopedRaw) as IdentityKeys;
+      if (parsed?.publicKeyJwk && parsed?.privateKeyJwk) return parsed;
+    } catch {
+      // Fall through
+    }
+  }
+  return null;
+}
+
+export function saveStoredIdentityKeysForUid(keys: IdentityKeys, uid?: string | null): void {
+  safeStorageSet(getPrimaryKeysStorageKey(uid), JSON.stringify(keys));
+}
+
 function cachePeerPublicKey(peerUid: string, publicKeyJwk: string): void {
   if (!peerUid || !publicKeyJwk) return;
   try {
     const raw = safeStorageGet(PEER_PUBKEY_CACHE_STORAGE);
-    const map = raw ? (JSON.parse(raw) as Record<string, string>) : {};
-    map[peerUid] = publicKeyJwk;
+    const map = raw ? (JSON.parse(raw) as Record<string, string | string[]>) : {};
+    const existingEntry = map[peerUid];
+    const existingList = Array.isArray(existingEntry)
+      ? existingEntry.filter((k): k is string => typeof k === 'string')
+      : typeof existingEntry === 'string' && existingEntry
+        ? [existingEntry]
+        : [];
+    const deduped = [
+      publicKeyJwk,
+      ...existingList.filter((k) => k !== publicKeyJwk)
+    ].slice(0, 10);
+    map[peerUid] = deduped;
     safeStorageSet(PEER_PUBKEY_CACHE_STORAGE, JSON.stringify(map));
   } catch {
     // Non-fatal
   }
 }
 
-function getCachedPeerPublicKey(peerUid: string): string | null {
-  if (!peerUid) return null;
+function getCachedPeerPublicKeys(peerUid: string): string[] {
+  if (!peerUid) return [];
   try {
     const raw = safeStorageGet(PEER_PUBKEY_CACHE_STORAGE);
-    if (!raw) return null;
-    const map = JSON.parse(raw) as Record<string, string>;
-    return typeof map[peerUid] === 'string' ? map[peerUid] : null;
+    if (!raw) return [];
+    const map = JSON.parse(raw) as Record<string, string | string[]>;
+    const entry = map[peerUid];
+    if (Array.isArray(entry)) {
+      return entry.filter((k): k is string => typeof k === 'string');
+    }
+    return typeof entry === 'string' && entry ? [entry] : [];
   } catch {
-    return null;
+    return [];
   }
 }
 
-export function archivePreviousIdentityKey(oldKeys: IdentityKeys | null | undefined): void {
+export function getArchivedIdentityKeys(uid?: string | null): IdentityKeys[] {
+  const results: IdentityKeys[] = [];
+  const collectFromKey = (storageKey: string) => {
+    const raw = safeStorageGet(storageKey);
+    if (!raw) return;
+    try {
+      const list = JSON.parse(raw) as IdentityKeys[];
+      if (Array.isArray(list)) {
+        for (const item of list) {
+          if (
+            item?.publicKeyJwk &&
+            item?.privateKeyJwk &&
+            !results.some((r) => r.publicKeyJwk === item.publicKeyJwk)
+          ) {
+            results.push(item);
+          }
+        }
+      }
+    } catch {
+      // Ignore parse error
+    }
+  };
+  collectFromKey(getPrevKeysStorageKey(uid));
+  if (uid || activeCryptoUid) {
+    collectFromKey(PREV_KEYS_STORAGE);
+  }
+  return results;
+}
+
+export function mergeArchivedIdentityKeys(
+  incomingKeys: (IdentityKeys | null | undefined)[],
+  uid?: string | null
+): IdentityKeys[] {
+  const cleanIncoming = incomingKeys.filter(
+    (k): k is IdentityKeys => Boolean(k?.publicKeyJwk && k?.privateKeyJwk)
+  );
+  const existing = getArchivedIdentityKeys(uid);
+  const merged: IdentityKeys[] = [];
+  for (const item of [...cleanIncoming, ...existing]) {
+    if (!merged.some((m) => m.publicKeyJwk === item.publicKeyJwk)) {
+      merged.push(item);
+    }
+  }
+  const bounded = merged.slice(0, 6);
+  try {
+    safeStorageSet(getPrevKeysStorageKey(uid), JSON.stringify(bounded));
+  } catch {
+    // Non-fatal
+  }
+  return bounded;
+}
+
+export function archivePreviousIdentityKey(
+  oldKeys: IdentityKeys | null | undefined,
+  uid?: string | null
+): void {
   if (!oldKeys?.publicKeyJwk || !oldKeys?.privateKeyJwk) return;
   try {
-    const raw = safeStorageGet(PREV_KEYS_STORAGE);
+    const scopedKey = getPrevKeysStorageKey(uid);
+    const raw = safeStorageGet(scopedKey);
     const existing = raw ? (JSON.parse(raw) as IdentityKeys[]) : [];
     const deduped = [
       oldKeys,
       ...existing.filter((item) => item?.publicKeyJwk && item.publicKeyJwk !== oldKeys.publicKeyJwk)
     ].slice(0, 6);
-    safeStorageSet(PREV_KEYS_STORAGE, JSON.stringify(deduped));
+    safeStorageSet(scopedKey, JSON.stringify(deduped));
   } catch {
     // Non-fatal
   }
 }
 
-async function readValidLocalIdentityKeys(): Promise<IdentityKeys[]> {
+async function readValidLocalIdentityKeys(uid?: string | null): Promise<IdentityKeys[]> {
   const candidates: IdentityKeys[] = [];
   const pushIfValid = async (rawObj: Partial<IdentityKeys> | null | undefined) => {
     if (!rawObj?.privateKeyJwk || !rawObj?.publicKeyJwk) return;
@@ -271,19 +456,44 @@ async function readValidLocalIdentityKeys(): Promise<IdentityKeys[]> {
     }
   };
 
-  const primaryRaw = safeStorageGet(PRIMARY_KEYS_STORAGE);
-  if (primaryRaw) {
+  const resolvedUid = uid ?? activeCryptoUid;
+  const scopedPrimaryRaw = resolvedUid ? safeStorageGet(getPrimaryKeysStorageKey(resolvedUid)) : null;
+  if (scopedPrimaryRaw) {
     try {
-      await pushIfValid(JSON.parse(primaryRaw) as Partial<IdentityKeys>);
+      await pushIfValid(JSON.parse(scopedPrimaryRaw) as Partial<IdentityKeys>);
     } catch {
       // Ignore parse error
     }
   }
 
-  const prevRaw = safeStorageGet(PREV_KEYS_STORAGE);
-  if (prevRaw) {
+  const scopedPrevRaw = resolvedUid ? safeStorageGet(getPrevKeysStorageKey(resolvedUid)) : null;
+  if (scopedPrevRaw) {
     try {
-      const list = JSON.parse(prevRaw) as Partial<IdentityKeys>[];
+      const list = JSON.parse(scopedPrevRaw) as Partial<IdentityKeys>[];
+      if (Array.isArray(list)) {
+        for (const item of list) {
+          await pushIfValid(item);
+        }
+      }
+    } catch {
+      // Ignore parse error
+    }
+  }
+
+  // Backward-compatible migration fallback for unscoped keys from earlier versions
+  const legacyPrimaryRaw = safeStorageGet(PRIMARY_KEYS_STORAGE);
+  if (legacyPrimaryRaw) {
+    try {
+      await pushIfValid(JSON.parse(legacyPrimaryRaw) as Partial<IdentityKeys>);
+    } catch {
+      // Ignore parse error
+    }
+  }
+
+  const legacyPrevRaw = safeStorageGet(PREV_KEYS_STORAGE);
+  if (legacyPrevRaw) {
+    try {
+      const list = JSON.parse(legacyPrevRaw) as Partial<IdentityKeys>[];
       if (Array.isArray(list)) {
         for (const item of list) {
           await pushIfValid(item);
@@ -312,6 +522,9 @@ async function deriveLegacyRoomSymmetricKey(roomSeed: string): Promise<CryptoKey
 export interface RoomKeyHint {
   peerUid?: string;
   peerPublicKeyJwk?: string;
+  additionalPeerKeys?: string[];
+  senderPublicKeyJwk?: string;
+  recipientPublicKeyJwk?: string;
 }
 
 async function resolveDirectChatPeers(
@@ -327,11 +540,28 @@ async function resolveDirectChatPeers(
     }
   };
 
+  if (hint?.senderPublicKeyJwk) {
+    await addPeerKey(hint.senderPublicKeyJwk);
+  }
+  if (hint?.recipientPublicKeyJwk) {
+    await addPeerKey(hint.recipientPublicKeyJwk);
+  }
   if (hint?.peerPublicKeyJwk) {
     await addPeerKey(hint.peerPublicKeyJwk);
   }
+  if (Array.isArray(hint?.additionalPeerKeys)) {
+    for (const extraKey of hint.additionalPeerKeys) {
+      await addPeerKey(extraKey);
+    }
+  }
 
-  let isDirect = Boolean(hint?.peerUid || hint?.peerPublicKeyJwk || roomSeed.startsWith('direct_'));
+  let isDirect = Boolean(
+    hint?.peerUid ||
+      hint?.peerPublicKeyJwk ||
+      hint?.senderPublicKeyJwk ||
+      hint?.recipientPublicKeyJwk ||
+      roomSeed.startsWith('direct_')
+  );
   let peerUid = hint?.peerUid || '';
 
   try {
@@ -344,6 +574,12 @@ async function resolveDirectChatPeers(
           (uid): uid is string => typeof uid === 'string' && uid !== myUid
         );
         if (foundPeer) peerUid = foundPeer;
+      }
+      if (typeof chatData.lastMessageSenderPublicKeyJwk === 'string') {
+        await addPeerKey(chatData.lastMessageSenderPublicKeyJwk);
+      }
+      if (typeof chatData.lastMessageRecipientPublicKeyJwk === 'string') {
+        await addPeerKey(chatData.lastMessageRecipientPublicKeyJwk);
       }
     }
   } catch {
@@ -360,24 +596,37 @@ async function resolveDirectChatPeers(
         getDoc(doc(db, 'users', peerUid, 'public', 'profile')).catch(() => null),
         getDoc(doc(db, 'chats', roomSeed, 'members', peerUid)).catch(() => null)
       ]);
-      // Prioritize the user's live public profile key over possibly-stale chat member key
+      // Prioritize the user's live public profile key & history over stale chat member key
       if (peerProfileSnap?.exists()) {
-        const liveValid = await validatePublicKeyJwk(peerProfileSnap.data().publicKeyJwk);
+        const pData = peerProfileSnap.data();
+        const liveValid = await validatePublicKeyJwk(pData.publicKeyJwk);
         if (liveValid) {
           cachePeerPublicKey(peerUid, liveValid);
           await addPeerKey(liveValid);
         }
+        if (Array.isArray(pData.previousPublicKeys)) {
+          for (const prevPub of pData.previousPublicKeys as unknown[]) {
+            const validPrev = await validatePublicKeyJwk(prevPub);
+            if (validPrev) {
+              cachePeerPublicKey(peerUid, validPrev);
+              await addPeerKey(validPrev);
+            }
+          }
+        }
       }
       if (peerMemberSnap?.exists()) {
-        await addPeerKey(peerMemberSnap.data().publicKeyJwk);
+        const memberPub = await validatePublicKeyJwk(peerMemberSnap.data().publicKeyJwk);
+        if (memberPub) {
+          cachePeerPublicKey(peerUid, memberPub);
+          await addPeerKey(memberPub);
+        }
       }
     } catch {
-      // Fall back to cached key below
+      // Fall back to cached keys below
     }
 
-    const cached = getCachedPeerPublicKey(peerUid);
-    if (cached) {
-      await addPeerKey(cached);
+    for (const cachedKey of getCachedPeerPublicKeys(peerUid)) {
+      await addPeerKey(cachedKey);
     }
   }
 
@@ -392,7 +641,7 @@ export async function deriveRoomKeyFromSeed(
   const user = auth.currentUser;
   if (user && roomSeed) {
     try {
-      const localIdentities = await readValidLocalIdentityKeys();
+      const localIdentities = await readValidLocalIdentityKeys(user.uid);
       const primaryIdentity = localIdentities[0];
       const { isDirect, peerPublicKeys } = await resolveDirectChatPeers(roomSeed, user.uid, hint);
 
@@ -412,34 +661,79 @@ export async function deriveRoomKeyFromSeed(
   return deriveLegacyRoomSymmetricKey(roomSeed);
 }
 
-/** Resolve ordered candidate AES-GCM-256 keys for decryption (handles live, member, archived, legacy room, and global fallback keys). */
+/** Resolve ordered candidate AES-GCM-256 keys for decryption (handles live, member, archived, v1 ECDH, and room fallback keys). */
 export async function deriveCandidateRoomKeysForDecryption(
   roomSeed: string,
-  hint?: RoomKeyHint
+  hint?: RoomKeyHint,
+  explicitIdentities?: IdentityKeys[]
 ): Promise<CryptoKey[]> {
   const keys: CryptoKey[] = [];
   const user = auth.currentUser;
+  const identitiesToTry =
+    explicitIdentities && explicitIdentities.length > 0
+      ? explicitIdentities
+      : user
+        ? await readValidLocalIdentityKeys(user.uid)
+        : [];
 
-  if (user && roomSeed) {
+  if (roomSeed && identitiesToTry.length > 0) {
     try {
-      const [localIdentities, { isDirect, peerPublicKeys }] = await Promise.all([
-        readValidLocalIdentityKeys(),
-        resolveDirectChatPeers(roomSeed, user.uid, hint)
-      ]);
+      const myUid = user?.uid || 'test_user';
+      const { isDirect, peerPublicKeys } =
+        hint?.peerPublicKeyJwk ||
+        hint?.senderPublicKeyJwk ||
+        hint?.recipientPublicKeyJwk ||
+        hint?.additionalPeerKeys?.length
+          ? user
+            ? await resolveDirectChatPeers(roomSeed, myUid, hint)
+            : {
+                isDirect: true,
+                peerPublicKeys: Array.from(
+                  new Set(
+                    [
+                      hint.senderPublicKeyJwk,
+                      hint.recipientPublicKeyJwk,
+                      hint.peerPublicKeyJwk,
+                      ...(hint.additionalPeerKeys || [])
+                    ].filter((k): k is string => Boolean(k))
+                  )
+                )
+              }
+          : user
+            ? await resolveDirectChatPeers(roomSeed, myUid, hint)
+            : { isDirect: false, peerPublicKeys: [] };
 
-      if (isDirect && localIdentities.length > 0 && peerPublicKeys.length > 0) {
-        for (const identity of localIdentities) {
+      if (isDirect && peerPublicKeys.length > 0) {
+        for (const identity of identitiesToTry) {
           for (const peerPub of peerPublicKeys) {
+            if (peerPub === identity.publicKeyJwk) continue;
             try {
-              const derived = await derivePairwiseChatKey(
+              const derivedV2 = await derivePairwiseChatKey(
                 identity.privateKeyJwk,
                 peerPub,
                 roomSeed,
                 identity.publicKeyJwk
               );
-              keys.push(derived);
+              keys.push(derivedV2);
             } catch {
-              // Skip invalid combination
+              // Skip invalid v2 combination
+            }
+            try {
+              const legacyVariants = await deriveLegacyAsymmetricPairwiseVariants(
+                identity.privateKeyJwk,
+                identity.publicKeyJwk,
+                peerPub,
+                roomSeed
+              );
+              keys.push(...legacyVariants);
+            } catch {
+              // Skip invalid legacy HKDF variant
+            }
+            try {
+              const derivedV1 = await deriveSharedSecretKey(identity.privateKeyJwk, peerPub);
+              keys.push(derivedV1);
+            } catch {
+              // Skip invalid v1 combination
             }
           }
         }

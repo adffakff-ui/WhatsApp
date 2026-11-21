@@ -32,6 +32,10 @@ import {
   deriveRoomKeyFromSeed,
   encryptPayload,
   generateIdentityKeyPair,
+  mergeArchivedIdentityKeys,
+  readStoredIdentityKeysForUid,
+  saveStoredIdentityKeysForUid,
+  setActiveCryptoUid,
   type IdentityKeys
 } from './lib/crypto';
 import {
@@ -221,9 +225,15 @@ export default function App() {
   const lastTypingSentRef = useRef<{ chatId: string; active: boolean } | null>(null);
   const typingTimeoutRef = useRef<number | null>(null);
 
-  const [identityKeys, setIdentityKeys] = useState<IdentityKeys | null>(() =>
-    readJsonStorage<IdentityKeys>(STORAGE_KEYS.KEYS)
-  );
+  const [identityKeys, setIdentityKeys] = useState<IdentityKeys | null>(() => {
+    const savedProfile = readJsonStorage<UserProfile>(STORAGE_KEYS.PROFILE);
+    const savedUid = savedProfile && isRemoteFirebaseUid(savedProfile.uid) ? savedProfile.uid : null;
+    if (savedUid) {
+      setActiveCryptoUid(savedUid);
+      return readStoredIdentityKeysForUid(savedUid) || readJsonStorage<IdentityKeys>(STORAGE_KEYS.KEYS);
+    }
+    return readJsonStorage<IdentityKeys>(STORAGE_KEYS.KEYS);
+  });
   const [linkedDevices, setLinkedDevices] = useState<DeviceSession[]>([]);
   const localDeviceMeta = useMemo(
     () => ({
@@ -458,16 +468,27 @@ export default function App() {
     localStorage.setItem(STORAGE_KEYS.OMAR, JSON.stringify(omarSettings));
   }, [omarSettings]);
 
-  // Ensure local ECDH identity keys exist (zero-out default chat state for fresh installs)
+  // Ensure local ECDH identity keys exist (scoped per Firebase UID when signed in)
   useEffect(() => {
     let active = true;
     async function bootstrapCrypto() {
-      let keys = readJsonStorage<IdentityKeys>(STORAGE_KEYS.KEYS);
+      const savedProfile = readJsonStorage<UserProfile>(STORAGE_KEYS.PROFILE);
+      const savedUid = savedProfile && isRemoteFirebaseUid(savedProfile.uid) ? savedProfile.uid : null;
+      if (savedUid) {
+        setActiveCryptoUid(savedUid);
+      }
+      let keys =
+        (savedUid ? readStoredIdentityKeysForUid(savedUid) : null) ||
+        readJsonStorage<IdentityKeys>(STORAGE_KEYS.KEYS);
       if (!keys) {
         keys = await generateIdentityKeyPair();
         localStorage.setItem(STORAGE_KEYS.KEYS, JSON.stringify(keys));
       }
+      if (savedUid) {
+        saveStoredIdentityKeysForUid(keys, savedUid);
+      }
       if (!active) return;
+      identityKeysRef.current = keys;
       setIdentityKeys(keys);
       setCurrentUser((prev) => ({
         ...prev,
@@ -581,6 +602,9 @@ export default function App() {
         msgSyncControllerRef.current?.dispose();
         msgSyncControllerRef.current = null;
         deviceRegisteredRef.current = false;
+        setActiveCryptoUid(null);
+        identityKeysRef.current = null;
+        setIdentityKeys(null);
         localStorage.removeItem(STORAGE_KEYS.ENTERED);
         localStorage.removeItem(STORAGE_KEYS.PROFILE);
         setIsCloudSynced(false);
@@ -608,12 +632,17 @@ export default function App() {
       const isPasswordProvider = fbUser.providerData.some((p) => p.providerId === 'password');
       setNeedsEmailVerification(Boolean(isPasswordProvider && !fbUser.emailVerified));
 
-      const keys = identityKeysRef.current || (await generateIdentityKeyPair());
-      if (!identityKeysRef.current) {
-        identityKeysRef.current = keys;
-        localStorage.setItem(STORAGE_KEYS.KEYS, JSON.stringify(keys));
-        setIdentityKeys(keys);
-      }
+      setActiveCryptoUid(fbUser.uid);
+      const savedProfile = readJsonStorage<UserProfile>(STORAGE_KEYS.PROFILE);
+      const canMigrateUnscopedKeys = !savedProfile?.uid || savedProfile.uid === fbUser.uid;
+      let keys =
+        readStoredIdentityKeysForUid(fbUser.uid) ||
+        (canMigrateUnscopedKeys ? readJsonStorage<IdentityKeys>(STORAGE_KEYS.KEYS) : null) ||
+        (await generateIdentityKeyPair());
+      saveStoredIdentityKeysForUid(keys, fbUser.uid);
+      localStorage.setItem(STORAGE_KEYS.KEYS, JSON.stringify(keys));
+      identityKeysRef.current = keys;
+      setIdentityKeys(keys);
 
       const profile: UserProfile = {
         uid: fbUser.uid,
@@ -707,8 +736,9 @@ export default function App() {
           privPatch.identityKeys &&
           privPatch.identityKeys.publicKeyJwk !== identityKeysRef.current?.publicKeyJwk
         ) {
-          archivePreviousIdentityKey(identityKeysRef.current);
+          archivePreviousIdentityKey(identityKeysRef.current, fbUser.uid);
           identityKeysRef.current = privPatch.identityKeys;
+          saveStoredIdentityKeysForUid(privPatch.identityKeys, fbUser.uid);
           localStorage.setItem(STORAGE_KEYS.KEYS, JSON.stringify(privPatch.identityKeys));
           setIdentityKeys(privPatch.identityKeys);
           setCurrentUser((curr) =>
@@ -753,10 +783,14 @@ export default function App() {
           pendingOnboardingRef.current?.wasilId,
           keys.privateKeyJwk
         );
+        if (hydrated.previousIdentityKeys && hydrated.previousIdentityKeys.length > 0) {
+          mergeArchivedIdentityKeys(hydrated.previousIdentityKeys, fbUser.uid);
+        }
         const resolvedKeys = hydrated.identityKeys || keys;
+        saveStoredIdentityKeysForUid(resolvedKeys, fbUser.uid);
         const keysChanged = resolvedKeys.publicKeyJwk !== keys.publicKeyJwk;
         if (keysChanged) {
-          archivePreviousIdentityKey(identityKeysRef.current);
+          archivePreviousIdentityKey(identityKeysRef.current, fbUser.uid);
           identityKeysRef.current = resolvedKeys;
           localStorage.setItem(STORAGE_KEYS.KEYS, JSON.stringify(resolvedKeys));
           setIdentityKeys(resolvedKeys);
@@ -1156,6 +1190,9 @@ export default function App() {
     readMsgAckedRef.current.clear();
     msgSyncControllerRef.current?.dispose();
     msgSyncControllerRef.current = null;
+    setActiveCryptoUid(null);
+    identityKeysRef.current = null;
+    setIdentityKeys(null);
     localStorage.removeItem(STORAGE_KEYS.ENTERED);
     setChats([]);
     setMessagesMap({});
@@ -1744,7 +1781,9 @@ export default function App() {
         c.id === targetChat.id
           ? {
               ...c,
-              lastMessagePreview: payload.text,
+              lastMessagePreview: payload.stickerLabel
+                ? `ملصق: ${payload.stickerLabel}`
+                : payload.text,
               lastMessageType: type,
               lastMessageSenderId: currentUser.uid,
               lastMessageStatus: 'sent',
@@ -2532,14 +2571,15 @@ export default function App() {
 
   const handlePublishStatus = async (payload: PublishStatusPayload) => {
     if (!isCloudSynced || !auth.currentUser || !isRemoteFirebaseUid(currentUser.uid)) {
-      showToast('يجب تسجيل الدخول عبر Firebase لنشر الحالات');
-      return;
+      const errMsg = 'يجب تسجيل الدخول عبر Firebase لنشر القصص والحالات';
+      showToast(errMsg);
+      throw new Error(errMsg);
     }
     const created = await publishStatusToFirestore(currentUser, payload);
     setStatuses((prev) =>
       filterActiveStatuses([created, ...prev.filter((s) => s.id !== created.id)])
     );
-    showToast('تم نشر الحالة بنجاح');
+    showToast('تم نشر القصة بنجاح (تختفي بعد ٢٤ ساعة)');
   };
 
   const handleMarkStatusViewed = (statusId: string) => {
@@ -2634,14 +2674,18 @@ export default function App() {
 
     await handleCreateDirectChat(authorName, authorId);
     const directId = buildDirectChatId(currentUser.uid, authorId);
+    const knownPeer =
+      contactsList.find((c) => c.uid === authorId) ||
+      (await fetchPublicProfileByUid(authorId).catch(() => null));
     const targetRoom: ChatRoom = {
       id: directId,
       type: 'direct',
-      title: authorName,
+      title: knownPeer?.displayName || authorName,
       description: 'محادثة مشفرة',
-      avatarUrl: '',
+      avatarUrl: knownPeer?.avatarUrl || '',
       peerUid: authorId,
-      isOnline: true,
+      ...(knownPeer?.publicKeyJwk ? { peerPublicKeyJwk: knownPeer.publicKeyJwk } : {}),
+      isOnline: Boolean(knownPeer?.isOnline),
       memberIds: [currentUser.uid, authorId],
       pinned: false,
       archived: false,
@@ -2656,7 +2700,7 @@ export default function App() {
       lastMessageAtMs: Date.now(),
       roomSeed: directId
     };
-    showToast(`تم فتح المحادثة مع ${authorName}`);
+    showToast(`تم فتح المحادثة مع ${knownPeer?.displayName || authorName}`);
     void sendMessageToTargetChat(targetRoom, 'text', {
       text: replyText,
       replyToSender: authorName,
@@ -3039,6 +3083,7 @@ export default function App() {
                   setRightPanelMode(mode);
                 }}
                 onClearChat={handleClearChat}
+                onDeleteChat={handleDeleteChat}
                 onSetDisappearing={handleSetDisappearing}
                 onToggleLockChat={handleToggleLockChat}
                 onTypingChange={handleTypingChange}

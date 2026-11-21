@@ -1,4 +1,8 @@
-import { MAX_STATUS_VIDEO_SECONDS, validateStatusVideoDuration } from './chatLogic';
+import {
+  MAX_STATUS_MEDIA_BYTES,
+  MAX_STATUS_VIDEO_SECONDS,
+  validateStatusVideoDuration
+} from './chatLogic';
 
 const DB_NAME = 'wasil_media_v1';
 const STORE_NAME = 'blobs';
@@ -275,3 +279,151 @@ export async function downloadMediaUriOrUrl(
   document.body.removeChild(link);
   return true;
 }
+
+export function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('تعذر قراءة ملف الفيديو.'));
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function transcodeShortVideoBlob(
+  sourceBlob: Blob,
+  maxDurationSec = 20,
+  videoBitsPerSecond = 210_000,
+  maxSide = 360
+): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    if (typeof MediaRecorder === 'undefined') {
+      reject(new Error('المتصفح لا يدعم ضغط الفيديو المباشر.'));
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(sourceBlob);
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+    video.src = objectUrl;
+
+    let stopped = false;
+    let rafId: number | null = null;
+    let recorder: MediaRecorder | null = null;
+    let hardTimer: number | null = null;
+
+    const cleanup = () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+      if (hardTimer !== null) window.clearTimeout(hardTimer);
+      URL.revokeObjectURL(objectUrl);
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    };
+
+    video.onerror = () => {
+      if (stopped) return;
+      stopped = true;
+      cleanup();
+      reject(new Error('تعذر فك ترميز مقطع الفيديو المختار.'));
+    };
+
+    video.onloadedmetadata = async () => {
+      try {
+        const vw = video.videoWidth || 360;
+        const vh = video.videoHeight || 640;
+        const scale = Math.min(1, maxSide / Math.max(vw, vh));
+        const width = Math.max(2, Math.round((vw * scale) / 2) * 2);
+        const height = Math.max(2, Math.round((vh * scale) / 2) * 2);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx || typeof canvas.captureStream !== 'function') {
+          throw new Error('المتصفح لا يدعم ضغط الفيديو عبر Canvas.');
+        }
+
+        const canvasStream = canvas.captureStream(20);
+        const preferredMime = ['video/webm;codecs=vp8', 'video/webm', 'video/mp4'].find((m) =>
+          MediaRecorder.isTypeSupported(m)
+        );
+        const chunks: Blob[] = [];
+        recorder = preferredMime
+          ? new MediaRecorder(canvasStream, { mimeType: preferredMime, videoBitsPerSecond })
+          : new MediaRecorder(canvasStream, { videoBitsPerSecond });
+
+        recorder.ondataavailable = (ev) => {
+          if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+        };
+        recorder.onstop = () => {
+          if (stopped) return;
+          stopped = true;
+          canvasStream.getTracks().forEach((t) => t.stop());
+          const outBlob = new Blob(chunks, { type: recorder?.mimeType || 'video/webm' });
+          cleanup();
+          resolve(outBlob);
+        };
+
+        const finishTranscode = () => {
+          if (recorder && recorder.state !== 'inactive') {
+            recorder.stop();
+          }
+        };
+
+        video.onended = finishTranscode;
+        const clipMs =
+          Math.min(
+            maxDurationSec,
+            Number.isFinite(video.duration) && video.duration > 0 ? video.duration : maxDurationSec
+          ) * 1000;
+        hardTimer = window.setTimeout(finishTranscode, clipMs + 350);
+
+        const drawFrame = () => {
+          if (stopped || video.paused || video.ended) return;
+          ctx.drawImage(video, 0, 0, width, height);
+          rafId = window.requestAnimationFrame(drawFrame);
+        };
+
+        recorder.start(250);
+        await video.play();
+        drawFrame();
+      } catch (err) {
+        if (stopped) return;
+        stopped = true;
+        cleanup();
+        reject(err instanceof Error ? err : new Error('تعذر ضغط مقطع الفيديو.'));
+      }
+    };
+  });
+}
+
+/**
+ * Encodes a short story video blob as a cloud-syncable Data URL within Firestore's document budget
+ * so all authorized viewers can watch the video story across devices & accounts.
+ */
+export async function encodeShortVideoForCloudStory(
+  blob: Blob,
+  maxDataUrlChars = MAX_STATUS_MEDIA_BYTES - 16000
+): Promise<{ mediaUrl: string; compressed: boolean }> {
+  const directDataUrl = await blobToDataUrl(blob);
+  if (directDataUrl && directDataUrl.length <= maxDataUrlChars) {
+    return { mediaUrl: directDataUrl, compressed: false };
+  }
+
+  try {
+    const compressedBlob = await transcodeShortVideoBlob(blob, 18, 200_000, 360);
+    const compressedDataUrl = await blobToDataUrl(compressedBlob);
+    if (compressedDataUrl && compressedDataUrl.length <= maxDataUrlChars) {
+      return { mediaUrl: compressedDataUrl, compressed: true };
+    }
+  } catch {
+    // Fall through to descriptive error below
+  }
+
+  throw new Error(
+    'حجم مقطع الفيديو أكبر من الحد المسموح للمشاركة السحابية. يرجى اختيار أو تسجيل فيديو قصير (٥ إلى ٢٠ ثانية) بحجم أصغر.'
+  );
+}
+

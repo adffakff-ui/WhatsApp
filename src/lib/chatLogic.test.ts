@@ -31,8 +31,29 @@ import {
   searchAllChatsMessages,
   normalizeWasilId,
   validateWasilId,
-  suggestWasilIdFromName
+  suggestWasilIdFromName,
+  groupStoriesByUser,
+  stepStoryViewerPosition,
+  getMessageSearchableText,
+  SWIPE_REPLY_TRIGGER_PX,
+  SWIPE_REPLY_MAX_PX,
+  computeSwipeReplyOffset,
+  isSwipeReplyThresholdMet,
+  formatReplyPreviewText,
+  buildQuickReplySuggestions
 } from './chatLogic';
+import {
+  filterStickersByCategory,
+  getStickerById,
+  isLottieSticker,
+  STICKER_CATALOG,
+  STICKER_CATEGORIES
+} from './stickers';
+import {
+  cloneLottieData,
+  getLottieAnimationById,
+  isValidLottieData
+} from './lottieStickers';
 import type { ChatRoom, DecryptedMessage, PollOption, StatusItem } from '../types/chat';
 
 const sampleChats: ChatRoom[] = [
@@ -671,4 +692,224 @@ test('searchAllChatsMessages excludes messages created at or before clearedAtMs'
     ['m_new']
   );
 });
+
+test('groupStoriesByUser groups active 24h stories and stepStoryViewerPosition navigates across users', () => {
+  const now = 1_700_000_000_000;
+  const mkStory = (
+    id: string,
+    authorId: string,
+    authorName: string,
+    createdAtMs: number,
+    viewedByMe: boolean,
+    expiresAtMs = now + 3600_000
+  ): StatusItem => ({
+    id,
+    authorId,
+    authorName,
+    authorAvatar: '',
+    type: 'image',
+    content: id,
+    backgroundColor: '#005C4B',
+    mediaUrl: 'data:image/jpeg;base64,abc',
+    viewerIds: ['me', authorId],
+    viewedByIds: viewedByMe ? ['me'] : [],
+    viewCount: viewedByMe ? 1 : 0,
+    viewedByMe,
+    createdAtMs,
+    expiresAtMs
+  });
+
+  const groups = groupStoriesByUser(
+    [
+      mkStory('sara_2', 'u_sara', 'سارة', now - 1000, false),
+      mkStory('sara_1', 'u_sara', 'سارة', now - 5000, true),
+      mkStory('expired_1', 'u_old', 'قديم', now - STATUS_TTL_MS - 5000, false, now - 1000),
+      mkStory('omar_1', 'u_omar', 'عمر', now - 2000, true),
+      mkStory('me_1', 'me', 'أنا', now - 3000, true)
+    ],
+    'me',
+    now
+  );
+
+  // Order: self first, then unviewed contact (Sara), then viewed contact (Omar); expired omitted
+  assert.deepEqual(
+    groups.map((g) => g.authorId),
+    ['me', 'u_sara', 'u_omar']
+  );
+  // Stories within Sara sorted chronologically (sara_1 older -> sara_2 newer)
+  assert.deepEqual(
+    groups[1].stories.map((s) => s.id),
+    ['sara_1', 'sara_2']
+  );
+  assert.equal(groups[1].unviewedCount, 1);
+  assert.equal(groups[1].firstUnviewedIndex, 1);
+
+  // Step forward across user boundary: me(0) -> sara(firstUnviewed=1)
+  assert.deepEqual(stepStoryViewerPosition(groups, 0, 0, 'next'), { userIdx: 1, storyIdx: 1 });
+  // Step forward from sara(1) -> omar(0)
+  assert.deepEqual(stepStoryViewerPosition(groups, 1, 1, 'next'), { userIdx: 2, storyIdx: 0 });
+  // Step forward past last user returns null (exit viewer)
+  assert.equal(stepStoryViewerPosition(groups, 2, 0, 'next'), null);
+
+  // Step backward from omar(0) -> sara(last = 1)
+  assert.deepEqual(stepStoryViewerPosition(groups, 2, 0, 'prev'), { userIdx: 1, storyIdx: 1 });
+  // Step backward within sara: 1 -> 0
+  assert.deepEqual(stepStoryViewerPosition(groups, 1, 1, 'prev'), { userIdx: 1, storyIdx: 0 });
+  // Step backward from first user first story returns null
+  assert.equal(stepStoryViewerPosition(groups, 0, 0, 'prev'), null);
+});
+
+test('STICKER_CATALOG provides categorized Arabic stickers and searchable message text', () => {
+  assert.ok(STICKER_CATALOG.length >= 20);
+  const ids = new Set(STICKER_CATALOG.map((s) => s.id));
+  assert.equal(ids.size, STICKER_CATALOG.length);
+
+  for (const cat of STICKER_CATEGORIES) {
+    const items = filterStickersByCategory(cat.id);
+    assert.ok(items.length > 0, `Category ${cat.id} should not be empty`);
+  }
+
+  const sample = getStickerById('stk_salam');
+  assert.ok(sample);
+  assert.equal(sample.label, 'السلام عليكم');
+
+  const stickerMsg: DecryptedMessage = {
+    id: 'm_stk_1',
+    chatId: 'c_1',
+    senderId: 'u_1',
+    senderName: 'أحمد',
+    type: 'text',
+    payload: {
+      text: 'ملصق: السلام عليكم',
+      stickerId: 'stk_salam',
+      stickerLabel: 'السلام عليكم',
+      stickerCategory: 'greetings'
+    },
+    ciphertext: 'cipher',
+    iv: 'iv123',
+    algorithm: 'AES-GCM-256',
+    reactions: {},
+    reactionsCount: 0,
+    starredBy: [],
+    isDeleted: false,
+    status: 'sent',
+    createdAtMs: 5000
+  };
+  assert.ok(getMessageSearchableText(stickerMsg).includes('السلام عليكم'));
+});
+
+test('swipe-to-reply offset damping, threshold detection, preview formatting, and contextual quick replies', () => {
+  assert.equal(computeSwipeReplyOffset(25), 0);
+  assert.equal(computeSwipeReplyOffset(0), 0);
+  assert.equal(computeSwipeReplyOffset(Number.NaN), 0);
+  assert.equal(computeSwipeReplyOffset(-30), -30);
+  assert.equal(computeSwipeReplyOffset(-SWIPE_REPLY_TRIGGER_PX), -SWIPE_REPLY_TRIGGER_PX);
+  const damped = computeSwipeReplyOffset(-200);
+  assert.ok(damped < -SWIPE_REPLY_TRIGGER_PX && damped >= -SWIPE_REPLY_MAX_PX);
+
+  assert.equal(isSwipeReplyThresholdMet(-55), false);
+  assert.equal(isSwipeReplyThresholdMet(-SWIPE_REPLY_TRIGGER_PX), true);
+  assert.equal(isSwipeReplyThresholdMet(damped), true);
+
+  const mkMsg = (
+    type: DecryptedMessage['type'],
+    payload: DecryptedMessage['payload']
+  ): DecryptedMessage => ({
+    id: 'm_reply_1',
+    chatId: 'c_1',
+    senderId: 'peer_1',
+    senderName: 'سارة',
+    type,
+    payload,
+    ciphertext: 'c',
+    iv: 'iv',
+    algorithm: 'AES-GCM-256',
+    reactions: {},
+    reactionsCount: 0,
+    starredBy: [],
+    isDeleted: false,
+    status: 'read',
+    createdAtMs: 10_000
+  });
+
+  assert.equal(
+    formatReplyPreviewText(mkMsg('text', { text: 'ملصق: أهلاً', stickerLabel: 'أهلاً' })),
+    'ملصق: أهلاً'
+  );
+  assert.equal(formatReplyPreviewText(mkMsg('image', { text: '' })), 'صورة مرفقة');
+  assert.equal(formatReplyPreviewText(mkMsg('image', { text: 'لقطة شاشة' })), 'صورة: لقطة شاشة');
+  assert.equal(
+    formatReplyPreviewText(mkMsg('file', { text: 'ملف', fileName: 'report.pdf' })),
+    'ملف: report.pdf'
+  );
+  assert.equal(
+    formatReplyPreviewText(mkMsg('poll', { text: 'تصويت', pollQuestion: 'أين نلتقي؟' })),
+    'استطلاع: أين نلتقي؟'
+  );
+
+  const questionReplies = buildQuickReplySuggestions(
+    mkMsg('text', { text: 'هل الوقت مناسب الساعة ٥؟' }),
+    ['نعم، بالتأكيد ✅', 'سأتصل بك الآن', '   ']
+  );
+  assert.ok(questionReplies.includes('نعم، بالتأكيد ✅'));
+  assert.ok(questionReplies.includes('سأتصل بك الآن'));
+  // Deduplication check
+  assert.equal(
+    questionReplies.filter((x) => x === 'نعم، بالتأكيد ✅').length,
+    1
+  );
+  assert.ok(questionReplies.length <= 8);
+
+  const greetingReplies = buildQuickReplySuggestions(
+    mkMsg('text', { text: 'السلام عليكم يا أحمد' })
+  );
+  assert.equal(greetingReplies[0], 'وعليكم السلام ورحمة الله');
+});
+
+test('Lottie animated stickers integrate cleanly alongside static stickers and validate safely', () => {
+  const animated = filterStickersByCategory('animated');
+  assert.ok(animated.length >= 6);
+  const staticOnly = STICKER_CATALOG.filter((s) => !isLottieSticker(s));
+  assert.ok(staticOnly.length >= 20);
+  assert.equal(filterStickersByCategory('all').length, animated.length + staticOnly.length);
+
+  for (const stk of animated) {
+    assert.equal(isLottieSticker(stk), true);
+    const animData = getLottieAnimationById(stk.lottieId);
+    assert.ok(animData, `Missing Lottie animation data for ${stk.id}`);
+    assert.equal(isValidLottieData(animData), true);
+
+    const cloned = cloneLottieData(animData);
+    cloned.nm = 'MutatedTest';
+    assert.notEqual(animData.nm, 'MutatedTest');
+  }
+
+  assert.equal(isValidLottieData(null), false);
+  assert.equal(isValidLottieData({ w: 100, h: 100 }), false);
+  assert.equal(isValidLottieData({ fr: 30, op: 60, w: 100, h: 100, layers: [] }), false);
+
+  const customLottieMsg: DecryptedMessage = {
+    id: 'm_lot_1',
+    chatId: 'c_1',
+    senderId: 'peer_1',
+    senderName: 'سارة',
+    type: 'text',
+    payload: {
+      text: 'ملصق متحرك',
+      lottieId: 'lottie_heart_pulse'
+    },
+    ciphertext: 'c',
+    iv: 'iv',
+    algorithm: 'AES-GCM-256',
+    reactions: {},
+    reactionsCount: 0,
+    starredBy: [],
+    isDeleted: false,
+    status: 'read',
+    createdAtMs: 20_000
+  };
+  assert.equal(formatReplyPreviewText(customLottieMsg), 'ملصق متحرك');
+});
+
+
 

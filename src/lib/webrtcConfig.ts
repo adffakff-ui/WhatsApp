@@ -105,7 +105,8 @@ export const WEBRTC_RTC_CONFIG: RTCConfiguration = buildRtcConfiguration();
 export function buildMediaConstraints(
   callType: 'audio' | 'video',
   presetId: CallQualityPreset = 'ultra',
-  facingMode: 'user' | 'environment' = 'user'
+  facingMode: 'user' | 'environment' = 'user',
+  audioDeviceId?: string
 ): MediaStreamConstraints {
   const preset = CALL_QUALITY_PRESETS[presetId];
   const audio: MediaTrackConstraints = {
@@ -113,7 +114,8 @@ export function buildMediaConstraints(
     noiseSuppression: true,
     autoGainControl: true,
     channelCount: 2,
-    sampleRate: 48000
+    sampleRate: 48000,
+    ...(audioDeviceId ? { deviceId: { exact: audioDeviceId } } : {})
   };
 
   if (callType === 'audio') {
@@ -274,6 +276,9 @@ export function enhanceSdpMediaQuality(
       if (!updated.includes('useinbandfec=')) {
         updated += ';useinbandfec=1;usedtx=0';
       }
+      if (!updated.includes('maxplaybackrate=')) {
+        updated += ';maxplaybackrate=48000';
+      }
       out.push(updated);
       continue;
     }
@@ -303,11 +308,33 @@ export async function applySenderQualityPreset(
         params.degradationPreference = 'maintain-framerate';
       } else if (sender.track.kind === 'audio') {
         params.encodings[0].maxBitrate = preset.audioMaxBitrateKbps * 1000;
+        params.encodings[0].priority = 'high';
+        params.encodings[0].networkPriority = 'high';
       }
       await sender.setParameters(params);
     } catch {
       // Browser may restrict updating certain sender params dynamically
     }
+  }
+}
+
+export function prioritizeOpusAudioCodec(pc: RTCPeerConnection): void {
+  try {
+    if (typeof RTCRtpReceiver === 'undefined' || !RTCRtpReceiver.getCapabilities) return;
+    const caps = RTCRtpReceiver.getCapabilities('audio');
+    if (!caps?.codecs?.length) return;
+    const opusCodecs = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'audio/opus');
+    const otherCodecs = caps.codecs.filter((c) => c.mimeType.toLowerCase() !== 'audio/opus');
+    if (opusCodecs.length === 0) return;
+    const ordered = [...opusCodecs, ...otherCodecs];
+    for (const transceiver of pc.getTransceivers()) {
+      const kind = transceiver.receiver.track?.kind || transceiver.sender.track?.kind;
+      if (kind === 'audio' && typeof transceiver.setCodecPreferences === 'function') {
+        transceiver.setCodecPreferences(ordered);
+      }
+    }
+  } catch {
+    // Ignore on browsers that disallow setCodecPreferences before negotiation
   }
 }
 
