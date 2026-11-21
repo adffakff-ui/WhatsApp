@@ -2546,11 +2546,6 @@ export default function App() {
     replyText: string,
     statusPreview: string
   ) => {
-    if (!isCloudSynced || !auth.currentUser || !isRemoteFirebaseUid(currentUser.uid)) {
-      showToast('يجب تسجيل الدخول عبر Firebase للرد على الحالة');
-      return;
-    }
-
     const existing = chats.find(
       (c) => c.type === 'direct' && (c.peerUid === authorId || c.memberIds.includes(authorId))
     );
@@ -2564,11 +2559,6 @@ export default function App() {
         replyToText: statusPreview
       });
       showToast(`تم إرسال الرد إلى ${authorName}`);
-      return;
-    }
-
-    if (!isRemoteFirebaseUid(authorId)) {
-      showToast('تعذر فتح محادثة مع صاحب هذه الحالة');
       return;
     }
 
