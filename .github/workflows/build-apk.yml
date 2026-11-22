@@ -37,16 +37,13 @@ jobs:
           sdkmanager --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
           if [ ! -f ./gradlew ]; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq gradle
-            gradle wrapper --gradle-version 8.5 --distribution-type bin
+            curl -sSL "https://services.gradle.org/distributions/gradle-8.5-bin.zip" -o /tmp/gradle-8.5.zip
+            unzip -q -o /tmp/gradle-8.5.zip -d /tmp/gradle-dist
+            /tmp/gradle-dist/gradle-8.5/bin/gradle wrapper --gradle-version 8.5 --distribution-type bin
           fi
 
           chmod +x gradlew
-          if ! ./gradlew assembleDebug --stacktrace > gradle_build.log 2>&1; then
-            echo "=== LAST 40 LINES OF GRADLE ERROR ==="
-            tail -n 40 gradle_build.log
-            exit 1
-          fi
+          ./gradlew assembleDebug
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
