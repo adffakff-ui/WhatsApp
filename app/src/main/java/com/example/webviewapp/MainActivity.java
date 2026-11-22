@@ -9,6 +9,8 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import java.io.IOException;
+import java.util.Arrays;
 
 public class MainActivity extends Activity {
     private WebView webView;
@@ -37,7 +39,7 @@ public class MainActivity extends Activity {
                     String msg = "<html><body style='font-family:sans-serif;padding:20px;direction:ltr;'>"
                             + "<h3>JavaScript Error</h3>"
                             + "<p>" + consoleMessage.message() + "</p>"
-                            + "<p>Line: " + consoleMessage.lineNumber() + " | Source: " + consoleMessage.sourceId() + "</p>"
+                            + "<p>Line: " + consoleMessage.lineNumber() + "</p>"
                             + "</body></html>";
                     webView.loadDataWithBaseURL(null, msg, "text/html", "UTF-8", null);
                 }
@@ -50,9 +52,16 @@ public class MainActivity extends Activity {
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame() && !errorShown) {
                     errorShown = true;
+                    String files = "[]";
+                    try {
+                        files = Arrays.toString(getAssets().list(""));
+                    } catch (IOException ignored) {
+                    }
                     String html = "<html><body style='font-family:sans-serif;padding:20px;direction:rtl;'>"
                             + "<h3>خطأ في تحميل الصفحة</h3>"
-                            + "<p>" + error.getDescription() + "</p>"
+                            + "<p>السبب: " + error.getDescription() + "</p>"
+                            + "<p>الرابط: " + request.getUrl() + "</p>"
+                            + "<p>الملفات داخل assets: " + files + "</p>"
                             + "</body></html>";
                     view.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
                 }
