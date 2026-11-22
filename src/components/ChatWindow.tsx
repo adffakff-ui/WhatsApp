@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   FileText,
   Image as ImageIcon,
+  Images,
   BarChart3,
   Play,
   Pause,
@@ -44,6 +45,7 @@ import { HighlightText } from './HighlightText';
 import { ImageViewerModal } from './ImageViewerModal';
 import { ScheduleMessageModal } from './ScheduleMessageModal';
 import { LottieStickerPlayer } from './LottieStickerPlayer';
+import { VideoWallpaperLayer } from './VideoWallpaperLayer';
 import { resolveBundledAssetUrl } from '../data/assets';
 import {
   SWIPE_REPLY_TRIGGER_PX,
@@ -191,7 +193,18 @@ function computeClampedFloatingPosition(
   const vw = typeof window !== 'undefined' ? window.innerWidth : 390;
   const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
   const safeWidth = Math.min(menuWidth, vw - pad * 2);
-  const clampedLeft = Math.max(pad, Math.min(rect.left, vw - safeWidth - pad));
+
+  let clampedLeft = rect.left;
+  if (rect.right + safeWidth > vw - pad) {
+    clampedLeft = rect.right - safeWidth;
+  }
+  if (clampedLeft < pad) {
+    clampedLeft = pad;
+  }
+  if (clampedLeft + safeWidth > vw - pad) {
+    clampedLeft = vw - safeWidth - pad;
+  }
+
   const spaceBelow = Math.max(0, vh - rect.bottom - pad);
   const spaceAbove = Math.max(0, rect.top - pad);
 
@@ -343,7 +356,12 @@ export function ChatWindow({
   const [inChatSearchQuery, setInChatSearchQuery] = useState('');
   const [inChatFilterType, setInChatFilterType] = useState<MessageSearchFilter>('all');
   const [activeMatchIdx, setActiveMatchIdx] = useState(0);
-  const [lightboxImage, setLightboxImage] = useState<{ mediaUrl: string; caption?: string } | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<{
+    mediaUrl?: string;
+    images?: string[];
+    initialIndex?: number;
+    caption?: string;
+  } | null>(null);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [translatedMessages, setTranslatedMessages] = useState<
     Record<string, { result: TranslationResult; sourceText: string }>
@@ -885,16 +903,27 @@ export function ChatWindow({
   };
 
   const handleImagePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files || []);
     e.target.value = '';
     setShowAttachMenu(false);
-    if (!file) return;
+    if (files.length === 0) return;
     try {
-      const compressedUrl = await compressChatImageToDataUrl(file);
-      await onSendMessage('image', {
-        text: file.name,
-        mediaUrl: compressedUrl
-      });
+      if (files.length === 1) {
+        const compressedUrl = await compressChatImageToDataUrl(files[0]);
+        await onSendMessage('image', {
+          text: files[0].name,
+          mediaUrl: compressedUrl
+        });
+      } else {
+        const compressedUrls = await Promise.all(
+          files.map((file) => compressChatImageToDataUrl(file))
+        );
+        await onSendMessage('image', {
+          text: `${files.length} صور (ألبوم)`,
+          mediaUrl: compressedUrls[0],
+          mediaUrls: compressedUrls
+        });
+      }
     } catch {
       // Fallback ignored on invalid image
     }
@@ -1509,6 +1538,7 @@ export function ChatWindow({
               className={`pointer-events-none absolute inset-0 z-0 transition-all duration-200 ${resolvedWallpaper.className}`}
               style={resolvedWallpaper.style}
             />
+            <VideoWallpaperLayer resolved={resolvedWallpaper} className="z-[1]" />
             <div
               onScroll={() => {
                 if (activeMsgMenu) setActiveMsgMenu(null);
@@ -1642,19 +1672,163 @@ export function ChatWindow({
                   <p className="text-sm italic text-[#667781] dark:text-[#8696A0]">
                     تم حذف هذه الرسالة
                   </p>
-                ) : msg.type === 'image' && msg.payload.mediaUrl ? (
+                ) : msg.type === 'image' && (msg.payload.mediaUrl || (msg.payload.mediaUrls && msg.payload.mediaUrls.length > 0)) ? (
                   <div className="space-y-1.5">
-                    <img
-                      src={resolveBundledAssetUrl(msg.payload.mediaUrl)}
-                      alt={msg.payload.text || 'صورة مرفقة'}
-                      referrerPolicy="no-referrer"
-                      onClick={() => {
-                        if (suppressClickUntilRef.current > Date.now()) return;
-                        setLightboxImage({ mediaUrl: msg.payload.mediaUrl!, caption: msg.payload.text });
-                      }}
-                      className="rounded-lg max-h-72 w-full object-cover bg-black/10 cursor-pointer hover:opacity-95 transition-opacity"
-                      title="انقر لتكبير الصورة"
-                    />
+                    {msg.payload.mediaUrls && msg.payload.mediaUrls.length > 1 ? (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[#54656F] dark:text-[#AEBAC1] px-0.5">
+                          <Images className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
+                          <span>ألبوم وسائط · {msg.payload.mediaUrls.length} صور</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1 rounded-xl overflow-hidden bg-black/5 dark:bg-black/25 max-w-[280px] sm:max-w-[320px]">
+                          {msg.payload.mediaUrls.length === 2 ? (
+                            msg.payload.mediaUrls.map((url, idx) => (
+                              <div
+                                key={idx}
+                                className="relative aspect-square overflow-hidden cursor-pointer group"
+                                onClick={() => {
+                                  if (suppressClickUntilRef.current > Date.now()) return;
+                                  setLightboxImage({
+                                    images: msg.payload.mediaUrls,
+                                    initialIndex: idx,
+                                    caption: msg.payload.text
+                                  });
+                                }}
+                              >
+                                <img
+                                  src={resolveBundledAssetUrl(url)}
+                                  alt={`صورة ${idx + 1}`}
+                                  referrerPolicy="no-referrer"
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                />
+                              </div>
+                            ))
+                          ) : msg.payload.mediaUrls.length === 3 ? (
+                            <>
+                              <div
+                                className="row-span-2 relative aspect-[3/4] overflow-hidden cursor-pointer group"
+                                onClick={() => {
+                                  if (suppressClickUntilRef.current > Date.now()) return;
+                                  setLightboxImage({
+                                    images: msg.payload.mediaUrls,
+                                    initialIndex: 0,
+                                    caption: msg.payload.text
+                                  });
+                                }}
+                              >
+                                <img
+                                  src={resolveBundledAssetUrl(msg.payload.mediaUrls[0])}
+                                  alt="صورة 1"
+                                  referrerPolicy="no-referrer"
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                />
+                              </div>
+                              <div
+                                className="relative aspect-square overflow-hidden cursor-pointer group"
+                                onClick={() => {
+                                  if (suppressClickUntilRef.current > Date.now()) return;
+                                  setLightboxImage({
+                                    images: msg.payload.mediaUrls,
+                                    initialIndex: 1,
+                                    caption: msg.payload.text
+                                  });
+                                }}
+                              >
+                                <img
+                                  src={resolveBundledAssetUrl(msg.payload.mediaUrls[1])}
+                                  alt="صورة 2"
+                                  referrerPolicy="no-referrer"
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                />
+                              </div>
+                              <div
+                                className="relative aspect-square overflow-hidden cursor-pointer group"
+                                onClick={() => {
+                                  if (suppressClickUntilRef.current > Date.now()) return;
+                                  setLightboxImage({
+                                    images: msg.payload.mediaUrls,
+                                    initialIndex: 2,
+                                    caption: msg.payload.text
+                                  });
+                                }}
+                              >
+                                <img
+                                  src={resolveBundledAssetUrl(msg.payload.mediaUrls[2])}
+                                  alt="صورة 3"
+                                  referrerPolicy="no-referrer"
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                />
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              {msg.payload.mediaUrls.slice(0, 3).map((url, idx) => (
+                                <div
+                                  key={idx}
+                                  className="relative aspect-square overflow-hidden cursor-pointer group"
+                                  onClick={() => {
+                                    if (suppressClickUntilRef.current > Date.now()) return;
+                                    setLightboxImage({
+                                      images: msg.payload.mediaUrls,
+                                      initialIndex: idx,
+                                      caption: msg.payload.text
+                                    });
+                                  }}
+                                >
+                                  <img
+                                    src={resolveBundledAssetUrl(url)}
+                                    alt={`صورة ${idx + 1}`}
+                                    referrerPolicy="no-referrer"
+                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                  />
+                                </div>
+                              ))}
+                              <div
+                                className="relative aspect-square overflow-hidden cursor-pointer group"
+                                onClick={() => {
+                                  if (suppressClickUntilRef.current > Date.now()) return;
+                                  setLightboxImage({
+                                    images: msg.payload.mediaUrls,
+                                    initialIndex: 3,
+                                    caption: msg.payload.text
+                                  });
+                                }}
+                              >
+                                <img
+                                  src={resolveBundledAssetUrl(msg.payload.mediaUrls[3])}
+                                  alt="صورة 4"
+                                  referrerPolicy="no-referrer"
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                />
+                                {msg.payload.mediaUrls.length > 4 && (
+                                  <div className="absolute inset-0 bg-black/60 backdrop-blur-[1px] flex flex-col items-center justify-center text-white font-bold transition-opacity group-hover:bg-black/70">
+                                    <span className="text-xl sm:text-2xl font-display">
+                                      +{msg.payload.mediaUrls.length - 3}
+                                    </span>
+                                    <span className="text-[10px] opacity-90">عرض الألبوم</span>
+                                  </div>
+                                )}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <img
+                        src={resolveBundledAssetUrl(msg.payload.mediaUrl || msg.payload.mediaUrls?.[0] || '')}
+                        alt={msg.payload.text || 'صورة مرفقة'}
+                        referrerPolicy="no-referrer"
+                        onClick={() => {
+                          if (suppressClickUntilRef.current > Date.now()) return;
+                          setLightboxImage({
+                            mediaUrl: msg.payload.mediaUrl || msg.payload.mediaUrls?.[0],
+                            caption: msg.payload.text
+                          });
+                        }}
+                        className="rounded-lg max-h-72 w-full object-cover bg-black/10 cursor-pointer hover:opacity-95 transition-opacity"
+                        title="انقر لتكبير الصورة"
+                      />
+                    )}
                     {msg.payload.text && (
                       <p className={`${fontSizeClass} leading-relaxed whitespace-pre-wrap`}>
                         <HighlightText
@@ -2391,6 +2565,7 @@ export function ChatWindow({
           ref={imageInputRef}
           type="file"
           accept="image/*"
+          multiple
           onChange={handleImagePick}
           className="hidden"
         />
@@ -2708,6 +2883,8 @@ export function ChatWindow({
       {lightboxImage && (
         <ImageViewerModal
           mediaUrl={lightboxImage.mediaUrl}
+          images={lightboxImage.images}
+          initialIndex={lightboxImage.initialIndex}
           caption={lightboxImage.caption}
           onClose={() => setLightboxImage(null)}
         />
@@ -2747,7 +2924,7 @@ export function ChatWindow({
                 : { bottom: activeMsgMenu.bottom }),
               maxHeight: activeMsgMenu.maxHeight
             }}
-            className="fixed z-50 w-54 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl bg-white dark:bg-[#233138] shadow-2xl border border-[#E9EDEF] dark:border-[#374248] py-1.5 text-xs text-[#111B21] dark:text-[#E9EDEF]"
+            className="fixed z-[100] w-54 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl bg-white dark:bg-[#233138] shadow-2xl border border-[#E9EDEF] dark:border-[#374248] py-1.5 text-xs text-[#111B21] dark:text-[#E9EDEF]"
           >
             <div className="px-2.5 py-1.5 flex items-center justify-between border-b border-[#E9EDEF] dark:border-[#374248]">
               {['❤️', '👍', '😂', '😮', '🙏'].map((emoji) => (
@@ -2878,7 +3055,34 @@ export function ChatWindow({
                   <span>تعديل الرسالة</span>
                 </button>
               )}
-            {isMine && (
+            {isMine ? (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onDeleteMessage(msg.id);
+                    setActiveMsgMenu(null);
+                  }}
+                  className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer text-amber-600 dark:text-amber-400"
+                >
+                  <Trash2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                  <span>حذف لي</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onDeleteMessage(msg.id);
+                    setActiveMsgMenu(null);
+                  }}
+                  className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-red-50 dark:hover:bg-red-950/40 text-red-600 dark:text-red-400 cursor-pointer"
+                >
+                  <ShieldAlert className="w-3.5 h-3.5 shrink-0 text-red-500 animate-pulse" aria-hidden="true" />
+                  <span>حذف للجميع</span>
+                </button>
+              </>
+            ) : (
               <button
                 type="button"
                 role="menuitem"
@@ -2886,10 +3090,10 @@ export function ChatWindow({
                   onDeleteMessage(msg.id);
                   setActiveMsgMenu(null);
                 }}
-                className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-red-50 dark:hover:bg-red-950/40 text-red-600 dark:text-red-400 cursor-pointer"
+                className="w-full px-3.5 py-2 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] cursor-pointer text-amber-600 dark:text-amber-400"
               >
                 <Trash2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                <span>حذف للجميع</span>
+                <span>حذف لي</span>
               </button>
             )}
           </div>
@@ -2920,7 +3124,7 @@ export function ChatWindow({
                 : { bottom: activeReceipt.bottom }),
               maxHeight: activeReceipt.maxHeight
             }}
-            className="fixed z-50 w-64 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl bg-white dark:bg-[#233138] shadow-2xl border border-[#E9EDEF] dark:border-[#374248] p-3 text-right font-sans text-xs text-[#111B21] dark:text-[#E9EDEF]"
+            className="fixed z-[100] w-64 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl bg-white dark:bg-[#233138] shadow-2xl border border-[#E9EDEF] dark:border-[#374248] p-3 text-right font-sans text-xs text-[#111B21] dark:text-[#E9EDEF]"
           >
             <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-[#E9EDEF] dark:border-[#374248]">
               <span className="font-bold text-[12px]">حالة الرسالة</span>

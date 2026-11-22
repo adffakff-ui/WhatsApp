@@ -62,6 +62,8 @@ test('Dirty Dozen security invariants are enforced in firestore.rules', () => {
   assert.match(rulesContent, /isValidWallpaper/);
   assert.match(rulesContent, /'wallpaper'/);
   assert.match(rulesContent, /val\.size\(\) <= 65536/);
+  assert.match(rulesContent, /\^video:\(aurora\|ocean\|emerald\|nebula\)/);
+  assert.match(rulesContent, /\^localvideo:/);
 
   // 15. Blocked contacts list is owner-isolated & enforced on direct messages & calls
   assert.match(rulesContent, /match \/users\/\{userId\}\/blockedUsers\/\{blockedUid\}/);

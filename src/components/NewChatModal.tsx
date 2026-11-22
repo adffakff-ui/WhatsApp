@@ -511,7 +511,7 @@ export function NewChatModal({
                 className="w-full py-2 px-3 rounded-xl bg-[var(--wa-accent)] text-white text-xs font-semibold flex items-center justify-center gap-2 shadow-sm hover:brightness-95 transition-all cursor-pointer disabled:opacity-60"
               >
                 <Sparkles className="w-4 h-4" aria-hidden="true" />
-                <span>{isImporting ? 'جاري الاستيراد...' : 'استيراد جهات اتصال Google (Google Contacts)'}</span>
+                <span>{isImporting ? 'جاري الاتصال بـ Google...' : 'استيراد جهات اتصال Google (اختيار وفلترة ذكية)'}</span>
               </button>
             )}
 

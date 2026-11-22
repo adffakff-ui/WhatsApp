@@ -75,6 +75,7 @@ export interface PollOption {
 export interface MessagePayload {
   text: string;
   mediaUrl?: string;
+  mediaUrls?: string[];
   fileDataUrl?: string;
   fileName?: string;
   fileSizeLabel?: string;

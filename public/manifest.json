@@ -8,12 +8,30 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["window-controls-overlay", "standalone"],
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
   "orientation": "any",
   "theme_color": "#008069",
   "background_color": "#EAE6DF",
-  "categories": ["social", "communication"],
+  "categories": ["social", "communication", "productivity"],
+  "launch_handler": {
+    "client_mode": ["focus-existing", "auto"]
+  },
+  "edge_side_panel": {
+    "preferred_width": 420
+  },
+  "handle_links": "preferred",
   "prefer_related_applications": false,
+  "related_applications": [
+    {
+      "platform": "play",
+      "id": "com.wasil.messenger",
+      "url": "https://play.google.com/store/apps/details?id=com.wasil.messenger"
+    },
+    {
+      "platform": "webapp",
+      "url": "https://wasil-messenger.vercel.app/manifest.json"
+    }
+  ],
   "icons": [
     {
       "src": "/pwa-192x192.png",
@@ -32,6 +50,22 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/desktop-wide.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "واجهة تواصل على سطح المكتب مع المحادثات المشفرة والرسائل الصوتية"
+    },
+    {
+      "src": "/screenshots/mobile-narrow.png",
+      "sizes": "540x960",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "واجهة تواصل على الجوال مع الحالات اليومية وقائمة الدردشات"
     }
   ],
   "shortcuts": [
@@ -61,5 +95,20 @@
         }
       ]
     }
-  ]
+  ],
+  "protocol_handlers": [
+    {
+      "protocol": "web+wasil",
+      "url": "/?chat=%s"
+    }
+  ],
+  "share_target": {
+    "action": "/?share=1",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  }
 }

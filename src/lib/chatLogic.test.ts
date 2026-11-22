@@ -911,5 +911,51 @@ test('Lottie animated stickers integrate cleanly alongside static stickers and v
   assert.equal(formatReplyPreviewText(customLottieMsg), 'ملصق متحرك');
 });
 
+test('media album grouping in extractChatSharedAssets and formatReplyPreviewText', () => {
+  const albumMsg: DecryptedMessage = {
+    id: 'm_album_1',
+    chatId: 'c_1',
+    senderId: 'user_1',
+    senderName: 'عمر',
+    type: 'image',
+    payload: {
+      text: 'صور الرحلة',
+      mediaUrl: '/img1.jpg',
+      mediaUrls: ['/img1.jpg', '/img2.jpg', '/img3.jpg', '/img4.jpg']
+    },
+    ciphertext: 'cipher',
+    iv: 'iv',
+    algorithm: 'AES-GCM-256',
+    reactions: {},
+    reactionsCount: 0,
+    starredBy: [],
+    isDeleted: false,
+    status: 'sent',
+    createdAtMs: 50_000
+  };
+
+  // Preview text for multi-image album
+  assert.equal(formatReplyPreviewText(albumMsg), 'ألبوم صور (4)');
+
+  // Shared assets extraction unpacks all images in the album
+  const assets = extractChatSharedAssets([albumMsg]);
+  assert.equal(assets.media.length, 4);
+  assert.equal(assets.media[0].id, 'm_album_1_0');
+  assert.equal(assets.media[0].mediaUrl, '/img1.jpg');
+  assert.equal(assets.media[3].id, 'm_album_1_3');
+  assert.equal(assets.media[3].mediaUrl, '/img4.jpg');
+
+  // Single image preview
+  const singleImageMsg: DecryptedMessage = {
+    ...albumMsg,
+    id: 'm_single_1',
+    payload: {
+      text: 'غروب الشمس',
+      mediaUrl: '/sunset.jpg'
+    }
+  };
+  assert.equal(formatReplyPreviewText(singleImageMsg), 'صورة: غروب الشمس');
+});
+
 
 

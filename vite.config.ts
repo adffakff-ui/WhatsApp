@@ -20,7 +20,13 @@ export default defineConfig(() => {
           'pwa-192x192.png',
           'pwa-512x512.png',
           'pwa-maskable-512x512.png',
-          'twa-manifest.json'
+          'twa-manifest.json',
+          'screenshots/desktop-wide.png',
+          'screenshots/mobile-narrow.png',
+          'wallpapers/aurora.mp4',
+          'wallpapers/ocean.mp4',
+          'wallpapers/emerald.mp4',
+          'wallpapers/nebula.mp4'
         ],
         manifest: {
           id: '/',
@@ -33,12 +39,30 @@ export default defineConfig(() => {
           start_url: '/',
           scope: '/',
           display: 'standalone',
-          display_override: ['window-controls-overlay', 'standalone'],
+          display_override: ['window-controls-overlay', 'standalone', 'minimal-ui'],
           orientation: 'any',
           theme_color: '#008069',
           background_color: '#EAE6DF',
-          categories: ['social', 'communication'],
+          categories: ['social', 'communication', 'productivity'],
+          launch_handler: {
+            client_mode: ['focus-existing', 'auto']
+          },
+          edge_side_panel: {
+            preferred_width: 420
+          },
+          handle_links: 'preferred',
           prefer_related_applications: false,
+          related_applications: [
+            {
+              platform: 'play',
+              id: 'com.wasil.messenger',
+              url: 'https://play.google.com/store/apps/details?id=com.wasil.messenger'
+            },
+            {
+              platform: 'webapp',
+              url: 'https://wasil-messenger.vercel.app/manifest.json'
+            }
+          ],
           icons: [
             {
               src: '/pwa-192x192.png',
@@ -59,6 +83,22 @@ export default defineConfig(() => {
               purpose: 'maskable'
             }
           ],
+          screenshots: [
+            {
+              src: '/screenshots/desktop-wide.png',
+              sizes: '1280x720',
+              type: 'image/png',
+              form_factor: 'wide',
+              label: 'واجهة تواصل على سطح المكتب مع المحادثات المشفرة والرسائل الصوتية'
+            },
+            {
+              src: '/screenshots/mobile-narrow.png',
+              sizes: '540x960',
+              type: 'image/png',
+              form_factor: 'narrow',
+              label: 'واجهة تواصل على الجوال مع الحالات اليومية وقائمة الدردشات'
+            }
+          ],
           shortcuts: [
             {
               name: 'محادثة جديدة',
@@ -74,8 +114,23 @@ export default defineConfig(() => {
               url: '/?tab=status',
               icons: [{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' }]
             }
-          ]
-        },
+          ],
+          protocol_handlers: [
+            {
+              protocol: 'web+wasil',
+              url: '/?chat=%s'
+            }
+          ],
+          share_target: {
+            action: '/?share=1',
+            method: 'GET',
+            params: {
+              title: 'title',
+              text: 'text',
+              url: 'url'
+            }
+          }
+        } as Record<string, unknown>,
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,woff,woff2}'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,

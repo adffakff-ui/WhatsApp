@@ -1,9 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CURATED_VIDEO_WALLPAPERS,
   MAX_CHAT_WALLPAPER_LENGTH,
+  formatVideoWallpaperValue,
   normalizeChatWallpaper,
-  resolveChatWallpaper
+  parseVideoWallpaperValue,
+  resolveChatWallpaper,
+  withVideoWallpaperMuted
 } from './chatWallpaper';
 
 test('normalizeChatWallpaper accepts presets, hex colors, valid image data URLs, and rejects unsafe inputs', () => {
@@ -17,10 +21,16 @@ test('normalizeChatWallpaper accepts presets, hex colors, valid image data URLs,
   const validImg = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==';
   assert.equal(normalizeChatWallpaper(validImg), validImg);
 
+  assert.equal(normalizeChatWallpaper('video:aurora:muted'), 'video:aurora:muted');
+  assert.equal(normalizeChatWallpaper('video:ocean:sound'), 'video:ocean:sound');
+  assert.equal(normalizeChatWallpaper('localvideo:vid_123_abc:muted'), 'localvideo:vid_123_abc:muted');
+
   // Reject unsafe or oversized values
   assert.equal(normalizeChatWallpaper('javascript:alert(1)'), '');
   assert.equal(normalizeChatWallpaper('https://example.com/bg.jpg'), '');
   assert.equal(normalizeChatWallpaper('data:image/svg+xml;base64,PHN2Zz4='), '');
+  assert.equal(normalizeChatWallpaper('video:unknown_clip:muted'), '');
+  assert.equal(normalizeChatWallpaper('localvideo:bad/id:muted'), '');
   const oversized = `data:image/jpeg;base64,${'A'.repeat(MAX_CHAT_WALLPAPER_LENGTH)}`;
   assert.equal(normalizeChatWallpaper(oversized), '');
 });
@@ -54,4 +64,29 @@ test('resolveChatWallpaper resolves custom preset, solid hex color, and custom i
   assert.equal(resolvedImg.isCustomOverride, true);
   assert.equal(resolvedImg.imageUrl, img);
   assert.ok(String(resolvedImg.style?.backgroundImage).includes(img));
+});
+
+test('short video wallpapers resolve with auto-mute defaults and toggle sound cleanly', () => {
+  assert.equal(CURATED_VIDEO_WALLPAPERS.length >= 4, true);
+
+  const defaultMutedToken = formatVideoWallpaperValue('curated', 'aurora', true);
+  assert.equal(defaultMutedToken, 'video:aurora:muted');
+
+  const resolvedCurated = resolveChatWallpaper(defaultMutedToken, 'pattern');
+  assert.equal(resolvedCurated.mode, 'video');
+  assert.equal(resolvedCurated.videoKind, 'curated');
+  assert.equal(resolvedCurated.videoId, 'aurora');
+  assert.equal(resolvedCurated.videoSrc, '/wallpapers/aurora.mp4');
+  assert.equal(resolvedCurated.videoMuted, true);
+
+  const unmutedToken = withVideoWallpaperMuted(defaultMutedToken, false);
+  assert.equal(unmutedToken, 'video:aurora:sound');
+  const resolvedUnmuted = resolveChatWallpaper(unmutedToken, 'pattern');
+  assert.equal(resolvedUnmuted.videoMuted, false);
+
+  const localToken = formatVideoWallpaperValue('local', 'vid_local_999', true);
+  const parsedLocal = parseVideoWallpaperValue(localToken);
+  assert.equal(parsedLocal?.kind, 'local');
+  assert.equal(parsedLocal?.id, 'vid_local_999');
+  assert.equal(parsedLocal?.muted, true);
 });

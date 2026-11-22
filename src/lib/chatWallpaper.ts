@@ -14,6 +14,51 @@ export const PRESET_WALLPAPER_IDS: readonly ChatWallpaperId[] = [
 
 export const HEX_WALLPAPER_REGEX = /^#[0-9a-fA-F]{6}$/;
 export const DATA_IMAGE_WALLPAPER_REGEX = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+export const CURATED_VIDEO_WALLPAPER_REGEX =
+  /^video:(aurora|ocean|emerald|nebula)(:(muted|sound))?$/;
+export const LOCAL_VIDEO_WALLPAPER_REGEX =
+  /^localvideo:[a-zA-Z0-9_-]{4,64}(:(muted|sound))?$/;
+
+export type CuratedVideoWallpaperId = 'aurora' | 'ocean' | 'emerald' | 'nebula';
+
+export interface CuratedVideoWallpaper {
+  id: CuratedVideoWallpaperId;
+  name: string;
+  src: string;
+  accent: string;
+  durationLabel: string;
+}
+
+export const CURATED_VIDEO_WALLPAPERS: CuratedVideoWallpaper[] = [
+  {
+    id: 'aurora',
+    name: 'شفق قطبي متحرك',
+    src: '/wallpapers/aurora.mp4',
+    accent: '#0F766E',
+    durationLabel: '6 ث'
+  },
+  {
+    id: 'ocean',
+    name: 'أمواج المحيط الهادئة',
+    src: '/wallpapers/ocean.mp4',
+    accent: '#0369A1',
+    durationLabel: '6 ث'
+  },
+  {
+    id: 'emerald',
+    name: 'تدرج زمردي ناعم',
+    src: '/wallpapers/emerald.mp4',
+    accent: '#008069',
+    durationLabel: '6 ث'
+  },
+  {
+    id: 'nebula',
+    name: 'سديم ليلي عميق',
+    src: '/wallpapers/nebula.mp4',
+    accent: '#3B0764',
+    durationLabel: '6 ث'
+  }
+];
 
 export interface CuratedColorWallpaper {
   hex: string;
@@ -43,6 +88,69 @@ export function isValidWallpaperDataUrl(value: string): boolean {
   return value.length <= MAX_CHAT_WALLPAPER_LENGTH && DATA_IMAGE_WALLPAPER_REGEX.test(value);
 }
 
+export function isValidVideoWallpaperValue(value: string): boolean {
+  return CURATED_VIDEO_WALLPAPER_REGEX.test(value) || LOCAL_VIDEO_WALLPAPER_REGEX.test(value);
+}
+
+export interface ParsedVideoWallpaper {
+  kind: 'curated' | 'local';
+  id: string;
+  src: string | null;
+  muted: boolean;
+  label: string;
+  fallbackColor: string;
+}
+
+export function parseVideoWallpaperValue(value: string): ParsedVideoWallpaper | null {
+  if (CURATED_VIDEO_WALLPAPER_REGEX.test(value)) {
+    const parts = value.split(':');
+    const clipId = parts[1] as CuratedVideoWallpaperId;
+    const modeFlag = parts[2];
+    const meta =
+      CURATED_VIDEO_WALLPAPERS.find((v) => v.id === clipId) || CURATED_VIDEO_WALLPAPERS[0];
+    return {
+      kind: 'curated',
+      id: clipId,
+      src: meta.src,
+      muted: modeFlag !== 'sound',
+      label: meta.name,
+      fallbackColor: meta.accent
+    };
+  }
+
+  if (LOCAL_VIDEO_WALLPAPER_REGEX.test(value)) {
+    const parts = value.split(':');
+    const localId = parts[1];
+    const modeFlag = parts[2];
+    return {
+      kind: 'local',
+      id: localId,
+      src: null,
+      muted: modeFlag !== 'sound',
+      label: 'مقطع فيديو مخصص',
+      fallbackColor: '#0B141A'
+    };
+  }
+
+  return null;
+}
+
+export function formatVideoWallpaperValue(
+  kind: 'curated' | 'local',
+  id: string,
+  muted = true
+): string {
+  const prefix = kind === 'curated' ? 'video' : 'localvideo';
+  const suffix = muted ? 'muted' : 'sound';
+  return `${prefix}:${id}:${suffix}`;
+}
+
+export function withVideoWallpaperMuted(value: string, muted: boolean): string {
+  const parsed = parseVideoWallpaperValue(value);
+  if (!parsed) return value;
+  return formatVideoWallpaperValue(parsed.kind, parsed.id, muted);
+}
+
 /**
  * Validates and normalizes a per-chat wallpaper value in sync with
  * firebase-blueprint.json and firestore.rules constraints.
@@ -63,17 +171,24 @@ export function normalizeChatWallpaper(raw: unknown): string {
   if (isValidWallpaperDataUrl(trimmed)) {
     return trimmed;
   }
+  if (isValidVideoWallpaperValue(trimmed)) {
+    return trimmed;
+  }
   return '';
 }
 
 export interface ResolvedChatWallpaper {
-  mode: 'default' | 'preset' | 'color' | 'image';
+  mode: 'default' | 'preset' | 'color' | 'image' | 'video';
   className: string;
   style?: CSSProperties;
   label: string;
   isCustomOverride: boolean;
   swatchColor?: string;
   imageUrl?: string;
+  videoKind?: 'curated' | 'local';
+  videoId?: string;
+  videoSrc?: string | null;
+  videoMuted?: boolean;
 }
 
 export function resolveChatWallpaper(
@@ -115,6 +230,22 @@ export function resolveChatWallpaper(
       label: curated ? curated.name : `لون مخصص (${normalized})`,
       isCustomOverride: true,
       swatchColor: normalized
+    };
+  }
+
+  const parsedVideo = parseVideoWallpaperValue(normalized);
+  if (parsedVideo) {
+    return {
+      mode: 'video',
+      className: '',
+      style: { backgroundColor: parsedVideo.fallbackColor },
+      label: parsedVideo.label,
+      isCustomOverride: true,
+      swatchColor: parsedVideo.fallbackColor,
+      videoKind: parsedVideo.kind,
+      videoId: parsedVideo.id,
+      videoSrc: parsedVideo.src,
+      videoMuted: parsedVideo.muted
     };
   }
 

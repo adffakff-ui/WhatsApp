@@ -31,7 +31,7 @@ const firebaseConfig = {
 };
 
 const databaseId =
-  metaEnv?.VITE_FIREBASE_DATABASE_ID || appletConfig.firestoreDatabaseId || '(default)';
+  metaEnv?.VITE_FIREBASE_DATABASE_ID || (appletConfig as Record<string, any>).firestoreDatabaseId || '(default)';
 
 const app = initializeApp(firebaseConfig);
 
@@ -59,6 +59,7 @@ googleProvider.addScope('https://www.googleapis.com/auth/contacts');
 googleProvider.addScope('https://www.googleapis.com/auth/contacts.readonly');
 googleProvider.addScope('https://www.googleapis.com/auth/user.emails.read');
 googleProvider.addScope('https://www.googleapis.com/auth/user.phonenumbers.read');
+googleProvider.addScope('https://www.googleapis.com/auth/drive.file');
 
 export enum OperationType {
   CREATE = 'create',

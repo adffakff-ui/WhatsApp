@@ -22,6 +22,7 @@ import {
   Ban,
   Search,
   UserX,
+  Users,
   ExternalLink
 } from 'lucide-react';
 import { Avatar } from './Avatar';
@@ -73,11 +74,14 @@ interface SettingsViewProps {
   onOpenOmarAddons?: () => void;
   onBackupData?: () => Promise<void>;
   onRestoreData?: () => Promise<void>;
+  onGoogleDriveBackup?: () => Promise<void>;
+  onGoogleDriveRestore?: () => Promise<void>;
   contacts?: UserProfile[];
   blockedContacts?: BlockedContact[];
   onBlockContact?: (target: UserProfile) => Promise<void>;
   onUnblockContact?: (blockedUid: string) => Promise<void>;
   onLookupUser?: (query: string) => Promise<UserProfile | null>;
+  onImportGoogleContacts?: () => Promise<void>;
 }
 
 async function compressImageToAvatarDataUrl(file: File): Promise<string> {
@@ -132,11 +136,14 @@ export function SettingsView({
   onOpenOmarAddons,
   onBackupData,
   onRestoreData,
+  onGoogleDriveBackup,
+  onGoogleDriveRestore,
   contacts = [],
   blockedContacts = [],
   onBlockContact,
   onUnblockContact,
-  onLookupUser
+  onLookupUser,
+  onImportGoogleContacts
 }: SettingsViewProps) {
   const [displayName, setDisplayName] = useState(currentUser.displayName);
   const [about, setAbout] = useState(currentUser.about);
@@ -1026,6 +1033,39 @@ export function SettingsView({
             </div>
           </div>
 
+          {/* Google Drive Encrypted Backup */}
+          <div className="space-y-2.5 pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">
+            <h2 className="text-xs font-semibold text-[#54656F] dark:text-[#8696A0] flex items-center gap-1.5">
+              <Lock className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
+              <span>نسخ احتياطي مشفر بـ AES عبر Google Drive (اختياري)</span>
+            </h2>
+            <p className="text-[11px] text-[#54656F] dark:text-[#8696A0]">
+              ربط Google Drive لتخزين واستعادة نسخ احتياطية مشفرة بالكامل لمحادثاتك، بدلاً من الاعتماد فقط على Firestore.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+              {onGoogleDriveBackup && (
+                <button
+                  type="button"
+                  onClick={() => void onGoogleDriveBackup()}
+                  className="py-2.5 px-3 rounded-xl bg-[var(--wa-accent)] text-white text-xs font-bold hover:brightness-95 flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                >
+                  <Download className="w-4 h-4 rotate-180" />
+                  <span>رفع نسخة مشفرة لـ Drive</span>
+                </button>
+              )}
+              {onGoogleDriveRestore && (
+                <button
+                  type="button"
+                  onClick={() => void onGoogleDriveRestore()}
+                  className="py-2.5 px-3 rounded-xl bg-[#F0F2F5] dark:bg-[#202C33] text-[#111B21] dark:text-[#E9EDEF] text-xs font-bold hover:bg-[#E9EDEF] dark:hover:bg-[#2A3942] flex items-center justify-center gap-1.5 cursor-pointer border border-[#E9EDEF] dark:border-[#374248]"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>استعادة من Drive</span>
+                </button>
+              )}
+            </div>
+          </div>
+
           {/* Standalone Install Portal Link */}
           <div className="pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">
             <a
@@ -1048,6 +1088,17 @@ export function SettingsView({
 
           {/* Account Actions */}
           <div className="space-y-2.5">
+            {onImportGoogleContacts && (
+              <button
+                type="button"
+                onClick={() => void onImportGoogleContacts()}
+                className="w-full py-2.5 px-4 rounded-xl border border-[var(--wa-accent)]/30 bg-[var(--wa-accent-soft)]/50 text-[var(--wa-accent-strong)] text-sm font-semibold flex items-center justify-center gap-2 hover:brightness-95 transition-all cursor-pointer"
+              >
+                <Users className="w-4 h-4" aria-hidden="true" />
+                <span>استيراد جهات اتصال Google (اختيار وفلترة ذكية)</span>
+              </button>
+            )}
+
             {!isCloudSynced && (
               <button
                 type="button"

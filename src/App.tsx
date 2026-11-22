@@ -23,6 +23,7 @@ import {
   KeyRound
 } from 'lucide-react';
 import { auth, googleProvider } from './lib/firebase';
+import { uploadBackupToGoogleDrive, restoreBackupFromGoogleDrive } from './services/googleDriveBackup';
 import { BUNDLED_ASSETS } from './data/assets';
 import { mapFirebaseAuthErrorToArabic, parseWasilBackupJson } from './lib/authHelpers';
 import { verifyBiometricCredential } from './lib/webauthn';
@@ -128,6 +129,7 @@ import { CallsView } from './components/CallsView';
 import { CallOverlay } from './components/CallOverlay';
 import { SettingsView } from './components/SettingsView';
 import { NewChatModal } from './components/NewChatModal';
+import { GoogleContactsPickerModal, type RawGoogleContact } from './components/GoogleContactsPickerModal';
 import { CommunitiesView, type SuggestedChannelItem } from './components/CommunitiesView';
 import { StarredView } from './components/StarredView';
 import { ScheduledMessagesModal } from './components/ScheduledMessagesModal';
@@ -373,7 +375,16 @@ export default function App() {
   const [newChatModalMode, setNewChatModalMode] = useState<'direct' | 'group' | 'community' | null>(null);
   const [newChatInitialQuery, setNewChatInitialQuery] = useState('');
   const [activeCall, setActiveCall] = useState<CallRecord | null>(null);
-  const [googleContacts, setGoogleContacts] = useState<UserProfile[]>([]);
+  const [googleContacts, setGoogleContacts] = useState<UserProfile[]>(() => {
+    try {
+      const saved = localStorage.getItem('wasil_google_contacts');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [rawGoogleContacts, setRawGoogleContacts] = useState<RawGoogleContact[]>([]);
+  const [showGoogleContactsPicker, setShowGoogleContactsPicker] = useState(false);
 
   // WhatsApp Omar Lock & Broadcast Modal states
   const [unlockedSessionChatIds, setUnlockedSessionChatIds] = useState<string[]>([]);
@@ -420,8 +431,9 @@ export default function App() {
           throw new Error('لم يتم الحصول على رمز الوصول من Google.');
         }
       }
+      showToast('جاري جلب جهات الاتصال من Google...');
       const res = await fetch(
-        'https://people.googleapis.com/v1/people/me/connections?personFields=names,emailAddresses,phoneNumbers,photos',
+        'https://people.googleapis.com/v1/people/me/connections?personFields=names,emailAddresses,phoneNumbers,photos&pageSize=1000',
         {
           headers: {
             Authorization: `Bearer ${accessToken}`
@@ -433,28 +445,45 @@ export default function App() {
       }
       const data = await res.json();
       const connections = data.connections || [];
-      const imported: UserProfile[] = connections.map((c: any, index: number) => {
+      if (connections.length === 0) {
+        showToast('لم يتم العثور على أي جهات اتصال في حساب Google الخاص بك.');
+        return;
+      }
+      const parsed: RawGoogleContact[] = connections.map((c: any, index: number) => {
         const name = c.names?.[0]?.displayName || c.emailAddresses?.[0]?.value || 'جهة اتصال Google';
         const email = c.emailAddresses?.[0]?.value || '';
         const phone = c.phoneNumbers?.[0]?.value || '';
         const photo = c.photos?.[0]?.url || '';
-        const uid = `gcontact_${index}_${Math.random().toString(36).slice(2, 7)}`;
         return {
-          uid,
+          id: c.resourceName || `raw_gc_${index}_${name}`,
           displayName: name,
-          about: phone ? `هاتف: ${phone}` : email ? `بريد: ${email}` : 'جهة اتصال مستوردة',
-          avatarUrl: photo,
-          publicKeyJwk: '',
-          safetyCode: '00000 00000 00000 00000',
-          isOnline: true,
-          lastSeenMs: Date.now()
+          email,
+          phone,
+          photo
         };
       });
-      setGoogleContacts(imported);
-      showToast(`تم استيراد ${imported.length} جهة اتصال بنجاح من Google Contacts`);
+      setRawGoogleContacts(parsed);
+      setShowGoogleContactsPicker(true);
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'تعذر استيراد جهات الاتصال.');
     }
+  };
+
+  const handleConfirmImportGoogleContacts = (selected: UserProfile[]) => {
+    setGoogleContacts((prev) => {
+      const existingKeys = new Set(
+        prev.map((c) => (c.displayName + (c.phone || '') + (c.email || '')).toLowerCase())
+      );
+      const filteredNew = selected.filter(
+        (c) => !existingKeys.has((c.displayName + (c.phone || '') + (c.email || '')).toLowerCase())
+      );
+      const updated = [...prev, ...filteredNew];
+      try {
+        localStorage.setItem('wasil_google_contacts', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    showToast(`تم استيراد ${selected.length} جهة اتصال محددة بنجاح من Google`);
   };
 
   // Sync HTML .dark class and data-omar-theme attribute
@@ -2786,6 +2815,83 @@ export default function App() {
     showToast('تمت استعادة بياناتك من النسخة الاحتياطية السحابية بنجاح');
   };
 
+  const handleGoogleDriveBackup = async () => {
+    try {
+      let accessToken = localStorage.getItem('google_access_token');
+      if (!accessToken) {
+        const result = await signInWithPopup(auth, googleProvider);
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (credential?.accessToken) {
+          accessToken = credential.accessToken;
+          localStorage.setItem('google_access_token', accessToken);
+        } else {
+          throw new Error('تعذر الحصول على صلاحيات Google Drive.');
+        }
+      }
+      const backupPayload = {
+        version: 1,
+        exportedAtMs: Date.now(),
+        profile: currentUser,
+        privacySettings,
+        omarSettings,
+        chats,
+        messages: messagesMap,
+        statuses,
+        calls
+      };
+      await uploadBackupToGoogleDrive(backupPayload, accessToken);
+      showToast('تم رفع النسخة الاحتياطية المشفرة بـ AES إلى Google Drive بنجاح');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'فشل النسخ الاحتياطي إلى Google Drive');
+    }
+  };
+
+  const handleGoogleDriveRestore = async () => {
+    try {
+      let accessToken = localStorage.getItem('google_access_token');
+      if (!accessToken) {
+        const result = await signInWithPopup(auth, googleProvider);
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (credential?.accessToken) {
+          accessToken = credential.accessToken;
+          localStorage.setItem('google_access_token', accessToken);
+        } else {
+          throw new Error('تعذر الحصول على صلاحيات Google Drive.');
+        }
+      }
+      const restored = (await restoreBackupFromGoogleDrive(accessToken)) as any;
+      if (!restored) {
+        showToast('لم يتم العثور على نسخة احتياطية في Google Drive');
+        return;
+      }
+      if (restored.omarSettings) {
+        setOmarSettings((prev) => ({ ...prev, ...restored.omarSettings }));
+      }
+      if (restored.privacySettings) {
+        setPrivacySettings((prev) => ({ ...prev, ...restored.privacySettings }));
+      }
+      if (restored.profile) {
+        setCurrentUser((prev) => ({ ...prev, ...restored.profile }));
+      }
+      if (Array.isArray(restored.chats)) {
+        setChats(restored.chats);
+        if (restored.chats.length > 0) setSelectedChatId(restored.chats[0].id);
+      }
+      if (restored.messages && typeof restored.messages === 'object') {
+        setMessagesMap(restored.messages);
+      }
+      if (Array.isArray(restored.statuses)) {
+        setStatuses(filterActiveStatuses(restored.statuses));
+      }
+      if (Array.isArray(restored.calls)) {
+        setCalls(restored.calls);
+      }
+      showToast('تمت استعادة النسخة الاحتياطية المشفرة من Google Drive بنجاح');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'فشل الاستعادة من Google Drive');
+    }
+  };
+
   const handleUpdatePrivacy = async (nextPrivacy: PrivacySettings) => {
     setPrivacySettings(nextPrivacy);
     if (isCloudSynced) {
@@ -3257,11 +3363,14 @@ export default function App() {
             onOpenOmarAddons={() => setActiveTab('omar')}
             onBackupData={handleBackupUserData}
             onRestoreData={handleRestoreUserData}
+            onGoogleDriveBackup={handleGoogleDriveBackup}
+            onGoogleDriveRestore={handleGoogleDriveRestore}
             contacts={contactsList}
             blockedContacts={blockedContacts}
             onBlockContact={handleBlockContact}
             onUnblockContact={handleUnblockContact}
             onLookupUser={lookupUserByWasilIdOrUid}
+            onImportGoogleContacts={handleImportGoogleContacts}
           />
         )}
       </div>
@@ -3282,6 +3391,14 @@ export default function App() {
         onCreateGroupChat={handleCreateGroupChat}
         onLookupPeerByUid={lookupUserByWasilIdOrUid}
         onImportGoogleContacts={handleImportGoogleContacts}
+      />
+
+      {/* Smart Google Contacts Picker Modal */}
+      <GoogleContactsPickerModal
+        isOpen={showGoogleContactsPicker}
+        rawContacts={rawGoogleContacts}
+        onClose={() => setShowGoogleContactsPicker(false)}
+        onConfirmImport={handleConfirmImportGoogleContacts}
       />
 
       {/* Sign Out Confirmation Modal */}

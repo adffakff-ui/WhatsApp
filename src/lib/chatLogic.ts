@@ -454,14 +454,26 @@ export function extractChatSharedAssets(messages: DecryptedMessage[]): ChatShare
     .sort((a, b) => b.createdAtMs - a.createdAtMs);
 
   for (const msg of activeMessages) {
-    if (msg.type === 'image' && msg.payload.mediaUrl) {
-      media.push({
-        id: msg.id,
-        mediaUrl: msg.payload.mediaUrl,
-        caption: msg.payload.text || '',
-        senderName: msg.senderName,
-        createdAtMs: msg.createdAtMs
-      });
+    if (msg.type === 'image') {
+      if (Array.isArray(msg.payload.mediaUrls) && msg.payload.mediaUrls.length > 0) {
+        msg.payload.mediaUrls.forEach((url, idx) => {
+          media.push({
+            id: `${msg.id}_${idx}`,
+            mediaUrl: url,
+            caption: msg.payload.text || '',
+            senderName: msg.senderName,
+            createdAtMs: msg.createdAtMs
+          });
+        });
+      } else if (msg.payload.mediaUrl) {
+        media.push({
+          id: msg.id,
+          mediaUrl: msg.payload.mediaUrl,
+          caption: msg.payload.text || '',
+          senderName: msg.senderName,
+          createdAtMs: msg.createdAtMs
+        });
+      }
     }
 
     if (msg.type === 'file') {
@@ -915,6 +927,9 @@ export function formatReplyPreviewText(msg: DecryptedMessage): string {
     return 'ملصق متحرك';
   }
   if (msg.type === 'image') {
+    if (Array.isArray(msg.payload.mediaUrls) && msg.payload.mediaUrls.length > 1) {
+      return `ألبوم صور (${msg.payload.mediaUrls.length})`;
+    }
     const caption = (msg.payload.text || '').trim();
     return caption ? `صورة: ${caption.slice(0, 100)}` : 'صورة مرفقة';
   }

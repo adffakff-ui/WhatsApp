@@ -38,6 +38,7 @@ interface PackageChecks {
   assetLinks: boolean;
   serviceWorker: boolean;
   icons: boolean;
+  richStoreMeta: boolean;
   displayStandalone: boolean;
   publicHttps: boolean;
 }
@@ -85,6 +86,7 @@ export function InstallPortal() {
     assetLinks: true,
     serviceWorker: true,
     icons: true,
+    richStoreMeta: true,
     displayStandalone: true,
     publicHttps: false
   });
@@ -123,10 +125,17 @@ export function InstallPortal() {
         fetch('/.well-known/assetlinks.json', { cache: 'no-store' }).catch(() => null)
       ]);
 
-      let manifestJson: { icons?: unknown[]; display?: string } | null = null;
+      let manifestJson: {
+        icons?: unknown[];
+        screenshots?: unknown[];
+        related_applications?: unknown[];
+        display?: string;
+      } | null = null;
       if (manifestRes?.ok) {
         manifestJson = (await manifestRes.json().catch(() => null)) as {
           icons?: unknown[];
+          screenshots?: unknown[];
+          related_applications?: unknown[];
           display?: string;
         } | null;
       }
@@ -142,6 +151,12 @@ export function InstallPortal() {
         assetLinks: assetLinksOk,
         serviceWorker: typeof navigator !== 'undefined' && 'serviceWorker' in navigator,
         icons: Boolean(manifestJson?.icons && manifestJson.icons.length >= 2),
+        richStoreMeta: Boolean(
+          manifestJson?.screenshots &&
+            manifestJson.screenshots.length >= 2 &&
+            manifestJson?.related_applications &&
+            manifestJson.related_applications.length >= 1
+        ),
         displayStandalone: manifestJson?.display === 'standalone',
         publicHttps: isPublicHttpsOrigin(window.location.origin)
       });
@@ -214,6 +229,7 @@ export function InstallPortal() {
     checks.assetLinks,
     checks.serviceWorker,
     checks.icons,
+    checks.richStoreMeta,
     checks.displayStandalone
   ].filter(Boolean).length;
 
@@ -405,7 +421,7 @@ export function InstallPortal() {
               }`}
             >
               <ShieldCheck className="w-4 h-4" aria-hidden="true" />
-              <span>فحص الملفات الفعلية ({scoreCount}/6)</span>
+              <span>فحص الملفات الفعلية ({scoreCount}/7)</span>
             </button>
           </div>
 
@@ -666,6 +682,11 @@ export function InstallPortal() {
                     ok: checks.icons,
                     title: 'أيقونات PNG الفعلية (192x192 و 512x512 + Maskable)',
                     desc: 'أيقونات مضبوطة الأبعاد ومتوافقة مع معايير Google Play و iOS Safari.'
+                  },
+                  {
+                    ok: checks.richStoreMeta,
+                    title: 'لقطات الشاشة وتطبيقات المتجر (Screenshots & Related Apps)',
+                    desc: 'يتضمن لقطتي wide لسطح المكتب و narrow للجوال مع related_applications للتثبيت الغني.'
                   },
                   {
                     ok: checks.serviceWorker,

@@ -50,7 +50,19 @@ test('buildPwaBuilderUrls targets live origin and static package files are valid
   const manifest = JSON.parse(fs.readFileSync(path.resolve('public/manifest.json'), 'utf8'));
   assert.equal(manifest.display, 'standalone');
   assert.equal(manifest.start_url, '/');
+  assert.equal(manifest.prefer_related_applications, false);
   assert.ok(Array.isArray(manifest.icons) && manifest.icons.length >= 3);
+  assert.ok(Array.isArray(manifest.screenshots) && manifest.screenshots.length >= 2);
+  assert.ok(
+    manifest.screenshots.some((s: { form_factor?: string; sizes?: string; src?: string }) => s.form_factor === 'wide' && s.sizes === '1280x720' && fs.existsSync(path.resolve(`public${s.src}`)))
+  );
+  assert.ok(
+    manifest.screenshots.some((s: { form_factor?: string; sizes?: string; src?: string }) => s.form_factor === 'narrow' && s.sizes === '540x960' && fs.existsSync(path.resolve(`public${s.src}`)))
+  );
+  assert.ok(
+    Array.isArray(manifest.related_applications) &&
+      manifest.related_applications.some((app: { platform?: string; id?: string }) => app.platform === 'play' && app.id === WASIL_PACKAGE_ID)
+  );
 
   const twaStatic = JSON.parse(fs.readFileSync(path.resolve('public/twa-manifest.json'), 'utf8'));
   assert.equal(twaStatic.packageId, WASIL_PACKAGE_ID);

@@ -1,21 +1,77 @@
-import { useState, useRef } from 'react';
-import { X, ZoomIn, ZoomOut, Download, RotateCcw } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  X,
+  ZoomIn,
+  ZoomOut,
+  Download,
+  RotateCcw,
+  ChevronLeft,
+  ChevronRight,
+  Images
+} from 'lucide-react';
 import { resolveBundledAssetUrl } from '../data/assets';
 
-interface ImageViewerModalProps {
-  mediaUrl: string;
+export interface ImageViewerModalProps {
+  mediaUrl?: string;
+  images?: string[];
+  initialIndex?: number;
   caption?: string;
   onClose: () => void;
 }
 
-export function ImageViewerModal({ mediaUrl, caption, onClose }: ImageViewerModalProps) {
+export function ImageViewerModal({
+  mediaUrl,
+  images,
+  initialIndex = 0,
+  caption,
+  onClose
+}: ImageViewerModalProps) {
+  // Normalize image list: either images array or single mediaUrl
+  const imageList = images && images.length > 0 ? images : mediaUrl ? [mediaUrl] : [];
+  const [currentIndex, setCurrentIndex] = useState(() =>
+    Math.min(Math.max(0, initialIndex), Math.max(0, imageList.length - 1))
+  );
+
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const imgRef = useRef<HTMLImageElement>(null);
 
-  const resolvedUrl = resolveBundledAssetUrl(mediaUrl);
+  const currentMediaUrl = imageList[currentIndex] || mediaUrl || '';
+  const resolvedUrl = resolveBundledAssetUrl(currentMediaUrl);
+
+  const resetTransform = useCallback(() => {
+    setScale(1);
+    setPosition({ x: 0, y: 0 });
+  }, []);
+
+  const handleNext = useCallback(() => {
+    if (imageList.length <= 1) return;
+    resetTransform();
+    setCurrentIndex((prev) => (prev + 1) % imageList.length);
+  }, [imageList.length, resetTransform]);
+
+  const handlePrev = useCallback(() => {
+    if (imageList.length <= 1) return;
+    resetTransform();
+    setCurrentIndex((prev) => (prev - 1 + imageList.length) % imageList.length);
+  }, [imageList.length, resetTransform]);
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      } else if (e.key === 'ArrowRight') {
+        handlePrev(); // RTL natural previous/next
+      } else if (e.key === 'ArrowLeft') {
+        handleNext();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleNext, handlePrev, onClose]);
 
   const handleZoomIn = () => {
     setScale((prev) => Math.min(prev + 0.5, 4));
@@ -27,11 +83,6 @@ export function ImageViewerModal({ mediaUrl, caption, onClose }: ImageViewerModa
       if (next === 1) setPosition({ x: 0, y: 0 });
       return next;
     });
-  };
-
-  const handleResetZoom = () => {
-    setScale(1);
-    setPosition({ x: 0, y: 0 });
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -67,7 +118,7 @@ export function ImageViewerModal({ mediaUrl, caption, onClose }: ImageViewerModa
 
   const handleDoubleClick = () => {
     if (scale > 1) {
-      handleResetZoom();
+      resetTransform();
     } else {
       setScale(2.5);
     }
@@ -76,7 +127,7 @@ export function ImageViewerModal({ mediaUrl, caption, onClose }: ImageViewerModa
   const handleDownload = () => {
     const a = document.createElement('a');
     a.href = resolvedUrl;
-    a.download = `wasil-image-${Date.now()}.jpg`;
+    a.download = `wasil-image-${currentIndex + 1}-${Date.now()}.jpg`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -86,13 +137,13 @@ export function ImageViewerModal({ mediaUrl, caption, onClose }: ImageViewerModa
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="عراض الصور التفاعلي"
-      className="fixed inset-0 z-50 flex flex-col bg-black/90 backdrop-blur-md text-white select-none overflow-hidden animate-fade-in"
+      aria-label="عارض الصور التفاعلي"
+      className="fixed inset-0 z-50 flex flex-col bg-black/92 backdrop-blur-md text-white select-none overflow-hidden animate-fade-in"
       onClick={onClose}
     >
       {/* Top Action Bar */}
       <div
-        className="flex items-center justify-between px-4 py-3 bg-black/40 border-b border-white/10 shrink-0"
+        className="flex items-center justify-between px-4 py-3 bg-black/50 border-b border-white/10 shrink-0 z-20"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2">
@@ -116,7 +167,7 @@ export function ImageViewerModal({ mediaUrl, caption, onClose }: ImageViewerModa
           </button>
           <button
             type="button"
-            onClick={handleResetZoom}
+            onClick={resetTransform}
             className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors cursor-pointer"
             title="إعادة الضبط"
             aria-label="إعادة ضبط الحجم"
@@ -126,6 +177,13 @@ export function ImageViewerModal({ mediaUrl, caption, onClose }: ImageViewerModa
           <span className="text-xs font-mono-code px-2 py-1 rounded bg-white/10 text-white/90">
             {Math.round(scale * 100)}%
           </span>
+
+          {imageList.length > 1 && (
+            <div className="mr-2 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/10 text-xs font-medium text-white/90">
+              <Images className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
+              <span>{`الصورة ${currentIndex + 1} من ${imageList.length}`}</span>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -133,7 +191,7 @@ export function ImageViewerModal({ mediaUrl, caption, onClose }: ImageViewerModa
             type="button"
             onClick={handleDownload}
             className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-            aria-label="تحميل الصورة"
+            aria-label="تحميل الصورة الحالية"
           >
             <Download className="w-4 h-4" />
             <span className="hidden sm:inline">تحميل</span>
@@ -150,7 +208,7 @@ export function ImageViewerModal({ mediaUrl, caption, onClose }: ImageViewerModa
         </div>
       </div>
 
-      {/* Main Image Container */}
+      {/* Main Image Container & Navigation Chevrons */}
       <div
         className="flex-1 relative flex items-center justify-center overflow-hidden p-4 cursor-grab active:cursor-grabbing"
         onClick={(e) => e.stopPropagation()}
@@ -160,6 +218,22 @@ export function ImageViewerModal({ mediaUrl, caption, onClose }: ImageViewerModa
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
       >
+        {/* Previous Button */}
+        {imageList.length > 1 && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handlePrev();
+            }}
+            aria-label="الصورة السابقة"
+            className="absolute right-4 z-30 w-11 h-11 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center shadow-lg transition-transform active:scale-95 cursor-pointer backdrop-blur-xs border border-white/10"
+          >
+            <ChevronRight className="w-6 h-6" />
+          </button>
+        )}
+
+        {/* Current Image */}
         <div
           style={{
             transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
@@ -171,18 +245,63 @@ export function ImageViewerModal({ mediaUrl, caption, onClose }: ImageViewerModa
           <img
             ref={imgRef}
             src={resolvedUrl}
-            alt={caption || 'صورة مكبرة'}
-            className="max-w-[90vw] max-h-[75vh] object-contain rounded-xl shadow-2xl pointer-events-auto"
+            alt={caption || `صورة ${currentIndex + 1}`}
+            className="max-w-[90vw] max-h-[72vh] object-contain rounded-xl shadow-2xl pointer-events-auto select-none"
             draggable={false}
             referrerPolicy="no-referrer"
           />
         </div>
+
+        {/* Next Button */}
+        {imageList.length > 1 && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleNext();
+            }}
+            aria-label="الصورة التالية"
+            className="absolute left-4 z-30 w-11 h-11 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center shadow-lg transition-transform active:scale-95 cursor-pointer backdrop-blur-xs border border-white/10"
+          >
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+        )}
       </div>
+
+      {/* Thumbnails Row for Albums */}
+      {imageList.length > 1 && (
+        <div
+          className="px-4 py-2 bg-black/60 border-t border-white/10 flex items-center justify-center gap-2 overflow-x-auto shrink-0 z-20"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {imageList.map((url, idx) => (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => {
+                resetTransform();
+                setCurrentIndex(idx);
+              }}
+              className={`relative w-12 h-12 rounded-lg overflow-hidden shrink-0 border-2 transition-all cursor-pointer ${
+                idx === currentIndex
+                  ? 'border-[var(--wa-accent)] scale-105 shadow-md'
+                  : 'border-transparent opacity-60 hover:opacity-100'
+              }`}
+            >
+              <img
+                src={resolveBundledAssetUrl(url)}
+                alt={`معاينة مصغرة ${idx + 1}`}
+                className="w-full h-full object-cover"
+              />
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Caption Footer */}
       {caption && (
         <div
-          className="px-6 py-3 bg-black/60 backdrop-blur-md border-t border-white/10 text-center text-sm text-white/90 shrink-0"
+          className="px-6 py-2.5 bg-black/75 backdrop-blur-md border-t border-white/10 text-center text-sm text-white/90 shrink-0 z-20"
           onClick={(e) => e.stopPropagation()}
         >
           <p className="max-w-xl mx-auto truncate">{caption}</p>
