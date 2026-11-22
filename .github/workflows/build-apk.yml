@@ -34,6 +34,11 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
+          if [ ! -f ./gradlew ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq gradle
+            gradle wrapper --gradle-version 8.5 --distribution-type bin
+          fi
+
           chmod +x gradlew
           ./gradlew assembleDebug
 
