@@ -39,8 +39,159 @@ jobs:
           yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses >/dev/null
           sdkmanager --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
+      - name: Prepare Android WebView project if missing
+        run: |
+          set -e
+          GRADLEW_PATH=$(find . -maxdepth 3 -name "gradlew" | head -n 1)
+          if [ -n "$GRADLEW_PATH" ]; then
+            PROJECT_DIR=$(dirname "$GRADLEW_PATH")
+            echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+            echo "Found existing Gradle project at: $PROJECT_DIR"
+          else
+            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
+            echo "No gradlew found. Generating minimal WebView Android project..."
+            gradle wrapper --gradle-version 8.5 --distribution-type bin --no-daemon
+
+            cat << 'GRD_SETTINGS' > settings.gradle
+            rootProject.name = 'WhatsAppWebView'
+            include ':app'
+            GRD_SETTINGS
+
+            cat << 'GRD_ROOT' > build.gradle
+            buildscript {
+              repositories {
+                google()
+                mavenCentral()
+              }
+              dependencies {
+                classpath 'com.android.tools.build:gradle:8.2.2'
+              }
+            }
+            allprojects {
+              repositories {
+                google()
+                mavenCentral()
+              }
+            }
+            GRD_ROOT
+
+            mkdir -p app/src/main/java/com/example/webview app/src/main/res/layout app/src/main/res/values
+
+            cat << 'GRD_APP' > app/build.gradle
+            plugins {
+              id 'com.android.application'
+            }
+            android {
+              namespace 'com.example.webview'
+              compileSdk 34
+
+              defaultConfig {
+                applicationId "com.example.webview"
+                minSdk 21
+                targetSdk 34
+                versionCode 1
+                versionName "1.0"
+              }
+
+              buildTypes {
+                release {
+                  minifyEnabled false
+                  proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+                }
+              }
+
+              compileOptions {
+                sourceCompatibility JavaVersion.VERSION_17
+                targetCompatibility JavaVersion.VERSION_17
+              }
+            }
+            dependencies {
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+            }
+            GRD_APP
+
+            touch app/proguard-rules.pro
+
+            cat << 'MANIFEST' > app/src/main/AndroidManifest.xml
+            <?xml version="1.0" encoding="utf-8"?>
+            <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                android:allowBackup="true"
+                android:label="WhatsApp WebView"
+                android:theme="@style/Theme.AppCompat.Light.NoActionBar"
+                android:usesCleartextTraffic="true">
+                <activity
+                  android:name=".MainActivity"
+                  android:exported="true"
+                  android:configChanges="orientation|screenSize|keyboardHidden">
+                  <intent-filter>
+                    <action android:name="android.intent.action.MAIN" />
+                    <category android:name="android.intent.category.LAUNCHER" />
+                  </intent-filter>
+                </activity>
+              </application>
+            </manifest>
+            MANIFEST
+
+            cat << 'LAYOUT' > app/src/main/res/layout/activity_main.xml
+            <?xml version="1.0" encoding="utf-8"?>
+            <WebView xmlns:android="http://schemas.android.com/apk/res/android"
+              android:id="@+id/webview"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent" />
+            LAYOUT
+
+            cat << 'STRINGS' > app/src/main/res/values/strings.xml
+            <resources>
+              <string name="app_name">WhatsApp WebView</string>
+            </resources>
+            STRINGS
+
+            cat << 'MAIN_JAVA' > app/src/main/java/com/example/webview/MainActivity.java
+            package com.example.webview;
+
+            import android.os.Bundle;
+            import android.webkit.WebSettings;
+            import android.webkit.WebView;
+            import android.webkit.WebViewClient;
+            import androidx.appcompat.app.AppCompatActivity;
+
+            public class MainActivity extends AppCompatActivity {
+              private WebView webView;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                super.onCreate(savedInstanceState);
+                setContentView(R.layout.activity_main);
+
+                webView = findViewById(R.id.webview);
+                WebSettings settings = webView.getSettings();
+                settings.setJavaScriptEnabled(true);
+                settings.setDomStorageEnabled(true);
+                settings.setAllowFileAccess(true);
+                settings.setMediaPlaybackRequiresUserGesture(false);
+
+                webView.setWebViewClient(new WebViewClient());
+                webView.loadUrl("https://web.whatsapp.com");
+              }
+
+              @Override
+              public void onBackPressed() {
+                if (webView != null && webView.canGoBack()) {
+                  webView.goBack();
+                } else {
+                  super.onBackPressed();
+                }
+              }
+            }
+            MAIN_JAVA
+          fi
+
       - name: Build Debug APK
         run: |
+          set -e
+          cd "$PROJECT_DIR"
           chmod +x ./gradlew
           ./gradlew assembleDebug
 
@@ -49,5 +200,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: webview-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
