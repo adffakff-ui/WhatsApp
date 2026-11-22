@@ -19,7 +19,8 @@ export default defineConfig(() => {
           'icon.svg',
           'pwa-192x192.png',
           'pwa-512x512.png',
-          'pwa-maskable-512x512.png'
+          'pwa-maskable-512x512.png',
+          'twa-manifest.json'
         ],
         manifest: {
           id: '/',
@@ -32,10 +33,12 @@ export default defineConfig(() => {
           start_url: '/',
           scope: '/',
           display: 'standalone',
+          display_override: ['window-controls-overlay', 'standalone'],
           orientation: 'any',
           theme_color: '#008069',
           background_color: '#EAE6DF',
           categories: ['social', 'communication'],
+          prefer_related_applications: false,
           icons: [
             {
               src: '/pwa-192x192.png',
@@ -55,11 +58,28 @@ export default defineConfig(() => {
               type: 'image/png',
               purpose: 'maskable'
             }
+          ],
+          shortcuts: [
+            {
+              name: 'محادثة جديدة',
+              short_name: 'محادثة',
+              description: 'بدء محادثة مشفرة جديدة',
+              url: '/?action=new-chat',
+              icons: [{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' }]
+            },
+            {
+              name: 'الحالات والقصص',
+              short_name: 'الحالات',
+              description: 'استعراض الحالات اليومية',
+              url: '/?tab=status',
+              icons: [{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' }]
+            }
           ]
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,woff,woff2}'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+          navigateFallbackDenylist: [/^\/install/, /^\/\.well-known/, /^\/api/],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -97,6 +117,14 @@ export default defineConfig(() => {
         }
       })
     ],
+    build: {
+      rollupOptions: {
+        input: {
+          main: path.resolve(__dirname, 'index.html'),
+          install: path.resolve(__dirname, 'install/index.html')
+        }
+      }
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

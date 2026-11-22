@@ -24,12 +24,12 @@ import {
   MessageSquareText,
   Clock,
   Trash2,
-  CheckSquare
+  CheckSquare,
+  ExternalLink
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { HighlightText } from './HighlightText';
 import { NetworkLatencyBadge } from './NetworkLatencyBadge';
-import { PWAInstallButton, PWAInstallGuideModal } from './PWAInstallButton';
 import {
   formatWhatsAppTime,
   groupStoriesByUser,
@@ -139,7 +139,6 @@ export function ChatListPane({
   const [menuChatId, setMenuChatId] = useState<string | null>(null);
   const [menuOpensUp, setMenuOpensUp] = useState(false);
   const [showHeaderMenu, setShowHeaderMenu] = useState(false);
-  const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [fabOpen, setFabOpen] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
   const [msgFilter, setMsgFilter] = useState<MessageSearchFilter>('all');
@@ -481,11 +480,17 @@ export function ChatListPane({
                     <span>قفل التطبيق الآن</span>
                   </button>
                 )}
-                <PWAInstallButton
-                  variant="menu"
-                  onAction={() => setShowHeaderMenu(false)}
-                  onOpenGuide={() => setShowInstallGuide(true)}
-                />
+                <a
+                  href="/install"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  role="menuitem"
+                  onClick={() => setShowHeaderMenu(false)}
+                  className="w-full px-4 py-2.5 text-right flex items-center gap-2.5 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] font-medium cursor-pointer"
+                >
+                  <ExternalLink className="w-4 h-4 text-[var(--wa-accent)] shrink-0" aria-hidden="true" />
+                  <span className="truncate">بوابة التثبيت وحزمة APK</span>
+                </a>
                 {onSignOut && (
                   <button
                     type="button"
@@ -1227,11 +1232,6 @@ export function ChatListPane({
           />
         </button>
       </div>
-
-      <PWAInstallGuideModal
-        open={showInstallGuide}
-        onClose={() => setShowInstallGuide(false)}
-      />
 
       {/* Delete Single Chat Confirmation Modal */}
       {deleteTargetChat && (

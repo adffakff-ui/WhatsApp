@@ -21,11 +21,11 @@ import {
   Languages,
   Ban,
   Search,
-  UserX
+  UserX,
+  ExternalLink
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { BiometricLockPanel } from './BiometricLockPanel';
-import { PWAInstallButton } from './PWAInstallButton';
 import { PRESET_AVATARS } from '../data/assets';
 import {
   formatWhatsAppTime,
@@ -1026,13 +1026,24 @@ export function SettingsView({
             </div>
           </div>
 
-          {/* Installation & Mobile Packages */}
-          <div className="space-y-2.5 pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">
-            <h2 className="text-xs font-semibold text-[#54656F] dark:text-[#8696A0] flex items-center gap-1.5">
-              <Download className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
-              <span>تثبيت التطبيق وحزم الأجهزة (PWA & APK)</span>
-            </h2>
-            <PWAInstallButton />
+          {/* Standalone Install Portal Link */}
+          <div className="pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">
+            <a
+              href="/install"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full px-3.5 py-3 rounded-xl bg-[#F0F2F5] dark:bg-[#202C33] hover:bg-[#E9EDEF] dark:hover:bg-[#2A3942] border border-[#E9EDEF] dark:border-[#2A3942] flex items-center justify-between gap-3 transition-colors"
+            >
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF]">
+                  بوابة تثبيت التطبيق وحزمة APK (صفحة مستقلة)
+                </div>
+                <div className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate">
+                  فتح واجهة التثبيت المستقلة وملفات الحزمة الفعلية عبر Vercel
+                </div>
+              </div>
+              <ExternalLink className="w-4 h-4 text-[var(--wa-accent)] shrink-0" aria-hidden="true" />
+            </a>
           </div>
 
           {/* Account Actions */}

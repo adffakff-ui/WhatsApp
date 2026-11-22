@@ -1,0 +1,64 @@
+{
+  "packageId": "com.wasil.messenger",
+  "host": "wasil-messenger.vercel.app",
+  "name": "تواصل - Wasil Messenger",
+  "launcherName": "تواصل",
+  "display": "standalone",
+  "themeColor": "#008069",
+  "themeColorDark": "#111B21",
+  "navigationColor": "#008069",
+  "navigationColorDark": "#111B21",
+  "navigationDividerColor": "#E9EDEF",
+  "navigationDividerColorDark": "#222D34",
+  "backgroundColor": "#EAE6DF",
+  "enableNotifications": true,
+  "startUrl": "/",
+  "iconUrl": "https://wasil-messenger.vercel.app/pwa-512x512.png",
+  "maskableIconUrl": "https://wasil-messenger.vercel.app/pwa-maskable-512x512.png",
+  "monochromeIconUrl": "https://wasil-messenger.vercel.app/pwa-192x192.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "wasil"
+  },
+  "appVersionName": "1.0.0",
+  "appVersionCode": 1,
+  "shortcuts": [
+    {
+      "name": "محادثة جديدة",
+      "shortName": "محادثة",
+      "url": "https://wasil-messenger.vercel.app/?action=new-chat",
+      "chosenIconUrl": "https://wasil-messenger.vercel.app/pwa-192x192.png"
+    },
+    {
+      "name": "الحالات والقصص",
+      "shortName": "الحالات",
+      "url": "https://wasil-messenger.vercel.app/?tab=status",
+      "chosenIconUrl": "https://wasil-messenger.vercel.app/pwa-192x192.png"
+    }
+  ],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://wasil-messenger.vercel.app/manifest.json",
+  "fallbackType": "customtabs",
+  "features": {
+    "locationDelegation": {
+      "enabled": false
+    },
+    "playBilling": {
+      "enabled": false
+    }
+  },
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "fullScopeUrl": "https://wasil-messenger.vercel.app/",
+  "minSdkVersion": 21,
+  "orientation": "default",
+  "fingerprints": [],
+  "additionalTrustedOrigins": [],
+  "retainedBundles": [],
+  "appVersion": "1.0.0"
+}

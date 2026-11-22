@@ -1,0 +1,65 @@
+{
+  "id": "/",
+  "name": "تواصل - Wasil Messenger",
+  "short_name": "تواصل",
+  "description": "تطبيق تواصل اجتماعي متكامل مستوحى من واتساب مع تشفير تام بين الطرفين ومكالمات صوتية ومرئية ومزامنة فورية عبر Firebase.",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "any",
+  "theme_color": "#008069",
+  "background_color": "#EAE6DF",
+  "categories": ["social", "communication"],
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "محادثة جديدة",
+      "short_name": "محادثة",
+      "description": "بدء محادثة مشفرة جديدة",
+      "url": "/?action=new-chat",
+      "icons": [
+        {
+          "src": "/pwa-192x192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "الحالات والقصص",
+      "short_name": "الحالات",
+      "description": "استعراض الحالات اليومية",
+      "url": "/?tab=status",
+      "icons": [
+        {
+          "src": "/pwa-192x192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ]
+}

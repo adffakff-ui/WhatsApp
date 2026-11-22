@@ -9,6 +9,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ExternalLink,
   Eye,
   EyeOff,
   FileUp,
@@ -47,7 +48,6 @@ import {
 import { checkWasilIdAvailability } from '../services/firestoreSync';
 import { OMAR_THEMES } from '../lib/omarConfig';
 import { CountryPickerModal } from './CountryPickerModal';
-import { PWAInstallButton } from './PWAInstallButton';
 import type { OmarSettings, OmarThemeId, ThemeMode, UserProfile } from '../types/chat';
 
 export type AuthStep = 'welcome' | 'auth' | 'profile';
@@ -801,16 +801,15 @@ export function AuthScreen({
                     <ArrowLeft className="w-4 h-4" aria-hidden="true" />
                   </button>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="space-y-2.5">
                     <button
                       type="button"
                       onClick={() => backupFileRef.current?.click()}
-                      className="min-h-[44px] px-4 py-2 rounded-full border border-[#D1D7DB] dark:border-[#374248] hover:bg-[#F5F6F6] dark:hover:bg-[#202C33] text-[#3B4A54] dark:text-[#D1D7DB] font-semibold text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                      className="w-full min-h-[44px] px-4 py-2 rounded-full border border-[#D1D7DB] dark:border-[#374248] hover:bg-[#F5F6F6] dark:hover:bg-[#202C33] text-[#3B4A54] dark:text-[#D1D7DB] font-semibold text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
                     >
                       <FileUp className="w-4 h-4 shrink-0" aria-hidden="true" />
                       <span>استعادة نسخة احتياطية (JSON)</span>
                     </button>
-                    <PWAInstallButton variant="pill" className="w-full" />
                     <input
                       ref={backupFileRef}
                       type="file"
@@ -818,6 +817,17 @@ export function AuthScreen({
                       onChange={(e) => void handleRestoreFileChange(e)}
                       className="hidden"
                     />
+                    <div className="text-center pt-0.5">
+                      <a
+                        href="/install"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-[var(--wa-accent-strong)] dark:text-[var(--wa-accent)] hover:underline"
+                      >
+                        <span>بوابة التثبيت المستقلة وتحميل حزمة APK</span>
+                        <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                      </a>
+                    </div>
                   </div>
                 </div>
               </div>

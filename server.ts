@@ -171,6 +171,7 @@ async function startServer() {
   });
 
   if (process.env.NODE_ENV !== 'production') {
+    const fs = await import('node:fs/promises');
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {
@@ -181,10 +182,23 @@ async function startServer() {
       },
       appType: 'spa'
     });
+    app.get(['/install', '/install/', '/install/index.html'], async (req, res, next) => {
+      try {
+        const installHtmlPath = path.resolve(__dirname, 'install/index.html');
+        const rawHtml = await fs.readFile(installHtmlPath, 'utf-8');
+        const transformed = await vite.transformIndexHtml(req.originalUrl, rawHtml);
+        res.status(200).set({ 'Content-Type': 'text/html; charset=utf-8' }).end(transformed);
+      } catch (err) {
+        next(err);
+      }
+    });
     app.use(vite.middlewares);
   } else {
     const distDir = path.resolve(__dirname, 'dist');
     app.use(express.static(distDir));
+    app.get(['/install', '/install/', '/install/index.html'], (_req, res) => {
+      res.sendFile(path.join(distDir, 'install', 'index.html'));
+    });
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distDir, 'index.html'));
     });
