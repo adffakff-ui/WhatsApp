@@ -14,6 +14,12 @@ android {
         versionName "1.0"
     }
 
+    sourceSets {
+        main {
+            assets.srcDirs = ['src/main/assets']
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
