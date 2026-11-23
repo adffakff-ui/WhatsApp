@@ -1,0 +1,57 @@
+{
+  "appName": "تواصل - Wasil Messenger",
+  "packageId": "com.wasil.messenger",
+  "version": "1.0.0",
+  "originUrl": "https://wasil-messenger.vercel.app",
+  "generatedAt": "2026-11-23T16:43:49.451Z",
+  "packages": [
+    {
+      "id": "android-apk",
+      "platform": "android",
+      "filename": "wasil-messenger.apk",
+      "url": "/downloads/wasil-messenger.apk",
+      "title": "حزمة Android APK الجاهزة للتثبيت المباشر",
+      "subtitle": "تثبيت فوري على هواتف Android بدون متجر Play",
+      "mimeType": "application/vnd.android.package-archive",
+      "sizeBytes": 0,
+      "sha256": "",
+      "available": false
+    },
+    {
+      "id": "android-project",
+      "platform": "android",
+      "filename": "wasil-messenger-android-project.zip",
+      "url": "/downloads/wasil-messenger-android-project.zip",
+      "title": "حزمة مشروع Android APK / TWA الكاملة",
+      "subtitle": "مشروع Gradle جاهز + twa-manifest.json + assetlinks.json",
+      "mimeType": "application/zip",
+      "sizeBytes": 306051,
+      "sha256": "c99015b5df0eec10323eba417ca15623b455977215ea27e61332f588293d7656",
+      "available": true
+    },
+    {
+      "id": "ios-mobileconfig",
+      "platform": "ios",
+      "filename": "wasil-ios.mobileconfig",
+      "url": "/downloads/wasil-ios.mobileconfig",
+      "title": "ملف تثبيت iPhone و iPad (.mobileconfig)",
+      "subtitle": "ملف تعريف Apple WebClip أصلي بشعار التطبيق الكامل",
+      "mimeType": "application/x-apple-aspen-config",
+      "sizeBytes": 54052,
+      "sha256": "95e89d5d56499560407537fb6f8f8d73632a35d4005200183d7838bc14b05a0a",
+      "available": true
+    },
+    {
+      "id": "desktop-installer",
+      "platform": "desktop",
+      "filename": "wasil-desktop-installer.zip",
+      "url": "/downloads/wasil-desktop-installer.zip",
+      "title": "حزمة سطح المكتب Windows & Linux (.zip)",
+      "subtitle": "مثبت اختصار مستقل (Standalone) لأنظمة Windows و Linux",
+      "mimeType": "application/zip",
+      "sizeBytes": 1723,
+      "sha256": "e6c6afdcf80712368301cb4b6665b41272546a8912fbc414d4ea44a941ba120b",
+      "available": true
+    }
+  ]
+}

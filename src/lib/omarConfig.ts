@@ -28,6 +28,7 @@ export const DEFAULT_OMAR_SETTINGS: OmarSettings = {
   lockedChatIds: [],
   chatLockPin: '1234',
   appLockOnLaunch: false,
+  autoLockTimeoutMinutes: 0,
   lockMethod: 'pin',
   biometricCredentialId: '',
   biometricEnrolledAtMs: 0,

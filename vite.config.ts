@@ -132,18 +132,126 @@ export default defineConfig(() => {
           }
         } as Record<string, unknown>,
         workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,woff,woff2}'],
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,webp,woff,woff2,json}'],
+          globIgnores: ['downloads/**', 'sw.js', 'workbox-*.js'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
-          navigateFallbackDenylist: [/^\/install/, /^\/\.well-known/, /^\/api/],
+          cleanupOutdatedCaches: true,
+          clientsClaim: true,
+          skipWaiting: true,
+          navigateFallback: '/index.html',
+          navigateFallbackDenylist: [/^\/install/, /^\/downloads/, /^\/\.well-known/, /^\/api/],
           runtimeCaching: [
             {
-              urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-              handler: 'CacheFirst',
+              urlPattern: ({ url, sameOrigin }) =>
+                sameOrigin &&
+                url.pathname.startsWith('/api/') &&
+                url.pathname !== '/api/packages',
+              handler: 'NetworkOnly'
+            },
+            {
+              urlPattern: ({ request, sameOrigin, url }) =>
+                sameOrigin &&
+                !url.pathname.startsWith('/downloads/') &&
+                (request.destination === 'script' ||
+                  request.destination === 'style' ||
+                  request.destination === 'worker'),
+              handler: 'StaleWhileRevalidate',
               options: {
-                cacheName: 'google-fonts-cache',
+                cacheName: 'wasil-core-assets-swr',
                 expiration: {
-                  maxEntries: 10,
-                  maxAgeSeconds: 60 * 60 * 24 * 365
+                  maxEntries: 150,
+                  maxAgeSeconds: 60 * 60 * 24 * 30,
+                  purgeOnQuotaError: true
+                },
+                cacheableResponse: {
+                  statuses: [0, 200]
+                }
+              }
+            },
+            {
+              urlPattern: ({ request, sameOrigin, url }) =>
+                sameOrigin &&
+                request.destination === 'document' &&
+                !url.pathname.startsWith('/api/') &&
+                !url.pathname.startsWith('/downloads/'),
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'wasil-documents-swr',
+                expiration: {
+                  maxEntries: 30,
+                  maxAgeSeconds: 60 * 60 * 24 * 7
+                },
+                cacheableResponse: {
+                  statuses: [0, 200]
+                }
+              }
+            },
+            {
+              urlPattern: ({ sameOrigin, url }) =>
+                sameOrigin &&
+                (/^\/(manifest\.json|twa-manifest\.json|\.well-known\/assetlinks\.json)$/.test(
+                  url.pathname
+                ) ||
+                  url.pathname === '/api/packages' ||
+                  url.pathname === '/downloads/package-manifest.json'),
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'wasil-manifests-swr',
+                expiration: {
+                  maxEntries: 20,
+                  maxAgeSeconds: 60 * 60 * 24 * 7
+                },
+                cacheableResponse: {
+                  statuses: [0, 200]
+                }
+              }
+            },
+            {
+              urlPattern: ({ request, url }) =>
+                !url.pathname.startsWith('/downloads/') &&
+                (request.destination === 'image' ||
+                  url.hostname.endsWith('googleusercontent.com') ||
+                  url.hostname.endsWith('firebasestorage.googleapis.com')),
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'wasil-media-images-swr',
+                expiration: {
+                  maxEntries: 250,
+                  maxAgeSeconds: 60 * 60 * 24 * 30,
+                  purgeOnQuotaError: true
+                },
+                cacheableResponse: {
+                  statuses: [0, 200]
+                }
+              }
+            },
+            {
+              urlPattern: ({ sameOrigin, url }) =>
+                sameOrigin &&
+                !url.pathname.startsWith('/api/') &&
+                !url.pathname.startsWith('/downloads/') &&
+                /\.(woff2?|ttf|otf|json|lottie|mp3|ogg|wav)$/i.test(url.pathname),
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'wasil-static-resources-swr',
+                expiration: {
+                  maxEntries: 100,
+                  maxAgeSeconds: 60 * 60 * 24 * 30,
+                  purgeOnQuotaError: true
+                },
+                cacheableResponse: {
+                  statuses: [0, 200]
+                }
+              }
+            },
+            {
+              urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'google-fonts-stylesheets-swr',
+                expiration: {
+                  maxEntries: 15,
+                  maxAgeSeconds: 60 * 60 * 24 * 30
                 },
                 cacheableResponse: {
                   statuses: [0, 200]
@@ -156,7 +264,7 @@ export default defineConfig(() => {
               options: {
                 cacheName: 'gstatic-fonts-cache',
                 expiration: {
-                  maxEntries: 10,
+                  maxEntries: 15,
                   maxAgeSeconds: 60 * 60 * 24 * 365
                 },
                 cacheableResponse: {

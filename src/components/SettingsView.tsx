@@ -23,7 +23,9 @@ import {
   Search,
   UserX,
   Users,
-  ExternalLink
+  ExternalLink,
+  Clock,
+  ShieldCheck
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { BiometricLockPanel } from './BiometricLockPanel';
@@ -41,6 +43,11 @@ import {
   SUPPORTED_TRANSLATION_LANGUAGES,
   type TranslationLangCode
 } from '../lib/translation';
+import {
+  AUTO_LOCK_OPTIONS,
+  formatAutoLockStatus,
+  normalizeAutoLockMinutes
+} from '../lib/autoLock';
 import { checkWasilIdAvailability } from '../services/firestoreSync';
 import type {
   BlockedContact,
@@ -797,6 +804,91 @@ export function SettingsView({
                 onShowToast={onShowToast}
                 compact
               />
+
+              {/* Auto-Lock Timeout Card */}
+              {(() => {
+                const activeAutoLockMinutes = normalizeAutoLockMinutes(
+                  omarSettings.autoLockTimeoutMinutes
+                );
+                const activeOption =
+                  AUTO_LOCK_OPTIONS.find((opt) => opt.minutes === activeAutoLockMinutes) ||
+                  AUTO_LOCK_OPTIONS[0];
+                return (
+                  <div className="p-3.5 rounded-2xl bg-[#F0F2F5] dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#374248] space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <h3 className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF] flex items-center gap-1.5">
+                          <Clock
+                            className="w-3.5 h-3.5 text-[var(--wa-accent)] shrink-0"
+                            aria-hidden="true"
+                          />
+                          <span>القفل التلقائي عند عدم النشاط (Auto-Lock)</span>
+                        </h3>
+                        <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] mt-0.5 leading-relaxed">
+                          {activeOption.description}
+                        </p>
+                      </div>
+                      <span
+                        className={`shrink-0 px-2.5 py-1 rounded-lg text-[10px] font-bold ${
+                          activeAutoLockMinutes > 0
+                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                            : 'bg-white dark:bg-[#111B21] text-[#54656F] dark:text-[#8696A0] border border-[#E9EDEF] dark:border-[#374248]'
+                        }`}
+                      >
+                        {formatAutoLockStatus(activeAutoLockMinutes)}
+                      </span>
+                    </div>
+
+                    <div
+                      role="group"
+                      aria-label="المدة الزمنية للقفل التلقائي"
+                      className="grid grid-cols-5 gap-1.5"
+                    >
+                      {AUTO_LOCK_OPTIONS.map((opt) => {
+                        const selected = opt.minutes === activeAutoLockMinutes;
+                        return (
+                          <button
+                            key={opt.minutes}
+                            type="button"
+                            aria-pressed={selected}
+                            onClick={() => {
+                              onUpdateOmarSettings({ autoLockTimeoutMinutes: opt.minutes });
+                              onShowToast?.(
+                                opt.minutes === 0
+                                  ? 'تم إيقاف القفل التلقائي للمحادثات.'
+                                  : `تم تفعيل القفل التلقائي ${opt.label} لحماية محادثاتك المشفرة.`
+                              );
+                            }}
+                            className={`min-h-[38px] px-1.5 py-1.5 rounded-xl text-[11px] font-bold border transition-all cursor-pointer ${
+                              selected
+                                ? 'bg-[var(--wa-accent)] text-white border-[var(--wa-accent)] shadow-xs'
+                                : 'bg-white dark:bg-[#111B21] text-[#111B21] dark:text-[#E9EDEF] border-[#E9EDEF] dark:border-[#374248] hover:border-[var(--wa-accent)]'
+                            }`}
+                          >
+                            {opt.shortLabel}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex items-start gap-1.5 text-[10px] text-[#54656F] dark:text-[#8696A0] bg-white/70 dark:bg-[#111B21]/60 rounded-xl px-2.5 py-2 border border-[#E9EDEF]/80 dark:border-[#374248]/70">
+                      <ShieldCheck
+                        className="w-3.5 h-3.5 text-[var(--wa-accent)] shrink-0 mt-0.5"
+                        aria-hidden="true"
+                      />
+                      <span className="leading-relaxed">
+                        {activeAutoLockMinutes > 0
+                          ? `سيتم قفل التطبيق والمحادثات المقفولة تلقائياً بعد ${activeOption.label} من الخمول (يُستثنى أثناء المكالمات النشطة).${
+                              omarSettings.chatLockPin === '1234'
+                                ? ' يُنصح بتغيير رمز PIN الافتراضي (1234) من لوحة القفل أعلاه.'
+                                : ''
+                            }`
+                          : 'عند التفعيل، يتم قفل الجلسة وحماية مفاتيحك ومحادثاتك المشفرة تلقائياً عند ترك الجهاز دون استخدام.'}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 

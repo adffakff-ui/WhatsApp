@@ -19,7 +19,10 @@ import {
   Sparkles,
   Sun,
   Terminal,
-  AlertTriangle
+  AlertTriangle,
+  HardDriveDownload,
+  Monitor,
+  Apple
 } from 'lucide-react';
 import { usePWAInstall } from '../hooks/usePWAInstall';
 import { PWAInstallGuideModal } from '../components/PWAInstallButton';
@@ -36,11 +39,41 @@ interface PackageChecks {
   manifest: boolean;
   twaManifest: boolean;
   assetLinks: boolean;
+  hostedPackages: boolean;
   serviceWorker: boolean;
   icons: boolean;
   richStoreMeta: boolean;
   displayStandalone: boolean;
   publicHttps: boolean;
+}
+
+interface HostedPackageItem {
+  id: 'ios-mobileconfig' | 'desktop-installer' | 'android-project' | 'android-apk';
+  platform: 'ios' | 'desktop' | 'android';
+  filename: string;
+  url: string;
+  title: string;
+  subtitle: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+  available: boolean;
+}
+
+interface HostedPackageManifest {
+  appName: string;
+  packageId: string;
+  version: string;
+  originUrl: string;
+  generatedAt: string;
+  packages: HostedPackageItem[];
+}
+
+function formatPackageBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 function downloadJsonFile(filename: string, data: unknown) {
@@ -80,10 +113,13 @@ export function InstallPortal() {
   const [isChecking, setIsChecking] = useState(false);
   const [manifestFeedback, setManifestFeedback] = useState<string | null>(null);
 
+  const [hostedManifest, setHostedManifest] = useState<HostedPackageManifest | null>(null);
+
   const [checks, setChecks] = useState<PackageChecks>({
     manifest: true,
     twaManifest: true,
     assetLinks: true,
+    hostedPackages: true,
     serviceWorker: true,
     icons: true,
     richStoreMeta: true,
@@ -119,10 +155,11 @@ export function InstallPortal() {
   const runLivePackageVerification = useCallback(async () => {
     setIsChecking(true);
     try {
-      const [manifestRes, twaRes, assetLinksRes] = await Promise.all([
+      const [manifestRes, twaRes, assetLinksRes, hostedPkgRes] = await Promise.all([
         fetch('/manifest.json', { cache: 'no-store' }).catch(() => null),
         fetch('/twa-manifest.json', { cache: 'no-store' }).catch(() => null),
-        fetch('/.well-known/assetlinks.json', { cache: 'no-store' }).catch(() => null)
+        fetch('/.well-known/assetlinks.json', { cache: 'no-store' }).catch(() => null),
+        fetch('/downloads/package-manifest.json', { cache: 'no-store' }).catch(() => null)
       ]);
 
       let manifestJson: {
@@ -140,15 +177,32 @@ export function InstallPortal() {
         } | null;
       }
 
+      let hostedJson: HostedPackageManifest | null = null;
+      if (hostedPkgRes?.ok) {
+        hostedJson = (await hostedPkgRes.json().catch(() => null)) as HostedPackageManifest | null;
+      } else {
+        const apiRes = await fetch('/api/packages', { cache: 'no-store' }).catch(() => null);
+        if (apiRes?.ok) {
+          hostedJson = (await apiRes.json().catch(() => null)) as HostedPackageManifest | null;
+        }
+      }
+      if (hostedJson && Array.isArray(hostedJson.packages)) {
+        setHostedManifest(hostedJson);
+      }
+
       const twaOk = Boolean(twaRes?.ok && (await twaRes.json().catch(() => null)));
       const assetLinksOk = Boolean(
         assetLinksRes?.ok && Array.isArray(await assetLinksRes.json().catch(() => null))
+      );
+      const hostedOk = Boolean(
+        hostedJson?.packages && hostedJson.packages.some((pkg) => pkg.available)
       );
 
       setChecks({
         manifest: Boolean(manifestRes?.ok && manifestJson),
         twaManifest: twaOk,
         assetLinks: assetLinksOk,
+        hostedPackages: hostedOk,
         serviceWorker: typeof navigator !== 'undefined' && 'serviceWorker' in navigator,
         icons: Boolean(manifestJson?.icons && manifestJson.icons.length >= 2),
         richStoreMeta: Boolean(
@@ -227,6 +281,7 @@ export function InstallPortal() {
     checks.manifest,
     checks.twaManifest,
     checks.assetLinks,
+    checks.hostedPackages,
     checks.serviceWorker,
     checks.icons,
     checks.richStoreMeta,
@@ -378,6 +433,177 @@ export function InstallPortal() {
           </div>
         </section>
 
+        {/* Direct Server-Hosted Installation Packages */}
+        <section
+          aria-label="حزم التثبيت الحقيقية المرفوعة على الخادم"
+          className="rounded-3xl bg-white dark:bg-[#111B21] border border-[#E2E8EE] dark:border-[#222D34] shadow-sm p-5 sm:p-7 space-y-4"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#F0F2F5] dark:border-[#222D34] pb-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-xs font-bold text-[#008069] dark:text-[#06CF9C]">
+                <HardDriveDownload className="w-4 h-4" aria-hidden="true" />
+                <span>حزم التثبيت الحقيقية المرفوعة مباشرة على الخادم</span>
+              </div>
+              <h2 className="font-display text-base sm:text-lg font-bold">
+                جاهزة للتنزيل والتوزيع على نطاق واسع لجميع الأنظمة
+              </h2>
+            </div>
+            {hostedManifest && (
+              <span
+                dir="ltr"
+                className="text-[11px] font-mono-code px-2.5 py-1 rounded-lg bg-[#F0F2F5] dark:bg-[#202C33] text-[#54656F] dark:text-[#8696A0] self-start sm:self-auto"
+              >
+                v{hostedManifest.version} · {hostedManifest.packageId}
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {(hostedManifest?.packages || [
+              {
+                id: 'android-project',
+                platform: 'android',
+                filename: 'wasil-messenger-android-project.zip',
+                url: '/downloads/wasil-messenger-android-project.zip',
+                title: 'حزمة مشروع Android APK / TWA الكاملة',
+                subtitle: 'مشروع Gradle جاهز + twa-manifest.json + assetlinks.json',
+                mimeType: 'application/zip',
+                sizeBytes: 0,
+                sha256: '',
+                available: true
+              },
+              {
+                id: 'ios-mobileconfig',
+                platform: 'ios',
+                filename: 'wasil-ios.mobileconfig',
+                url: '/downloads/wasil-ios.mobileconfig',
+                title: 'ملف تثبيت iPhone و iPad (.mobileconfig)',
+                subtitle: 'ملف تعريف Apple WebClip أصلي بشعار التطبيق الكامل',
+                mimeType: 'application/x-apple-aspen-config',
+                sizeBytes: 0,
+                sha256: '',
+                available: true
+              },
+              {
+                id: 'desktop-installer',
+                platform: 'desktop',
+                filename: 'wasil-desktop-installer.zip',
+                url: '/downloads/wasil-desktop-installer.zip',
+                title: 'حزمة سطح المكتب Windows & Linux (.zip)',
+                subtitle: 'مثبت اختصار مستقل (Standalone) لأنظمة Windows و Linux',
+                mimeType: 'application/zip',
+                sizeBytes: 0,
+                sha256: '',
+                available: true
+              }
+            ]).map((pkg) => {
+              if (pkg.id === 'android-apk' && !pkg.available) {
+                return (
+                  <div
+                    key={pkg.id}
+                    className="p-4 rounded-2xl bg-[#F8FAFB] dark:bg-[#202C33]/70 border border-dashed border-[#D1D7DB] dark:border-[#374248] flex flex-col justify-between gap-3"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold flex items-center gap-1.5">
+                          <Smartphone className="w-4 h-4 text-[#00A884]" aria-hidden="true" />
+                          <span>{pkg.title}</span>
+                        </span>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                          عبر GitHub Actions / Gradle
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] leading-relaxed">
+                        تم تجهيز مشروع Android الفعلي داخل <code className="font-mono-code">/android</code> ومسار <code className="font-mono-code">build-apk.yml</code> لبناء ملف APK موقّع تلقائياً أو عبر الحزمة الكاملة أدناه.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab('apk');
+                        document.getElementById('packager-workbench')?.scrollIntoView({ behavior: 'smooth' });
+                      }}
+                      className="w-full min-h-[38px] rounded-xl bg-[#F0F2F5] dark:bg-[#111B21] border border-[#E2E8EE] dark:border-[#374248] text-xs font-bold text-[#008069] dark:text-[#06CF9C] hover:brightness-95 cursor-pointer"
+                    >
+                      عرض خطوات توليد APK المباشر
+                    </button>
+                  </div>
+                );
+              }
+
+              const PlatformIcon =
+                pkg.platform === 'android'
+                  ? Smartphone
+                  : pkg.platform === 'ios'
+                    ? Apple
+                    : Monitor;
+
+              const effectiveHref =
+                pkg.id === 'ios-mobileconfig' && isPublicLive
+                  ? `/api/packages/ios.mobileconfig?origin=${encodeURIComponent(effectiveUrl)}`
+                  : pkg.url;
+
+              return (
+                <div
+                  key={pkg.id}
+                  className="p-4 rounded-2xl bg-[#F8FAFB] dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#2A3942] flex flex-col justify-between gap-3"
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-8 h-8 rounded-xl bg-[#00A884]/12 text-[#008069] dark:text-[#06CF9C] flex items-center justify-center shrink-0">
+                          <PlatformIcon className="w-4 h-4" aria-hidden="true" />
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="text-xs sm:text-sm font-bold truncate">{pkg.title}</h3>
+                          <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate">
+                            {pkg.subtitle}
+                          </p>
+                        </div>
+                      </div>
+                      {pkg.sizeBytes > 0 && (
+                        <span
+                          dir="ltr"
+                          className="shrink-0 text-[10px] font-mono-code font-bold px-2 py-0.5 rounded-md bg-white dark:bg-[#111B21] border border-[#E2E8EE] dark:border-[#374248]"
+                        >
+                          {formatPackageBytes(pkg.sizeBytes)}
+                        </span>
+                      )}
+                    </div>
+
+                    {pkg.sha256 && (
+                      <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#111B21] border border-[#E9EDEF] dark:border-[#2A3942]">
+                        <span
+                          dir="ltr"
+                          className="text-[10px] font-mono-code text-[#54656F] dark:text-[#8696A0] truncate"
+                        >
+                          SHA-256: {pkg.sha256.slice(0, 20)}…
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void handleCopy(pkg.sha256, `sha-${pkg.id}`)}
+                          className="text-[10px] font-bold text-[#008069] dark:text-[#06CF9C] shrink-0 cursor-pointer hover:underline"
+                        >
+                          {copiedKey === `sha-${pkg.id}` ? 'تم النسخ ✓' : 'نسخ البصمة'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <a
+                    href={effectiveHref}
+                    download={pkg.filename}
+                    className="w-full min-h-[40px] px-3 py-2 rounded-xl bg-[#00A884] hover:bg-[#008069] text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <Download className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                    <span>تنزيل {pkg.filename}</span>
+                  </a>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
         {/* Real Package & Vercel Workbench */}
         <section
           id="packager-workbench"
@@ -421,7 +647,7 @@ export function InstallPortal() {
               }`}
             >
               <ShieldCheck className="w-4 h-4" aria-hidden="true" />
-              <span>فحص الملفات الفعلية ({scoreCount}/7)</span>
+              <span>فحص الملفات الفعلية ({scoreCount}/8)</span>
             </button>
           </div>
 
@@ -677,6 +903,11 @@ export function InstallPortal() {
                     ok: checks.assetLinks,
                     title: 'رابط التحقق الرقمي (/.well-known/assetlinks.json)',
                     desc: 'معرّف ارتباط النطاق لتطبيق Android Trusted Web Activity.'
+                  },
+                  {
+                    ok: checks.hostedPackages,
+                    title: 'حزم الخادم الجاهزة للتوزيع (/downloads/package-manifest.json)',
+                    desc: 'حزمة Android Studio، ملف Apple iOS WebClip، ومثبت سطح المكتب مع بصمة SHA-256.'
                   },
                   {
                     ok: checks.icons,

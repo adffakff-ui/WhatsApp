@@ -20,7 +20,8 @@ import {
   LogOut,
   Fingerprint,
   ScanFace,
-  KeyRound
+  KeyRound,
+  Clock
 } from 'lucide-react';
 import { auth, googleProvider } from './lib/firebase';
 import { uploadBackupToGoogleDrive, restoreBackupFromGoogleDrive } from './services/googleDriveBackup';
@@ -52,6 +53,7 @@ import {
 } from './lib/chatLogic';
 import { deleteMediaBlob } from './lib/mediaStorage';
 import { DEFAULT_OMAR_SETTINGS } from './lib/omarConfig';
+import { normalizeAutoLockMinutes, shouldTriggerAutoLock } from './lib/autoLock';
 import { normalizeChatWallpaper } from './lib/chatWallpaper';
 import {
   buildBlockedUidSet,
@@ -214,6 +216,8 @@ export default function App() {
   const [launchPinInput, setLaunchPinInput] = useState('');
   const [launchPinError, setLaunchPinError] = useState<string | null>(null);
   const [usePinFallbackOnLaunch, setUsePinFallbackOnLaunch] = useState(false);
+  const [autoLockedNotice, setAutoLockedNotice] = useState<string | null>(null);
+  const lastActivityMsRef = useRef<number>(Date.now());
   const [biometricLaunchBusy, setBiometricLaunchBusy] = useState(false);
   const [biometricLaunchError, setBiometricLaunchError] = useState<string | null>(null);
   const [usePinFallbackForChat, setUsePinFallbackForChat] = useState(false);
@@ -496,6 +500,96 @@ export default function App() {
     document.documentElement.dataset.omarTheme = omarSettings.omarTheme;
     localStorage.setItem(STORAGE_KEYS.OMAR, JSON.stringify(omarSettings));
   }, [omarSettings]);
+
+  // Track user interaction timestamps for Auto-Lock
+  useEffect(() => {
+    if (!isEntered || appLockedOnLaunch) return;
+    lastActivityMsRef.current = Date.now();
+    let lastRecorded = lastActivityMsRef.current;
+
+    const recordActivity = () => {
+      const now = Date.now();
+      if (now - lastRecorded >= 1000) {
+        lastRecorded = now;
+        lastActivityMsRef.current = now;
+      }
+    };
+
+    const events: Array<keyof WindowEventMap> = [
+      'pointerdown',
+      'keydown',
+      'touchstart',
+      'scroll',
+      'mousemove'
+    ];
+    for (const evt of events) {
+      window.addEventListener(evt, recordActivity, { passive: true });
+    }
+    return () => {
+      for (const evt of events) {
+        window.removeEventListener(evt, recordActivity);
+      }
+    };
+  }, [isEntered, appLockedOnLaunch, omarSettings.autoLockTimeoutMinutes]);
+
+  // Monitor inactivity and trigger Auto-Lock automatically
+  useEffect(() => {
+    const timeoutMinutes = normalizeAutoLockMinutes(omarSettings.autoLockTimeoutMinutes);
+    if (timeoutMinutes <= 0 || !isEntered || appLockedOnLaunch) return;
+
+    const hasOngoingCall = Boolean(
+      activeCall && (activeCall.status === 'connected' || activeCall.status === 'ringing')
+    );
+
+    const checkAndLock = () => {
+      if (
+        shouldTriggerAutoLock({
+          timeoutMinutes,
+          lastActivityMs: lastActivityMsRef.current,
+          nowMs: Date.now(),
+          isEntered,
+          isAlreadyLocked: appLockedOnLaunch,
+          hasActiveCall: hasOngoingCall
+        })
+      ) {
+        setUnlockedSessionChatIds([]);
+        if (selectedChatId && omarSettings.lockedChatIds.includes(selectedChatId)) {
+          setSelectedChatId(null);
+          setMobileChatOpen(false);
+        }
+        setAutoLockedNotice(
+          `تم القفل التلقائي للمحادثات بعد ${
+            timeoutMinutes === 1 ? 'دقيقة واحدة' : `${timeoutMinutes} دقائق`
+          } من عدم النشاط لحماية النسخة المشفرة.`
+        );
+        setLaunchPinInput('');
+        setLaunchPinError(null);
+        setUsePinFallbackOnLaunch(false);
+        setBiometricLaunchError(null);
+        setAppLockedOnLaunch(true);
+      }
+    };
+
+    const intervalId = window.setInterval(checkAndLock, 5000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkAndLock();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [
+    omarSettings.autoLockTimeoutMinutes,
+    omarSettings.lockedChatIds,
+    isEntered,
+    appLockedOnLaunch,
+    activeCall,
+    selectedChatId
+  ]);
 
   // Ensure local ECDH identity keys exist (scoped per Firebase UID when signed in)
   useEffect(() => {
@@ -1597,6 +1691,8 @@ export default function App() {
     try {
       const ok = await verifyBiometricCredential(omarSettings.biometricCredentialId);
       if (ok) {
+        lastActivityMsRef.current = Date.now();
+        setAutoLockedNotice(null);
         setAppLockedOnLaunch(false);
         setLaunchPinInput('');
         setLaunchPinError(null);
@@ -2941,6 +3037,15 @@ export default function App() {
                 تحقق عبر {omarSettings.biometricDeviceLabel || 'البصمة أو التعرف على الوجه'} للوصول إلى محادثاتك المشفرة
               </p>
             </div>
+            {autoLockedNotice && (
+              <div
+                role="status"
+                className="flex items-start gap-2 rounded-2xl bg-amber-500/12 border border-amber-500/30 px-3 py-2.5 text-right text-[11px] font-semibold text-amber-800 dark:text-amber-300 leading-relaxed"
+              >
+                <Clock className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+                <span>{autoLockedNotice}</span>
+              </div>
+            )}
             {biometricLaunchError && (
               <p role="alert" className="text-xs text-red-600 dark:text-red-400 leading-relaxed">
                 {biometricLaunchError}
@@ -2984,6 +3089,8 @@ export default function App() {
             onSubmit={(e) => {
               e.preventDefault();
               if (launchPinInput.trim() === (omarSettings.chatLockPin || '1234')) {
+                lastActivityMsRef.current = Date.now();
+                setAutoLockedNotice(null);
                 setAppLockedOnLaunch(false);
                 setLaunchPinInput('');
                 setLaunchPinError(null);
@@ -3004,6 +3111,15 @@ export default function App() {
                 أدخل رمز الحماية المكون من ٤ أرقام لفتح المحادثات
               </p>
             </div>
+            {autoLockedNotice && (
+              <div
+                role="status"
+                className="flex items-start gap-2 rounded-2xl bg-amber-500/12 border border-amber-500/30 px-3 py-2.5 text-right text-[11px] font-semibold text-amber-800 dark:text-amber-300 leading-relaxed"
+              >
+                <Clock className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+                <span>{autoLockedNotice}</span>
+              </div>
+            )}
             <input
               type="password"
               inputMode="numeric"
