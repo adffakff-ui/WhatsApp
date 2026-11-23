@@ -1675,6 +1675,52 @@ export default function App() {
     }
   };
 
+  const handleClearChatMessages = (chatId: string) => {
+    setMessagesMap((prev) => {
+      const next = { ...prev, [chatId]: [] };
+      try {
+        localStorage.setItem(userKeys.MESSAGES, JSON.stringify(next));
+      } catch {
+        // Ignore storage error
+      }
+      return next;
+    });
+  };
+
+  const handleClearOldMedia = (daysOld: number) => {
+    const thresholdMs = Date.now() - daysOld * 24 * 60 * 60 * 1000;
+    setMessagesMap((prev) => {
+      const next: Record<string, DecryptedMessage[]> = {};
+      for (const [chatId, msgs] of Object.entries(prev)) {
+        next[chatId] = msgs.map((m) => {
+          const payload = m.payload || {};
+          if (
+            m.createdAtMs < thresholdMs &&
+            (payload.mediaUrl || (payload.mediaUrls && payload.mediaUrls.length > 0) || payload.fileDataUrl)
+          ) {
+            return {
+              ...m,
+              payload: {
+                ...payload,
+                mediaUrl: undefined,
+                mediaUrls: undefined,
+                fileDataUrl: undefined,
+                text: payload.text ? `${payload.text} [تم تنظيف الوسائط القديمة]` : '[تم تنظيف الوسائط القديمة]'
+              }
+            };
+          }
+          return m;
+        });
+      }
+      try {
+        localStorage.setItem(userKeys.MESSAGES, JSON.stringify(next));
+      } catch {
+        // Ignore storage error
+      }
+      return next;
+    });
+  };
+
   const handleLockAppNow = () => {
     setLaunchPinInput('');
     setLaunchPinError(null);
@@ -3487,6 +3533,10 @@ export default function App() {
             onUnblockContact={handleUnblockContact}
             onLookupUser={lookupUserByWasilIdOrUid}
             onImportGoogleContacts={handleImportGoogleContacts}
+            chats={chats}
+            messagesMap={messagesMap}
+            onClearOldMedia={handleClearOldMedia}
+            onClearChatMessages={handleClearChatMessages}
           />
         )}
       </div>

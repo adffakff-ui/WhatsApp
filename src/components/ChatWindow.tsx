@@ -1105,23 +1105,50 @@ export function ChatWindow({
             <ArrowRight className="w-5 h-5" aria-hidden="true" />
           </button>
 
-          <button
-            type="button"
-            onClick={() => onOpenRightPanel('info')}
-            className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0 text-right hover:opacity-90 transition-opacity cursor-pointer"
-          >
-            <Avatar
-              src={chat.avatarUrl}
-              name={chat.title}
-              size="md"
-              isOnline={chat.isOnline}
-              isGroup={chat.type !== 'direct'}
-            />
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <h2 className="font-display text-[15px] sm:text-base font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
+          <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0 text-right">
+            <button
+              type="button"
+              onClick={() => onOpenRightPanel('info')}
+              aria-label={`معلومات محادثة ${chat.title}`}
+              className="flex items-center shrink-0 hover:opacity-90 transition-opacity cursor-pointer"
+            >
+              <Avatar
+                src={chat.avatarUrl}
+                name={chat.title}
+                size="md"
+                isOnline={chat.isOnline}
+                isGroup={chat.type !== 'direct'}
+              />
+            </button>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <button
+                  type="button"
+                  onClick={() => onOpenRightPanel('info')}
+                  className="font-display text-[15px] sm:text-base font-bold text-[#111B21] dark:text-[#E9EDEF] truncate text-right hover:underline cursor-pointer"
+                >
                   {chat.title}
-                </h2>
+                </button>
+
+                {/* Real-time End-to-End Encryption Badge */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenRightPanel('encryption');
+                  }}
+                  title="تشفير تام بين الطرفين (AES-GCM-256) نشط في الوقت الفعلي · انقر للتحقق من كود الأمان"
+                  aria-label="حالة التشفير: مشفرة تماماً بنهاية الطرفين في الوقت الفعلي"
+                  className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded-full bg-emerald-500/10 dark:bg-emerald-500/15 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-[10px] sm:text-[11px] font-semibold shrink-0 hover:bg-emerald-500/20 active:scale-95 transition-all cursor-pointer shadow-2xs select-none"
+                >
+                  <span className="relative flex h-1.5 w-1.5 shrink-0" aria-hidden="true">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                  </span>
+                  <ShieldCheck className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" aria-hidden="true" />
+                  <span className="whitespace-nowrap">مشفر E2EE</span>
+                </button>
+
                 {isLocked && (
                   <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" aria-label="محادثة مقفلة" />
                 )}
@@ -1132,7 +1159,11 @@ export function ChatWindow({
                   />
                 )}
               </div>
-              <p className="text-xs text-[#54656F] dark:text-[#8696A0] truncate">
+              <button
+                type="button"
+                onClick={() => onOpenRightPanel('info')}
+                className="text-xs text-[#54656F] dark:text-[#8696A0] truncate block text-right hover:opacity-85 cursor-pointer w-full"
+              >
                 {isPeerBlocked && chat.type === 'direct'
                   ? 'جهة اتصال محظورة'
                   : chat.isTyping && !omarSettings.hideTypingIndicator
@@ -1146,9 +1177,9 @@ export function ChatWindow({
                           : chat.isOnline
                             ? 'متصل الآن'
                             : 'آخر ظهور اليوم'}
-              </p>
+              </button>
             </div>
-          </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-0.5 sm:gap-1 shrink-0 relative">

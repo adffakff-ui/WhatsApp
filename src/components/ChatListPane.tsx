@@ -480,17 +480,7 @@ export function ChatListPane({
                     <span>قفل التطبيق الآن</span>
                   </button>
                 )}
-                <a
-                  href="/install"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  role="menuitem"
-                  onClick={() => setShowHeaderMenu(false)}
-                  className="w-full px-4 py-2.5 text-right flex items-center gap-2.5 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] font-medium cursor-pointer"
-                >
-                  <ExternalLink className="w-4 h-4 text-[var(--wa-accent)] shrink-0" aria-hidden="true" />
-                  <span className="truncate">بوابة التثبيت وحزمة APK</span>
-                </a>
+
                 {onSignOut && (
                   <button
                     type="button"

@@ -25,10 +25,14 @@ import {
   Users,
   ExternalLink,
   Clock,
-  ShieldCheck
+  ShieldCheck,
+  Database,
+  PieChart
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { BiometricLockPanel } from './BiometricLockPanel';
+import { StorageStatsModal } from './StorageStatsModal';
+import { StorageUsageStatsModal } from './StorageUsageStatsModal';
 import { PRESET_AVATARS } from '../data/assets';
 import {
   formatWhatsAppTime,
@@ -51,6 +55,8 @@ import {
 import { checkWasilIdAvailability } from '../services/firestoreSync';
 import type {
   BlockedContact,
+  ChatRoom,
+  DecryptedMessage,
   DeviceSession,
   OmarSettings,
   PrivacySettings,
@@ -89,6 +95,10 @@ interface SettingsViewProps {
   onUnblockContact?: (blockedUid: string) => Promise<void>;
   onLookupUser?: (query: string) => Promise<UserProfile | null>;
   onImportGoogleContacts?: () => Promise<void>;
+  chats?: ChatRoom[];
+  messagesMap?: Record<string, DecryptedMessage[]>;
+  onClearOldMedia?: (days: number) => void;
+  onClearChatMessages?: (chatId: string) => void;
 }
 
 async function compressImageToAvatarDataUrl(file: File): Promise<string> {
@@ -150,7 +160,11 @@ export function SettingsView({
   onBlockContact,
   onUnblockContact,
   onLookupUser,
-  onImportGoogleContacts
+  onImportGoogleContacts,
+  chats = [],
+  messagesMap = {},
+  onClearOldMedia,
+  onClearChatMessages
 }: SettingsViewProps) {
   const [displayName, setDisplayName] = useState(currentUser.displayName);
   const [about, setAbout] = useState(currentUser.about);
@@ -171,6 +185,8 @@ export function SettingsView({
   const [isBlockingContact, setIsBlockingContact] = useState(false);
   const [unblockingUid, setUnblockingUid] = useState<string | null>(null);
   const [blockError, setBlockError] = useState<string | null>(null);
+  const [showStorageStatsModal, setShowStorageStatsModal] = useState(false);
+  const [showStorageUsageModal, setShowStorageUsageModal] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -889,8 +905,72 @@ export function SettingsView({
                   </div>
                 );
               })()}
+
+              {/* Storage Stats Trigger Card */}
+              <div className="p-3.5 rounded-2xl bg-[#F0F2F5] dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#374248] flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-[var(--wa-accent-soft)] dark:bg-[#111B21] text-[var(--wa-accent)] flex items-center justify-center shrink-0">
+                    <Database className="w-4 h-4" aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
+                      إحصائيات التخزين المحلي والذاكرة المؤقتة
+                    </h3>
+                    <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate">
+                      متابعة حجم التطبيق الفعلي، مفاتيح التخزين، وموارد Service Worker
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowStorageStatsModal(true)}
+                  className="shrink-0 px-3.5 py-2 rounded-xl bg-[var(--wa-accent)] text-white text-xs font-bold hover:brightness-95 cursor-pointer transition-colors shadow-xs"
+                >
+                  عرض الإحصائيات
+                </button>
+              </div>
+
+              {/* Per-Chat Storage Usage Breakdown Card */}
+              <div className="p-3.5 rounded-2xl bg-[#F0F2F5] dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#374248] flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+                    <PieChart className="w-4 h-4" aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
+                      حجم التخزين لكل محادثة (StorageUsageStats)
+                    </h3>
+                    <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate">
+                      عرض حجم كل محادثة والوسائط المخزنة مع زر تنظيف الوسائط القديمة
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowStorageUsageModal(true)}
+                  className="shrink-0 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer transition-colors shadow-xs"
+                >
+                  إدارة المحادثات
+                </button>
+              </div>
             </div>
           )}
+
+          <StorageStatsModal
+            open={showStorageStatsModal}
+            onClose={() => setShowStorageStatsModal(false)}
+            onShowToast={onShowToast}
+          />
+
+          <StorageUsageStatsModal
+            open={showStorageUsageModal}
+            onClose={() => setShowStorageUsageModal(false)}
+            chats={chats || []}
+            messagesMap={messagesMap || {}}
+            onClearOldMedia={onClearOldMedia}
+            onClearChatMessages={onClearChatMessages}
+            onShowToast={onShowToast}
+          />
 
           {/* Wasil ID Card */}
           <div className="space-y-2 pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">
@@ -1158,25 +1238,7 @@ export function SettingsView({
             </div>
           </div>
 
-          {/* Standalone Install Portal Link */}
-          <div className="pb-6 border-b border-[#F0F2F5] dark:border-[#222D34]">
-            <a
-              href="/install"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="w-full px-3.5 py-3 rounded-xl bg-[#F0F2F5] dark:bg-[#202C33] hover:bg-[#E9EDEF] dark:hover:bg-[#2A3942] border border-[#E9EDEF] dark:border-[#2A3942] flex items-center justify-between gap-3 transition-colors"
-            >
-              <div className="min-w-0">
-                <div className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF]">
-                  بوابة تثبيت التطبيق وحزمة APK (صفحة مستقلة)
-                </div>
-                <div className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate">
-                  فتح واجهة التثبيت المستقلة وملفات الحزمة الفعلية عبر Vercel
-                </div>
-              </div>
-              <ExternalLink className="w-4 h-4 text-[var(--wa-accent)] shrink-0" aria-hidden="true" />
-            </a>
-          </div>
+
 
           {/* Account Actions */}
           <div className="space-y-2.5">

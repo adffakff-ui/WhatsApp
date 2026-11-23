@@ -817,17 +817,7 @@ export function AuthScreen({
                       onChange={(e) => void handleRestoreFileChange(e)}
                       className="hidden"
                     />
-                    <div className="text-center pt-0.5">
-                      <a
-                        href="/install"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-[var(--wa-accent-strong)] dark:text-[var(--wa-accent)] hover:underline"
-                      >
-                        <span>بوابة التثبيت المستقلة وتحميل حزمة APK</span>
-                        <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                      </a>
-                    </div>
+
                   </div>
                 </div>
               </div>
