@@ -33,6 +33,7 @@ import { Avatar } from './Avatar';
 import { BiometricLockPanel } from './BiometricLockPanel';
 import { StorageStatsModal } from './StorageStatsModal';
 import { StorageUsageStatsModal } from './StorageUsageStatsModal';
+import { ClearSwCacheModal } from './ClearSwCacheModal';
 import { PRESET_AVATARS } from '../data/assets';
 import {
   formatWhatsAppTime,
@@ -187,6 +188,7 @@ export function SettingsView({
   const [blockError, setBlockError] = useState<string | null>(null);
   const [showStorageStatsModal, setShowStorageStatsModal] = useState(false);
   const [showStorageUsageModal, setShowStorageUsageModal] = useState(false);
+  const [showClearSwModal, setShowClearSwModal] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -953,6 +955,30 @@ export function SettingsView({
                   إدارة المحادثات
                 </button>
               </div>
+
+              {/* Service Worker & Workbox Manual Cache Purge Card */}
+              <div className="p-3.5 rounded-2xl bg-[#F0F2F5] dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#374248] flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+                    <RefreshCw className="w-4 h-4" aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
+                      تحديث ذاكرة Service Worker و Workbox
+                    </h3>
+                    <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate">
+                      مسح الكاش يدوياً وإعادة جلب أحدث ملفات السيرفر وحل مشاكل التزامن
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowClearSwModal(true)}
+                  className="shrink-0 px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white text-xs font-bold cursor-pointer transition-colors shadow-xs"
+                >
+                  إصلاح وتحديث
+                </button>
+              </div>
             </div>
           )}
 
@@ -969,6 +995,12 @@ export function SettingsView({
             messagesMap={messagesMap || {}}
             onClearOldMedia={onClearOldMedia}
             onClearChatMessages={onClearChatMessages}
+            onShowToast={onShowToast}
+          />
+
+          <ClearSwCacheModal
+            open={showClearSwModal}
+            onClose={() => setShowClearSwModal(false)}
             onShowToast={onShowToast}
           />
 

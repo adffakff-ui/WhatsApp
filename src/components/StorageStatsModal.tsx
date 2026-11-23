@@ -11,6 +11,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { collectStorageStats, formatBytes, type StorageStatsReport } from '../lib/storageStats';
+import { clearServiceWorkerAndWorkboxCache } from '../lib/pwaCacheManager';
 
 interface StorageStatsModalProps {
   open: boolean;
@@ -42,16 +43,17 @@ export function StorageStatsModal({ open, onClose, onShowToast }: StorageStatsMo
   }, [open, loadStats]);
 
   const handleClearCaches = async () => {
-    if (!window.confirm('هل أنت متأكد من مسح جميع الملفات المخبأة في Service Worker؟ سيتم إعادة تحميلها تلقائياً عند الحاجة.')) {
+    if (!window.confirm('هل أنت متأكد من مسح جميع الملفات المخبأة في Service Worker و Workbox؟ سيتم إعادة تحميلها تلقائياً عند الحاجة.')) {
       return;
     }
     setClearing(true);
     try {
-      if ('caches' in window) {
-        const keys = await caches.keys();
-        await Promise.all(keys.map((k) => caches.delete(k)));
+      const result = await clearServiceWorkerAndWorkboxCache({ unregister: false, reload: false });
+      if (result.success) {
+        onShowToast?.(`تم مسح ${result.deletedCaches.length} ذاكرة مؤقتة وتحديث Service Worker بنجاح.`);
+      } else {
+        onShowToast?.('تعذر مسح الملفات المخبأة.');
       }
-      onShowToast?.('تم مسح الملفات المخبأة بنجاح.');
       void loadStats();
     } catch {
       onShowToast?.('تعذر مسح الملفات المخبأة.');
