@@ -2715,9 +2715,9 @@ export function ChatWindow({
                       onTypingChange?.(false);
                       return;
                     }
-                    if (replyingTo) {
+                    if (replyTo) {
                       e.preventDefault();
-                      setReplyingTo(null);
+                      setReplyTo(null);
                       return;
                     }
                   }

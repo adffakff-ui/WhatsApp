@@ -138,7 +138,7 @@ import { ScheduledMessagesModal } from './components/ScheduledMessagesModal';
 import { OmarAddonsView } from './components/OmarAddonsView';
 import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { OfflineIndicator } from './components/PWAInstallButton';
-import { getNextChatId } from './lib/hotkeys';
+import { getNextChatId, isHotkeyMatch } from './lib/hotkeys';
 import { Avatar } from './components/Avatar';
 import type {
   BlockedContact,
@@ -3044,6 +3044,109 @@ export default function App() {
     }
   };
 
+  // Global desktop keyboard hotkeys (Ctrl/Cmd + N, K, /, ,, Shift+N, Shift+L, Shift+D, Alt+Up/Down, Esc)
+  useEffect(() => {
+    if (!isEntered || appLockedOnLaunch) return;
+
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (isHotkeyMatch(e, { ctrlOrMeta: true, key: '/' })) {
+        e.preventDefault();
+        setShowShortcutsModal((prev) => !prev);
+        return;
+      }
+
+      if (isHotkeyMatch(e, { ctrlOrMeta: true, key: 'k' })) {
+        e.preventDefault();
+        setActiveTab('chats');
+        setMobileChatOpen(false);
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('wasil:focus-search'));
+        }, 20);
+        return;
+      }
+
+      if (isHotkeyMatch(e, { ctrlOrMeta: true, shift: true, key: 'n' })) {
+        e.preventDefault();
+        setNewChatInitialQuery('');
+        setNewChatModalMode('group');
+        return;
+      }
+
+      if (isHotkeyMatch(e, { ctrlOrMeta: true, key: 'n' })) {
+        e.preventDefault();
+        setNewChatInitialQuery('');
+        setNewChatModalMode('direct');
+        return;
+      }
+
+      if (isHotkeyMatch(e, { ctrlOrMeta: true, key: ',' })) {
+        e.preventDefault();
+        setActiveTab('settings');
+        return;
+      }
+
+      if (isHotkeyMatch(e, { ctrlOrMeta: true, shift: true, key: 'l' })) {
+        e.preventDefault();
+        handleLockAppNow();
+        return;
+      }
+
+      if (isHotkeyMatch(e, { ctrlOrMeta: true, shift: true, key: 'd' })) {
+        e.preventDefault();
+        const nextDnd = !omarSettings.dndMode;
+        handleUpdateOmarSettings({ dndMode: nextDnd });
+        showToast(nextDnd ? 'تم تفعيل وضع عدم الإزعاج' : 'تم إيقاف وضع عدم الإزعاج');
+        return;
+      }
+
+      if (isHotkeyMatch(e, { alt: true, key: 'ArrowDown' })) {
+        const nextId = getNextChatId(visibleChats, selectedChatId, 'next');
+        if (nextId) {
+          e.preventDefault();
+          setActiveTab('chats');
+          handleSelectChat(nextId);
+        }
+        return;
+      }
+
+      if (isHotkeyMatch(e, { alt: true, key: 'ArrowUp' })) {
+        const prevId = getNextChatId(visibleChats, selectedChatId, 'prev');
+        if (prevId) {
+          e.preventDefault();
+          setActiveTab('chats');
+          handleSelectChat(prevId);
+        }
+        return;
+      }
+
+      if (e.key === 'Escape' && !e.defaultPrevented) {
+        if (showShortcutsModal) {
+          e.preventDefault();
+          setShowShortcutsModal(false);
+        } else if (newChatModalMode) {
+          e.preventDefault();
+          setNewChatModalMode(null);
+          setNewChatInitialQuery('');
+        } else if (showScheduledListModal) {
+          e.preventDefault();
+          setShowScheduledListModal(false);
+        } else if (showBroadcastModal) {
+          e.preventDefault();
+          setShowBroadcastModal(false);
+        } else if (showSignOutConfirm) {
+          e.preventDefault();
+          setShowSignOutConfirm(false);
+        } else if (wallpaperPickerChatId) {
+          e.preventDefault();
+          setWallpaperPickerChatId(null);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  });
+
   if (!isEntered) {
     return (
       <AuthScreen
@@ -3323,6 +3426,7 @@ export default function App() {
                 scheduledCount={scheduledMessages.filter((m) => m.status === 'pending').length}
                 onDeleteChat={handleDeleteChat}
                 onDeleteMultipleChats={handleDeleteMultipleChats}
+                onOpenKeyboardShortcuts={() => setShowShortcutsModal(true)}
               />
             </div>
 
@@ -3540,6 +3644,7 @@ export default function App() {
             messagesMap={messagesMap}
             onClearOldMedia={handleClearOldMedia}
             onClearChatMessages={handleClearChatMessages}
+            onOpenKeyboardShortcuts={() => setShowShortcutsModal(true)}
           />
         )}
       </div>
@@ -3869,6 +3974,12 @@ export default function App() {
           onClose={() => setShowScheduledListModal(false)}
         />
       )}
+
+      {/* Keyboard Shortcuts Help Modal */}
+      <KeyboardShortcutsModal
+        open={showShortcutsModal}
+        onClose={() => setShowShortcutsModal(false)}
+      />
 
       {/* Per-Chat Wallpaper Customization Modal */}
       {wallpaperPickerChatId && (() => {
