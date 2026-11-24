@@ -27,7 +27,8 @@ import {
   Clock,
   ShieldCheck,
   Database,
-  PieChart
+  PieChart,
+  Keyboard
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { BiometricLockPanel } from './BiometricLockPanel';
@@ -100,6 +101,7 @@ interface SettingsViewProps {
   messagesMap?: Record<string, DecryptedMessage[]>;
   onClearOldMedia?: (days: number) => void;
   onClearChatMessages?: (chatId: string) => void;
+  onOpenKeyboardShortcuts?: () => void;
 }
 
 async function compressImageToAvatarDataUrl(file: File): Promise<string> {
@@ -165,7 +167,8 @@ export function SettingsView({
   chats = [],
   messagesMap = {},
   onClearOldMedia,
-  onClearChatMessages
+  onClearChatMessages,
+  onOpenKeyboardShortcuts
 }: SettingsViewProps) {
   const [displayName, setDisplayName] = useState(currentUser.displayName);
   const [about, setAbout] = useState(currentUser.about);
@@ -979,6 +982,33 @@ export function SettingsView({
                   إصلاح وتحديث
                 </button>
               </div>
+
+              {/* Keyboard Shortcuts Trigger Card */}
+              {onOpenKeyboardShortcuts && (
+                <div className="p-3.5 rounded-2xl bg-[#F0F2F5] dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#374248] flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-9 h-9 rounded-xl bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                      <Keyboard className="w-4 h-4" aria-hidden="true" />
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
+                        اختصارات لوحة المفاتيح (Hotkeys)
+                      </h3>
+                      <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate">
+                        استعراض كافة اختصارات سطح المكتب للدردشة والتنقل السريع
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onOpenKeyboardShortcuts}
+                    className="shrink-0 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold cursor-pointer transition-colors shadow-xs flex items-center gap-1.5"
+                  >
+                    <Keyboard className="w-3.5 h-3.5" />
+                    <span>عرض الاختصارات</span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
 

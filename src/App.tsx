@@ -136,7 +136,9 @@ import { CommunitiesView, type SuggestedChannelItem } from './components/Communi
 import { StarredView } from './components/StarredView';
 import { ScheduledMessagesModal } from './components/ScheduledMessagesModal';
 import { OmarAddonsView } from './components/OmarAddonsView';
+import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { OfflineIndicator } from './components/PWAInstallButton';
+import { getNextChatId } from './lib/hotkeys';
 import { Avatar } from './components/Avatar';
 import type {
   BlockedContact,
@@ -404,6 +406,7 @@ export default function App() {
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [showScheduledListModal, setShowScheduledListModal] = useState(false);
+  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const [wallpaperPickerChatId, setWallpaperPickerChatId] = useState<string | null>(null);
   const [highlightedJump, setHighlightedJump] = useState<{
     chatId: string;

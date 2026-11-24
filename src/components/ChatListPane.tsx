@@ -25,7 +25,8 @@ import {
   Clock,
   Trash2,
   CheckSquare,
-  ExternalLink
+  ExternalLink,
+  Keyboard
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { HighlightText } from './HighlightText';
@@ -90,6 +91,7 @@ interface ChatListPaneProps {
   scheduledCount?: number;
   onDeleteChat?: (chatId: string) => Promise<void> | void;
   onDeleteMultipleChats?: (chatIds: string[]) => Promise<void> | void;
+  onOpenKeyboardShortcuts?: () => void;
 }
 
 export function ChatListPane({
@@ -134,7 +136,8 @@ export function ChatListPane({
   onOpenScheduledMessages,
   scheduledCount = 0,
   onDeleteChat,
-  onDeleteMultipleChats
+  onDeleteMultipleChats,
+  onOpenKeyboardShortcuts
 }: ChatListPaneProps) {
   const [menuChatId, setMenuChatId] = useState<string | null>(null);
   const [menuOpensUp, setMenuOpensUp] = useState(false);
@@ -182,6 +185,18 @@ export function ChatListPane({
         window.cancelAnimationFrame(scrollRafRef.current);
       }
     };
+  }, []);
+
+  useEffect(() => {
+    const handleFocusSearch = () => {
+      setSearchFocused(true);
+      window.requestAnimationFrame(() => {
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      });
+    };
+    window.addEventListener('wasil:focus-search', handleFocusSearch);
+    return () => window.removeEventListener('wasil:focus-search', handleFocusSearch);
   }, []);
 
   const handleListScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -330,8 +345,8 @@ export function ChatListPane({
 
           <button
             type="button"
-            aria-label="دردشة جديدة"
-            title="دردشة جديدة"
+            aria-label="دردشة جديدة (Ctrl + N)"
+            title="دردشة جديدة (Ctrl + N)"
             onClick={() => onOpenNewChat()}
             className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-[#F0F2F5] dark:hover:bg-[#202C33] transition-colors cursor-pointer"
           >
@@ -474,10 +489,31 @@ export function ChatListPane({
                       setShowHeaderMenu(false);
                       onLockAppNow();
                     }}
-                    className="w-full px-4 py-2.5 text-right flex items-center gap-2.5 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] font-medium cursor-pointer"
+                    className="w-full px-4 py-2.5 text-right flex items-center justify-between hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] font-medium cursor-pointer"
                   >
-                    <Lock className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
-                    <span>قفل التطبيق الآن</span>
+                    <div className="flex items-center gap-2.5">
+                      <Lock className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+                      <span>قفل التطبيق الآن</span>
+                    </div>
+                    <kbd className="px-1.5 py-0.5 rounded border border-[#D1D7DB] dark:border-[#374248] text-[10px] font-mono-code font-bold text-[#8696A0]" dir="ltr">Ctrl+Shift+L</kbd>
+                  </button>
+                )}
+
+                {onOpenKeyboardShortcuts && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setShowHeaderMenu(false);
+                      onOpenKeyboardShortcuts();
+                    }}
+                    className="w-full px-4 py-2.5 text-right flex items-center justify-between hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] font-medium cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Keyboard className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+                      <span>اختصارات لوحة المفاتيح</span>
+                    </div>
+                    <kbd className="px-1.5 py-0.5 rounded border border-[#D1D7DB] dark:border-[#374248] text-[10px] font-mono-code font-bold text-[#8696A0]" dir="ltr">Ctrl /</kbd>
                   </button>
                 )}
 
@@ -549,6 +585,14 @@ export function ChatListPane({
             aria-label="البحث في المحادثات والرسائل"
             className="w-full bg-transparent text-sm text-[#111B21] dark:text-[#E9EDEF] placeholder:text-[#54656F] dark:placeholder:text-[#8696A0] focus:outline-none px-1.5"
           />
+          {!searchQuery && !searchFocused && (
+            <kbd
+              className="hidden md:inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono-code font-bold rounded border border-[#D1D7DB] dark:border-[#374248] text-[#8696A0] bg-white/60 dark:bg-[#111B21]/60 shrink-0 pointer-events-none select-none"
+              dir="ltr"
+            >
+              Ctrl K
+            </kbd>
+          )}
           {(searchQuery || msgFilter !== 'all' || searchFocused) && (
             <button
               type="button"

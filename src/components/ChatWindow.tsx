@@ -2707,14 +2707,21 @@ export function ChatWindow({
                   onTypingChange?.(val.trim().length > 0);
                 }}
                 onKeyDown={(e) => {
-                  if (e.key === 'Escape' && editingMsg) {
-                    e.preventDefault();
-                    setEditingMsg(null);
-                    setText('');
-                    onTypingChange?.(false);
-                    return;
+                  if (e.key === 'Escape') {
+                    if (editingMsg) {
+                      e.preventDefault();
+                      setEditingMsg(null);
+                      setText('');
+                      onTypingChange?.(false);
+                      return;
+                    }
+                    if (replyingTo) {
+                      e.preventDefault();
+                      setReplyingTo(null);
+                      return;
+                    }
                   }
-                  if (e.key === 'Enter' && !e.shiftKey) {
+                  if ((e.key === 'Enter' && !e.shiftKey) || ((e.ctrlKey || e.metaKey) && e.key === 'Enter')) {
                     e.preventDefault();
                     onTypingChange?.(false);
                     void handleSendText();
@@ -2735,8 +2742,8 @@ export function ChatWindow({
             {text.trim() ? (
               <button
                 type="button"
-                aria-label={editingMsg ? 'حفظ التعديل' : 'إرسال الرسالة'}
-                title={editingMsg ? 'حفظ التعديل' : 'إرسال الرسالة'}
+                aria-label={editingMsg ? 'حفظ التعديل (Ctrl + Enter)' : 'إرسال الرسالة (Ctrl + Enter)'}
+                title={editingMsg ? 'حفظ التعديل (Ctrl + Enter)' : 'إرسال الرسالة (Ctrl + Enter)'}
                 onClick={() => {
                   onTypingChange?.(false);
                   void handleSendText();
