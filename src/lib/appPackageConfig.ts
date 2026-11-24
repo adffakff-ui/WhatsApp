@@ -3,7 +3,7 @@ export const WASIL_APP_NAME = 'تواصل - Wasil Messenger';
 export const WASIL_SHORT_NAME = 'تواصل';
 export const WASIL_APP_VERSION = '1.0.0';
 export const WASIL_APP_VERSION_CODE = 1;
-export const WASIL_DEFAULT_VERCEL_URL = 'https://wasil-messenger.vercel.app';
+export const WASIL_DEFAULT_VERCEL_URL = 'https://whats-app-px5v.vercel.app';
 
 export interface TwaManifestInput {
   originUrl: string;
@@ -28,7 +28,7 @@ export function extractHostname(rawUrl: string): string {
   try {
     return new URL(normalizeOriginUrl(rawUrl)).hostname;
   } catch {
-    return 'wasil-messenger.vercel.app';
+    return 'whats-app-px5v.vercel.app';
   }
 }
 

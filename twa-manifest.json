@@ -1,6 +1,6 @@
 {
   "packageId": "com.wasil.messenger",
-  "host": "wasil-messenger.vercel.app",
+  "host": "whats-app-px5v.vercel.app",
   "name": "تواصل - Wasil Messenger",
   "launcherName": "تواصل",
   "display": "standalone",
@@ -13,9 +13,9 @@
   "backgroundColor": "#EAE6DF",
   "enableNotifications": true,
   "startUrl": "/",
-  "iconUrl": "https://wasil-messenger.vercel.app/pwa-512x512.png",
-  "maskableIconUrl": "https://wasil-messenger.vercel.app/pwa-maskable-512x512.png",
-  "monochromeIconUrl": "https://wasil-messenger.vercel.app/pwa-192x192.png",
+  "iconUrl": "https://whats-app-px5v.vercel.app/pwa-512x512.png",
+  "maskableIconUrl": "https://whats-app-px5v.vercel.app/pwa-maskable-512x512.png",
+  "monochromeIconUrl": "https://whats-app-px5v.vercel.app/pwa-192x192.png",
   "splashScreenFadeOutDuration": 300,
   "signingKey": {
     "path": "./android.keystore",
@@ -24,7 +24,7 @@
   "appVersionName": "1.0.0",
   "appVersionCode": 1,
   "generatorApp": "bubblewrap-cli",
-  "webManifestUrl": "https://wasil-messenger.vercel.app/manifest.json",
+  "webManifestUrl": "https://whats-app-px5v.vercel.app/manifest.json",
   "fallbackType": "customtabs",
   "features": {
     "locationDelegation": {
@@ -35,7 +35,7 @@
     }
   },
   "enableSiteSettingsShortcut": true,
-  "fullScopeUrl": "https://wasil-messenger.vercel.app/",
+  "fullScopeUrl": "https://whats-app-px5v.vercel.app/",
   "minSdkVersion": 21,
   "orientation": "default",
   "fingerprints": [],

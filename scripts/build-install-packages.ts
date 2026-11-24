@@ -77,7 +77,10 @@ async function collectFilesRecursively(
 
 async function main() {
   const originUrl = normalizeOriginUrl(
-    process.env.WASIL_PUBLIC_URL || process.env.VERCEL_URL || WASIL_DEFAULT_VERCEL_URL
+    process.env.WASIL_PUBLIC_URL ||
+      process.env.VERCEL_PROJECT_PRODUCTION_URL ||
+      process.env.VERCEL_URL ||
+      WASIL_DEFAULT_VERCEL_URL
   );
   await fs.mkdir(DOWNLOADS_DIR, { recursive: true });
 

@@ -8,7 +8,7 @@ on:
       app_url:
         description: 'Live HTTPS App URL to package inside APK'
         required: false
-        default: 'https://wasil-messenger.vercel.app'
+        default: 'https://whats-app-px5v.vercel.app'
 
 permissions:
   contents: read
@@ -19,7 +19,7 @@ jobs:
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      WASIL_APP_URL: ${{ github.event.inputs.app_url || 'https://wasil-messenger.vercel.app' }}
+      WASIL_APP_URL: ${{ github.event.inputs.app_url || 'https://whats-app-px5v.vercel.app' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

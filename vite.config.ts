@@ -60,7 +60,7 @@ export default defineConfig(() => {
             },
             {
               platform: 'webapp',
-              url: 'https://wasil-messenger.vercel.app/manifest.json'
+              url: 'https://whats-app-px5v.vercel.app/manifest.json'
             }
           ],
           icons: [

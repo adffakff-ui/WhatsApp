@@ -192,7 +192,7 @@ export function PWAInstallButton({
     }
   };
 
-  const effectiveUrl = (customUrl.trim() || currentUrl || 'https://wasil-messenger.vercel.app').trim();
+  const effectiveUrl = (customUrl.trim() || currentUrl || 'https://whats-app-px5v.vercel.app').trim();
   const packageId = 'com.wasil.messenger';
 
   const pwabuilderDirectUrl = `https://www.pwabuilder.com/?url=${encodeURIComponent(effectiveUrl)}`;

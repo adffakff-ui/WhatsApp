@@ -1,6 +1,6 @@
 {
   "packageId": "com.wasil.messenger",
-  "host": "wasil-messenger.vercel.app",
+  "host": "whats-app-px5v.vercel.app",
   "name": "تواصل - Wasil Messenger",
   "launcherName": "تواصل",
   "display": "standalone",
@@ -13,9 +13,9 @@
   "backgroundColor": "#EAE6DF",
   "enableNotifications": true,
   "startUrl": "/",
-  "iconUrl": "https://wasil-messenger.vercel.app/pwa-512x512.png",
-  "maskableIconUrl": "https://wasil-messenger.vercel.app/pwa-maskable-512x512.png",
-  "monochromeIconUrl": "https://wasil-messenger.vercel.app/pwa-192x192.png",
+  "iconUrl": "https://whats-app-px5v.vercel.app/pwa-512x512.png",
+  "maskableIconUrl": "https://whats-app-px5v.vercel.app/pwa-maskable-512x512.png",
+  "monochromeIconUrl": "https://whats-app-px5v.vercel.app/pwa-192x192.png",
   "splashScreenFadeOutDuration": 300,
   "signingKey": {
     "path": "./android.keystore",
@@ -27,18 +27,18 @@
     {
       "name": "محادثة جديدة",
       "shortName": "محادثة",
-      "url": "https://wasil-messenger.vercel.app/?action=new-chat",
-      "chosenIconUrl": "https://wasil-messenger.vercel.app/pwa-192x192.png"
+      "url": "https://whats-app-px5v.vercel.app/?action=new-chat",
+      "chosenIconUrl": "https://whats-app-px5v.vercel.app/pwa-192x192.png"
     },
     {
       "name": "الحالات والقصص",
       "shortName": "الحالات",
-      "url": "https://wasil-messenger.vercel.app/?tab=status",
-      "chosenIconUrl": "https://wasil-messenger.vercel.app/pwa-192x192.png"
+      "url": "https://whats-app-px5v.vercel.app/?tab=status",
+      "chosenIconUrl": "https://whats-app-px5v.vercel.app/pwa-192x192.png"
     }
   ],
   "generatorApp": "bubblewrap-cli",
-  "webManifestUrl": "https://wasil-messenger.vercel.app/manifest.json",
+  "webManifestUrl": "https://whats-app-px5v.vercel.app/manifest.json",
   "fallbackType": "customtabs",
   "features": {
     "locationDelegation": {
@@ -54,7 +54,7 @@
   "enableSiteSettingsShortcut": true,
   "isChromeOSOnly": false,
   "isMetaQuest": false,
-  "fullScopeUrl": "https://wasil-messenger.vercel.app/",
+  "fullScopeUrl": "https://whats-app-px5v.vercel.app/",
   "minSdkVersion": 21,
   "orientation": "default",
   "fingerprints": [],

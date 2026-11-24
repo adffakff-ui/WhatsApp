@@ -104,7 +104,7 @@ export function InstallPortal() {
 
   const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [targetUrl, setTargetUrl] = useState<string>(() => {
-    if (typeof window === 'undefined') return 'https://wasil-messenger.vercel.app';
+    if (typeof window === 'undefined') return 'https://whats-app-px5v.vercel.app';
     return window.location.origin;
   });
   const [sha256Input, setSha256Input] = useState('');
@@ -695,7 +695,7 @@ export function InstallPortal() {
                     dir="ltr"
                     value={targetUrl}
                     onChange={(e) => setTargetUrl(e.target.value)}
-                    placeholder="https://wasil-messenger.vercel.app"
+                    placeholder="https://whats-app-px5v.vercel.app"
                     className="w-full rounded-xl bg-[#F0F2F5] dark:bg-[#202C33] border border-[#E2E8EE] dark:border-[#374248] px-4 py-3 text-xs sm:text-sm font-mono-code text-left focus:outline-none focus:ring-2 focus:ring-[#00A884]"
                   />
                   {!isPublicLive && (
