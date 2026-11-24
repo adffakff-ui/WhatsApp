@@ -2,8 +2,8 @@
   "appName": "تواصل - Wasil Messenger",
   "packageId": "com.wasil.messenger",
   "version": "1.0.0",
-  "originUrl": "https://wasil-messenger.vercel.app",
-  "generatedAt": "2026-11-24T08:20:01.650Z",
+  "originUrl": "https://whats-app-px5v.vercel.app",
+  "generatedAt": "2026-11-24T20:29:43.869Z",
   "packages": [
     {
       "id": "android-apk",
@@ -25,8 +25,8 @@
       "title": "حزمة مشروع Android APK / TWA الكاملة",
       "subtitle": "مشروع Gradle جاهز + twa-manifest.json + assetlinks.json",
       "mimeType": "application/zip",
-      "sizeBytes": 306066,
-      "sha256": "bd781232c6f433b5422befffab262109f51de18b7f103f47cc756fc98dee3959",
+      "sizeBytes": 306095,
+      "sha256": "e80f32dd34552f9dfed1809668de0580b8dc26aa6797ff4cc71ba0f21ca7bc2b",
       "available": true
     },
     {
@@ -37,8 +37,8 @@
       "title": "ملف تثبيت iPhone و iPad (.mobileconfig)",
       "subtitle": "ملف تعريف Apple WebClip أصلي بشعار التطبيق الكامل",
       "mimeType": "application/x-apple-aspen-config",
-      "sizeBytes": 54052,
-      "sha256": "95e89d5d56499560407537fb6f8f8d73632a35d4005200183d7838bc14b05a0a",
+      "sizeBytes": 54051,
+      "sha256": "a915e3e9cf8e8c7ba9fbe2faf2e4c73e212b3372b81ac9c4d88c2c3877c3f608",
       "available": true
     },
     {
@@ -49,8 +49,8 @@
       "title": "حزمة سطح المكتب Windows & Linux (.zip)",
       "subtitle": "مثبت اختصار مستقل (Standalone) لأنظمة Windows و Linux",
       "mimeType": "application/zip",
-      "sizeBytes": 1723,
-      "sha256": "3d24241d2a09e93c4761145977f7adecd9af195ea0d9348b3616f9019620e19a",
+      "sizeBytes": 1742,
+      "sha256": "a5d2ad5e70079d27c93d809b5a253fdf6a094c353bb4dd7190103a5896386a88",
       "available": true
     }
   ]
