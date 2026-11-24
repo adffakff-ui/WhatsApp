@@ -84,17 +84,17 @@ jobs:
             fi
           fi
 
-          cat << 'EOF' > ../dist-apk/INSTALLATION_GUIDE.txt
-Wasil Messenger APK Installation Guide:
-=======================================
-1. To avoid "App not installed" (التطبيق ليس مثبتاً):
-   - Uninstall any older version of Wasil Messenger / WhatsApp clone currently on your phone.
-   - Install "wasil-messenger-release.apk" or "wasil-messenger-debug.apk".
-2. If Google Play Protect shows a prompt:
-   - Tap "More details" (مزيد من التفاصيل).
-   - Tap "Install anyway" (تثبيت على أي حال).
-3. Ensure your File Manager has permission to "Install Unknown Apps" in phone settings.
-EOF
+          printf '%s\n' \
+            'Wasil Messenger APK Installation Guide:' \
+            '=======================================' \
+            '1. To avoid "App not installed" (التطبيق ليس مثبتاً):' \
+            '   - Uninstall any older version of Wasil Messenger / WhatsApp clone currently on your phone.' \
+            '   - Install "wasil-messenger-release.apk" or "wasil-messenger-debug.apk".' \
+            '2. If Google Play Protect shows a prompt:' \
+            '   - Tap "More details" (مزيد من التفاصيل).' \
+            '   - Tap "Install anyway" (تثبيت على أي حال).' \
+            '3. Ensure your File Manager has permission to "Install Unknown Apps" in phone settings.' \
+            > ../dist-apk/INSTALLATION_GUIDE.txt
 
       - name: Upload Wasil APK Artifacts
         if: success()
