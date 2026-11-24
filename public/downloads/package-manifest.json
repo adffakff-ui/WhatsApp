@@ -3,7 +3,7 @@
   "packageId": "com.wasil.messenger",
   "version": "1.0.0",
   "originUrl": "https://wasil-messenger.vercel.app",
-  "generatedAt": "2026-11-23T18:18:26.087Z",
+  "generatedAt": "2026-11-24T08:11:24.385Z",
   "packages": [
     {
       "id": "android-apk",
@@ -25,8 +25,8 @@
       "title": "حزمة مشروع Android APK / TWA الكاملة",
       "subtitle": "مشروع Gradle جاهز + twa-manifest.json + assetlinks.json",
       "mimeType": "application/zip",
-      "sizeBytes": 306051,
-      "sha256": "c8eaa9b6be127341454636d560a93d10b738134cb38b42f45b2427cf0bd25a6f",
+      "sizeBytes": 306066,
+      "sha256": "11824ea96aa7879d6a5c91481a365709aef0c0bad9b40e709e609868d4cd0d90",
       "available": true
     },
     {
@@ -50,7 +50,7 @@
       "subtitle": "مثبت اختصار مستقل (Standalone) لأنظمة Windows و Linux",
       "mimeType": "application/zip",
       "sizeBytes": 1723,
-      "sha256": "9460a51a955c7021f71f3b556ffd32ac18602a2c83682e84027b4ea050acb19c",
+      "sha256": "34b322785a1af951694757ff63e9e04130ce6bcd91225d78ec1f3e27ca021f1f",
       "available": true
     }
   ]

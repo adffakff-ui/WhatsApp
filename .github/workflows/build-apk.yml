@@ -71,13 +71,35 @@ jobs:
           mkdir -p ../dist-apk
           cp app/build/outputs/apk/debug/*.apk ../dist-apk/wasil-messenger-debug.apk
           if ls app/build/outputs/apk/release/*.apk >/dev/null 2>&1; then
-            cp app/build/outputs/apk/release/*.apk ../dist-apk/wasil-messenger-release-unsigned.apk
+            cp app/build/outputs/apk/release/*.apk ../dist-apk/wasil-messenger-release.apk
           fi
+          
+          # Optional: Verify APK signature using Android build-tools apksigner
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n1)
+          if [ -n "$APKSIGNER" ] && [ -x "$APKSIGNER" ]; then
+            echo "Verifying APK signatures with $APKSIGNER..."
+            "$APKSIGNER" verify --verbose ../dist-apk/wasil-messenger-debug.apk || true
+            if [ -f "../dist-apk/wasil-messenger-release.apk" ]; then
+              "$APKSIGNER" verify --verbose ../dist-apk/wasil-messenger-release.apk || true
+            fi
+          fi
+
+          cat << 'EOF' > ../dist-apk/INSTALLATION_GUIDE.txt
+Wasil Messenger APK Installation Guide:
+=======================================
+1. To avoid "App not installed" (التطبيق ليس مثبتاً):
+   - Uninstall any older version of Wasil Messenger / WhatsApp clone currently on your phone.
+   - Install "wasil-messenger-release.apk" or "wasil-messenger-debug.apk".
+2. If Google Play Protect shows a prompt:
+   - Tap "More details" (مزيد من التفاصيل).
+   - Tap "Install anyway" (تثبيت على أي حال).
+3. Ensure your File Manager has permission to "Install Unknown Apps" in phone settings.
+EOF
 
       - name: Upload Wasil APK Artifacts
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: wasil-messenger-apk
-          path: dist-apk/*.apk
+          path: dist-apk/*
           if-no-files-found: error

@@ -1,9 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
   "installCommand": "npm install --legacy-peer-deps",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "cleanUrls": true,
+  "cleanUrls": false,
   "trailingSlash": false,
   "headers": [
     {
@@ -163,7 +164,7 @@
       "destination": "/install/index.html"
     },
     {
-      "source": "/((?!api/|assets/|downloads/|install/|\\.well-known/|manifest\\.json|twa-manifest\\.json|sw\\.js|workbox-.*|.*\\..*).*)",
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ]
