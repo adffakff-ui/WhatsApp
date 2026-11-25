@@ -86,3 +86,42 @@ export function shouldTriggerAutoLock(input: AutoLockCheckInput): boolean {
   const thresholdMs = minutes * 60_000;
   return input.nowMs - input.lastActivityMs >= thresholdMs;
 }
+
+export interface BackgroundLockCheckInput {
+  lockOnBackground?: boolean;
+  isEntered: boolean;
+  isAlreadyLocked: boolean;
+  hasActiveCall?: boolean;
+  suppressSystemLock?: boolean;
+}
+
+/**
+ * Determines whether the app should lock immediately when moved to background
+ * (e.g. mobile app switcher, screen off, or tab switch).
+ */
+export function shouldLockOnVisibilityHide(input: BackgroundLockCheckInput): boolean {
+  if (!input.lockOnBackground) return false;
+  if (!input.isEntered || input.isAlreadyLocked) return false;
+  if (input.hasActiveCall || input.suppressSystemLock) return false;
+  return true;
+}
+
+export interface PrivacyCurtainInput {
+  isEntered: boolean;
+  isAlreadyLocked: boolean;
+  privacyBlurOnHide?: boolean;
+  lockOnBackground?: boolean;
+  appLockOnLaunch?: boolean;
+  isDocumentHidden: boolean;
+}
+
+/**
+ * Determines whether a privacy blur shield should cover chats when the app
+ * loses visibility so OS app-switcher previews on iOS/Android don't leak messages.
+ */
+export function shouldShowPrivacyCurtain(input: PrivacyCurtainInput): boolean {
+  if (!input.isEntered || input.isAlreadyLocked || !input.isDocumentHidden) return false;
+  if (input.privacyBlurOnHide === false) return false;
+  return Boolean(input.lockOnBackground || input.appLockOnLaunch);
+}
+

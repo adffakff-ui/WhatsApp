@@ -26,7 +26,8 @@ import {
   Trash2,
   CheckSquare,
   ExternalLink,
-  Keyboard
+  Keyboard,
+  Command
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { HighlightText } from './HighlightText';
@@ -495,7 +496,7 @@ export function ChatListPane({
                       <Lock className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
                       <span>قفل التطبيق الآن</span>
                     </div>
-                    <kbd className="px-1.5 py-0.5 rounded border border-[#D1D7DB] dark:border-[#374248] text-[10px] font-mono-code font-bold text-[#8696A0]" dir="ltr">Ctrl+Shift+L</kbd>
+                    <kbd className="hidden md:inline-block px-1.5 py-0.5 rounded border border-[#D1D7DB] dark:border-[#374248] text-[10px] font-mono-code font-bold text-[#8696A0]" dir="ltr">Ctrl+Shift+L</kbd>
                   </button>
                 )}
 
@@ -511,9 +512,9 @@ export function ChatListPane({
                   >
                     <div className="flex items-center gap-2.5">
                       <Keyboard className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
-                      <span>اختصارات لوحة المفاتيح</span>
+                      <span>الاختصارات والأوامر السريعة</span>
                     </div>
-                    <kbd className="px-1.5 py-0.5 rounded border border-[#D1D7DB] dark:border-[#374248] text-[10px] font-mono-code font-bold text-[#8696A0]" dir="ltr">Ctrl /</kbd>
+                    <kbd className="hidden md:inline-block px-1.5 py-0.5 rounded border border-[#D1D7DB] dark:border-[#374248] text-[10px] font-mono-code font-bold text-[#8696A0]" dir="ltr">Ctrl /</kbd>
                   </button>
                 )}
 
@@ -556,55 +557,69 @@ export function ChatListPane({
 
       {/* Advanced Search Bar (Chats + Deep Message Content) */}
       <div className="px-3 pt-2.5 pb-2 shrink-0 space-y-2">
-        <div
-          className={`relative flex items-center bg-[#F0F2F5] dark:bg-[#202C33] rounded-xl px-2.5 h-10 border transition-colors ${
-            showAdvancedFilters
-              ? 'border-[var(--wa-accent)]/50'
-              : 'border-transparent'
-          }`}
-        >
-          <button
-            type="button"
-            aria-label="تفعيل البحث المتقدم في الرسائل"
-            title="بحث في المحادثات والرسائل"
-            onClick={() => {
-              setSearchFocused(true);
-              searchInputRef.current?.focus();
-            }}
-            className="p-1.5 rounded-lg text-[#54656F] dark:text-[#8696A0] hover:text-[var(--wa-accent-strong)] shrink-0 cursor-pointer"
+        <div className="flex items-center gap-2">
+          <div
+            className={`relative flex-1 min-w-0 flex items-center bg-[#F0F2F5] dark:bg-[#202C33] rounded-xl px-2.5 h-11 border transition-colors ${
+              showAdvancedFilters
+                ? 'border-[var(--wa-accent)]/50'
+                : 'border-transparent'
+            }`}
           >
-            <Search className="w-4 h-4" aria-hidden="true" />
-          </button>
-          <input
-            ref={searchInputRef}
-            type="search"
-            value={searchQuery}
-            onFocus={() => setSearchFocused(true)}
-            onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="ابحث في المحادثات أو داخل الرسائل..."
-            aria-label="البحث في المحادثات والرسائل"
-            className="w-full bg-transparent text-sm text-[#111B21] dark:text-[#E9EDEF] placeholder:text-[#54656F] dark:placeholder:text-[#8696A0] focus:outline-none px-1.5"
-          />
-          {!searchQuery && !searchFocused && (
-            <kbd
-              className="hidden md:inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono-code font-bold rounded border border-[#D1D7DB] dark:border-[#374248] text-[#8696A0] bg-white/60 dark:bg-[#111B21]/60 shrink-0 pointer-events-none select-none"
-              dir="ltr"
-            >
-              Ctrl K
-            </kbd>
-          )}
-          {(searchQuery || msgFilter !== 'all' || searchFocused) && (
             <button
               type="button"
-              aria-label="مسح البحث"
+              aria-label="تفعيل البحث المتقدم في الرسائل"
+              title="بحث في المحادثات والرسائل"
               onClick={() => {
-                onSearchChange('');
-                setMsgFilter('all');
-                setSearchFocused(false);
+                setSearchFocused(true);
+                searchInputRef.current?.focus();
               }}
-              className="p-1 text-[#54656F] dark:text-[#8696A0] hover:text-[#111B21] dark:hover:text-white cursor-pointer"
+              className="p-1.5 rounded-lg text-[#54656F] dark:text-[#8696A0] hover:text-[var(--wa-accent-strong)] shrink-0 cursor-pointer"
             >
-              <X className="w-4 h-4" aria-hidden="true" />
+              <Search className="w-4 h-4" aria-hidden="true" />
+            </button>
+            <input
+              ref={searchInputRef}
+              type="search"
+              value={searchQuery}
+              onFocus={() => setSearchFocused(true)}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder="ابحث في المحادثات أو داخل الرسائل..."
+              aria-label="البحث في المحادثات والرسائل"
+              className="w-full bg-transparent text-sm text-[#111B21] dark:text-[#E9EDEF] placeholder:text-[#54656F] dark:placeholder:text-[#8696A0] focus:outline-none px-1.5"
+            />
+            {!searchQuery && !searchFocused && (
+              <kbd
+                className="hidden md:inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono-code font-bold rounded border border-[#D1D7DB] dark:border-[#374248] text-[#8696A0] bg-white/60 dark:bg-[#111B21]/60 shrink-0 pointer-events-none select-none"
+                dir="ltr"
+              >
+                Ctrl K
+              </kbd>
+            )}
+            {(searchQuery || msgFilter !== 'all' || searchFocused) && (
+              <button
+                type="button"
+                aria-label="مسح البحث"
+                onClick={() => {
+                  onSearchChange('');
+                  setMsgFilter('all');
+                  setSearchFocused(false);
+                }}
+                className="p-1 text-[#54656F] dark:text-[#8696A0] hover:text-[#111B21] dark:hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" aria-hidden="true" />
+              </button>
+            )}
+          </div>
+
+          {onOpenKeyboardShortcuts && (
+            <button
+              type="button"
+              aria-label="الأوامر والاختصارات السريعة"
+              title="الأوامر والاختصارات السريعة"
+              onClick={onOpenKeyboardShortcuts}
+              className="w-11 h-11 rounded-xl bg-[#F0F2F5] dark:bg-[#202C33] text-[#54656F] dark:text-[#AEBAC1] hover:text-[var(--wa-accent-strong)] hover:bg-[var(--wa-accent-soft)]/60 flex items-center justify-center shrink-0 transition-colors cursor-pointer"
+            >
+              <Command className="w-4.5 h-4.5" aria-hidden="true" />
             </button>
           )}
         </div>

@@ -992,20 +992,20 @@ export function SettingsView({
                     </div>
                     <div className="min-w-0">
                       <h3 className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
-                        اختصارات لوحة المفاتيح (Hotkeys)
+                        الاختصارات والأوامر السريعة (الجوال والكمبيوتر)
                       </h3>
                       <p className="text-[11px] text-[#54656F] dark:text-[#8696A0] truncate">
-                        استعراض كافة اختصارات سطح المكتب للدردشة والتنقل السريع
+                        أوامر لمسية فورية للجوال واختصارات لوحة المفاتيح العربية والإنجليزية
                       </p>
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={onOpenKeyboardShortcuts}
-                    className="shrink-0 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold cursor-pointer transition-colors shadow-xs flex items-center gap-1.5"
+                    className="shrink-0 min-h-[44px] px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold cursor-pointer transition-colors shadow-xs flex items-center gap-1.5"
                   >
                     <Keyboard className="w-3.5 h-3.5" />
-                    <span>عرض الاختصارات</span>
+                    <span>عرض الأوامر</span>
                   </button>
                 </div>
               )}

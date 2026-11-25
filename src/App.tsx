@@ -11,17 +11,12 @@ import {
   updateProfile
 } from 'firebase/auth';
 import {
-  Lock,
   Megaphone,
   SendHorizontal,
   X,
   Check,
   MailCheck,
-  LogOut,
-  Fingerprint,
-  ScanFace,
-  KeyRound,
-  Clock
+  LogOut
 } from 'lucide-react';
 import { auth, googleProvider } from './lib/firebase';
 import { uploadBackupToGoogleDrive, restoreBackupFromGoogleDrive } from './services/googleDriveBackup';
@@ -58,7 +53,12 @@ import {
 } from './lib/chatLogic';
 import { deleteMediaBlob } from './lib/mediaStorage';
 import { DEFAULT_OMAR_SETTINGS } from './lib/omarConfig';
-import { normalizeAutoLockMinutes, shouldTriggerAutoLock } from './lib/autoLock';
+import {
+  normalizeAutoLockMinutes,
+  shouldLockOnVisibilityHide,
+  shouldShowPrivacyCurtain,
+  shouldTriggerAutoLock
+} from './lib/autoLock';
 import { normalizeChatWallpaper } from './lib/chatWallpaper';
 import {
   buildBlockedUidSet,
@@ -142,6 +142,11 @@ import { StarredView } from './components/StarredView';
 import { ScheduledMessagesModal } from './components/ScheduledMessagesModal';
 import { OmarAddonsView } from './components/OmarAddonsView';
 import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
+import {
+  AppLockScreen,
+  LockedChatPinModal,
+  PrivacyBlurCurtain
+} from './components/AppLockOverlay';
 import { OfflineIndicator } from './components/PWAInstallButton';
 import { getNextChatId, isHotkeyMatch } from './lib/hotkeys';
 import { Avatar } from './components/Avatar';
@@ -230,6 +235,9 @@ export default function App() {
   const [usePinFallbackForChat, setUsePinFallbackForChat] = useState(false);
   const [biometricChatBusy, setBiometricChatBusy] = useState(false);
   const [biometricChatError, setBiometricChatError] = useState<string | null>(null);
+  const [isDocumentHidden, setIsDocumentHidden] = useState<boolean>(
+    () => typeof document !== 'undefined' && document.visibilityState === 'hidden'
+  );
   const holdEntryForProfileStep = useRef(false);
   const pendingOnboardingRef = useRef<OnboardingCompletionPayload | null>(null);
   const deliveredSummaryAckedRef = useRef<Set<string>>(new Set());
@@ -601,6 +609,74 @@ export default function App() {
     appLockedOnLaunch,
     activeCall,
     selectedChatId
+  ]);
+
+  // Mobile Background Lock & App-Switcher Privacy Curtain
+  useEffect(() => {
+    const hasOngoingCall = Boolean(
+      activeCall && (activeCall.status === 'connected' || activeCall.status === 'ringing')
+    );
+    const isBiometricPromptActive = biometricLaunchBusy || biometricChatBusy;
+
+    const triggerBackgroundLock = () => {
+      if (
+        shouldLockOnVisibilityHide({
+          lockOnBackground: omarSettings.lockOnBackground,
+          isEntered,
+          isAlreadyLocked: appLockedOnLaunch,
+          hasActiveCall: hasOngoingCall,
+          suppressSystemLock: isBiometricPromptActive
+        })
+      ) {
+        setUnlockedSessionChatIds([]);
+        if (selectedChatId && omarSettings.lockedChatIds.includes(selectedChatId)) {
+          setSelectedChatId(null);
+          setMobileChatOpen(false);
+        }
+        setAutoLockedNotice('تم قفل التطبيق تلقائياً عند مغادرة الشاشة لحماية محادثاتك.');
+        setLaunchPinInput('');
+        setLaunchPinError(null);
+        setUsePinFallbackOnLaunch(false);
+        setBiometricLaunchError(null);
+        setAppLockedOnLaunch(true);
+      }
+    };
+
+    const handleVisibility = () => {
+      const hidden = document.visibilityState === 'hidden';
+      setIsDocumentHidden(hidden);
+      if (hidden) {
+        triggerBackgroundLock();
+      }
+    };
+
+    const handlePageHide = () => {
+      setIsDocumentHidden(true);
+      triggerBackgroundLock();
+    };
+
+    const handleFocusRestore = () => {
+      setIsDocumentHidden(document.visibilityState === 'hidden');
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('focus', handleFocusRestore);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('focus', handleFocusRestore);
+    };
+  }, [
+    omarSettings.lockOnBackground,
+    omarSettings.lockedChatIds,
+    isEntered,
+    appLockedOnLaunch,
+    activeCall,
+    selectedChatId,
+    biometricLaunchBusy,
+    biometricChatBusy
   ]);
 
   // Ensure local ECDH identity keys exist (scoped per Firebase UID when signed in)
@@ -1807,11 +1883,11 @@ export default function App() {
     }
   };
 
-  const handleVerifyChatPin = (e: React.FormEvent) => {
-    e.preventDefault();
+  const verifyChatPinCode = (pinCode: string) => {
     if (!pendingLockedChatId) return;
-    if (pinModalInput.trim() !== omarSettings.chatLockPin) {
+    if (pinCode.trim() !== (omarSettings.chatLockPin || '1234')) {
       setPinModalError('الرمز السري غير صحيح. حاول مرة أخرى.');
+      setPinModalInput('');
       return;
     }
     const targetId = pendingLockedChatId;
@@ -3197,159 +3273,101 @@ export default function App() {
     );
   }
 
+  const handleExecuteShortcut = (shortcutId: string) => {
+    switch (shortcutId) {
+      case 'new-chat':
+        setNewChatInitialQuery('');
+        setNewChatModalMode('direct');
+        break;
+      case 'search-chats':
+        setActiveTab('chats');
+        setMobileChatOpen(false);
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('wasil:focus-search'));
+        }, 40);
+        break;
+      case 'new-group':
+        setNewChatInitialQuery('');
+        setNewChatModalMode('group');
+        break;
+      case 'next-chat': {
+        const nextId = getNextChatId(visibleChats, selectedChatId, 'next');
+        if (nextId) {
+          setActiveTab('chats');
+          handleSelectChat(nextId);
+        }
+        break;
+      }
+      case 'prev-chat': {
+        const prevId = getNextChatId(visibleChats, selectedChatId, 'prev');
+        if (prevId) {
+          setActiveTab('chats');
+          handleSelectChat(prevId);
+        }
+        break;
+      }
+      case 'open-settings':
+        setActiveTab('settings');
+        setMobileChatOpen(false);
+        break;
+      case 'lock-app':
+        handleLockAppNow();
+        break;
+      case 'toggle-dnd': {
+        const nextDnd = !omarSettings.dndMode;
+        handleUpdateOmarSettings({ dndMode: nextDnd });
+        showToast(nextDnd ? 'تم تفعيل وضع عدم الإزعاج' : 'تم إيقاف وضع عدم الإزعاج');
+        break;
+      }
+      case 'shortcuts-help':
+        setShowShortcutsModal(true);
+        break;
+      default:
+        break;
+    }
+  };
+
   if (appLockedOnLaunch) {
     const hasBiometricConfigured =
       omarSettings.lockMethod === 'biometric' && Boolean(omarSettings.biometricCredentialId);
-    const showBiometricLaunch = hasBiometricConfigured && !usePinFallbackOnLaunch;
 
     return (
-      <div className="min-h-[100dvh] w-screen bg-[#EAE6DF] dark:bg-[#0C1317] flex items-center justify-center p-4">
-        {showBiometricLaunch ? (
-          <div className="w-full max-w-sm bg-white dark:bg-[#202C33] rounded-3xl p-7 shadow-2xl border border-[#E9EDEF] dark:border-[#374248] text-center space-y-5">
-            <div className="w-16 h-16 rounded-full bg-[var(--wa-accent-soft)] dark:bg-[#111B21] text-[var(--wa-accent)] flex items-center justify-center mx-auto">
-              <Fingerprint className="w-8 h-8" aria-hidden="true" />
-            </div>
-            <div>
-              <h1 className="font-display text-xl font-bold text-[#111B21] dark:text-[#E9EDEF]">
-                تطبيق تواصل محمي بالبصمة
-              </h1>
-              <p className="text-xs text-[#54656F] dark:text-[#8696A0] mt-1 leading-relaxed">
-                تحقق عبر {omarSettings.biometricDeviceLabel || 'البصمة أو التعرف على الوجه'} للوصول إلى محادثاتك المشفرة
-              </p>
-            </div>
-            {autoLockedNotice && (
-              <div
-                role="status"
-                className="flex items-start gap-2 rounded-2xl bg-amber-500/12 border border-amber-500/30 px-3 py-2.5 text-right text-[11px] font-semibold text-amber-800 dark:text-amber-300 leading-relaxed"
-              >
-                <Clock className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
-                <span>{autoLockedNotice}</span>
-              </div>
-            )}
-            {biometricLaunchError && (
-              <p role="alert" className="text-xs text-red-600 dark:text-red-400 leading-relaxed">
-                {biometricLaunchError}
-              </p>
-            )}
-            <div className="flex flex-col gap-2">
-              <button
-                type="button"
-                disabled={biometricLaunchBusy}
-                aria-label="الفتح بالبصمة أو التعرف على الوجه"
-                onClick={() => void handleUnlockLaunchWithBiometric()}
-                className="w-full min-h-[48px] rounded-full bg-[var(--wa-accent)] text-white text-sm font-bold hover:brightness-95 disabled:opacity-60 flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <ScanFace className="w-5 h-5" aria-hidden="true" />
-                <span>
-                  {biometricLaunchBusy ? 'بانتظار التحقق الحيوي...' : 'الفتح بالبصمة أو الوجه'}
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setBiometricLaunchError(null);
-                  setUsePinFallbackOnLaunch(true);
-                }}
-                className="w-full min-h-[42px] rounded-full bg-[#F0F2F5] dark:bg-[#111B21] text-xs font-semibold text-[#111B21] dark:text-[#E9EDEF] flex items-center justify-center gap-1.5 hover:brightness-95 cursor-pointer"
-              >
-                <KeyRound className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>استخدام رمز PIN بدلاً من ذلك</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleSignOut()}
-                className="w-full min-h-[38px] rounded-full text-xs font-semibold text-[#54656F] dark:text-[#AEBAC1] hover:underline cursor-pointer"
-              >
-                تسجيل الخروج والعودة لشاشة الدخول
-              </button>
-            </div>
-          </div>
-        ) : (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (launchPinInput.trim() === (omarSettings.chatLockPin || '1234')) {
-                lastActivityMsRef.current = Date.now();
-                setAutoLockedNotice(null);
-                setAppLockedOnLaunch(false);
-                setLaunchPinInput('');
-                setLaunchPinError(null);
-              } else {
-                setLaunchPinError('رمز القفل غير صحيح. حاول مرة أخرى.');
-              }
-            }}
-            className="w-full max-w-sm bg-white dark:bg-[#202C33] rounded-3xl p-7 shadow-2xl border border-[#E9EDEF] dark:border-[#374248] text-center space-y-5"
-          >
-            <div className="w-16 h-16 rounded-full bg-[var(--wa-accent-soft)] dark:bg-[#111B21] text-[var(--wa-accent)] flex items-center justify-center mx-auto">
-              <Lock className="w-8 h-8" aria-hidden="true" />
-            </div>
-            <div>
-              <h1 className="font-display text-xl font-bold text-[#111B21] dark:text-[#E9EDEF]">
-                تطبيق تواصل مقفل
-              </h1>
-              <p className="text-xs text-[#54656F] dark:text-[#8696A0] mt-1">
-                أدخل رمز الحماية المكون من ٤ أرقام لفتح المحادثات
-              </p>
-            </div>
-            {autoLockedNotice && (
-              <div
-                role="status"
-                className="flex items-start gap-2 rounded-2xl bg-amber-500/12 border border-amber-500/30 px-3 py-2.5 text-right text-[11px] font-semibold text-amber-800 dark:text-amber-300 leading-relaxed"
-              >
-                <Clock className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
-                <span>{autoLockedNotice}</span>
-              </div>
-            )}
-            <input
-              type="password"
-              inputMode="numeric"
-              dir="ltr"
-              autoFocus
-              maxLength={4}
-              value={launchPinInput}
-              onChange={(e) => {
-                setLaunchPinInput(e.target.value.replace(/\D/g, '').slice(0, 4));
-                setLaunchPinError(null);
-              }}
-              aria-label="رمز قفل التطبيق"
-              className="w-full min-h-[52px] rounded-2xl bg-[#F0F2F5] dark:bg-[#111B21] px-4 py-3 text-center font-mono-code text-xl tracking-[0.6em] text-[#111B21] dark:text-[#E9EDEF] focus:outline-none focus:ring-2 focus:ring-[var(--wa-accent)]"
-            />
-            {launchPinError && (
-              <p role="alert" className="text-xs text-red-600 dark:text-red-400">
-                {launchPinError}
-              </p>
-            )}
-            <div className="flex flex-col gap-2">
-              <button
-                type="submit"
-                className="w-full min-h-[48px] rounded-full bg-[var(--wa-accent)] text-white text-sm font-bold hover:brightness-95 cursor-pointer"
-              >
-                فتح التطبيق
-              </button>
-              {hasBiometricConfigured && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLaunchPinError(null);
-                    setUsePinFallbackOnLaunch(false);
-                  }}
-                  className="w-full min-h-[42px] rounded-full bg-[#F0F2F5] dark:bg-[#111B21] text-xs font-semibold text-[var(--wa-accent-strong)] dark:text-[var(--wa-accent)] flex items-center justify-center gap-1.5 hover:brightness-95 cursor-pointer"
-                >
-                  <Fingerprint className="w-4 h-4" aria-hidden="true" />
-                  <span>استخدام البصمة أو الوجه</span>
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => void handleSignOut()}
-                className="w-full min-h-[40px] rounded-full text-xs font-semibold text-[#54656F] dark:text-[#AEBAC1] hover:underline cursor-pointer"
-              >
-                تسجيل الخروج والعودة لشاشة الدخول
-              </button>
-            </div>
-          </form>
-        )}
-      </div>
+      <AppLockScreen
+        hasBiometricConfigured={hasBiometricConfigured}
+        usePinFallback={usePinFallbackOnLaunch}
+        biometricDeviceLabel={omarSettings.biometricDeviceLabel}
+        biometricBusy={biometricLaunchBusy}
+        biometricError={biometricLaunchError}
+        autoLockedNotice={autoLockedNotice}
+        pinInput={launchPinInput}
+        pinError={launchPinError}
+        onPinChange={(val) => {
+          setLaunchPinInput(val);
+          setLaunchPinError(null);
+        }}
+        onVerifyPin={(pinCode) => {
+          if (pinCode.trim() === (omarSettings.chatLockPin || '1234')) {
+            lastActivityMsRef.current = Date.now();
+            setAutoLockedNotice(null);
+            setAppLockedOnLaunch(false);
+            setLaunchPinInput('');
+            setLaunchPinError(null);
+          } else {
+            setLaunchPinError('رمز القفل غير صحيح. حاول مرة أخرى.');
+            setLaunchPinInput('');
+          }
+        }}
+        onUnlockBiometric={() => void handleUnlockLaunchWithBiometric()}
+        onSwitchToPinFallback={() => {
+          setBiometricLaunchError(null);
+          setUsePinFallbackOnLaunch(true);
+        }}
+        onSwitchToBiometric={() => {
+          setLaunchPinError(null);
+          setUsePinFallbackOnLaunch(false);
+        }}
+        onSignOut={() => void handleSignOut()}
+      />
     );
   }
 
@@ -3524,6 +3542,8 @@ export default function App() {
                     : undefined
                 }
                 contacts={contactsList}
+                onOpenKeyboardShortcuts={() => setShowShortcutsModal(true)}
+                onExecuteMobileShortcut={handleExecuteShortcut}
               />
 
               <RightDrawer
@@ -3751,136 +3771,35 @@ export default function App() {
         </div>
       )}
 
-      {/* Biometric / PIN Unlock Modal for Locked Chats */}
-      {pendingLockedChatId && (() => {
-        const hasBiometricChat =
-          omarSettings.lockMethod === 'biometric' && Boolean(omarSettings.biometricCredentialId);
-        const showBiometricChat = hasBiometricChat && !usePinFallbackForChat;
-
-        return (
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="إدخال رمز قفل المحادثة"
-            className="fixed inset-0 z-50 bg-black/55 backdrop-blur-xs flex items-center justify-center p-4"
-          >
-            {showBiometricChat ? (
-              <div className="w-full max-w-sm bg-white dark:bg-[#202C33] rounded-2xl p-6 shadow-2xl border border-[#E9EDEF] dark:border-[#374248] space-y-4 text-center">
-                <div className="w-12 h-12 rounded-full bg-[var(--wa-accent)]/15 text-[var(--wa-accent)] flex items-center justify-center mx-auto">
-                  <Fingerprint className="w-6 h-6" aria-hidden="true" />
-                </div>
-                <div>
-                  <h3 className="font-display text-lg font-bold text-[#111B21] dark:text-[#E9EDEF]">
-                    محادثة محمية بالبصمة
-                  </h3>
-                  <p className="text-xs text-[#54656F] dark:text-[#8696A0] mt-1 leading-relaxed">
-                    تحقق عبر {omarSettings.biometricDeviceLabel || 'البصمة أو الوجه'} لفتح هذه المحادثة المقفلة
-                  </p>
-                </div>
-                {biometricChatError && (
-                  <p role="alert" className="text-xs text-red-600 dark:text-red-400">
-                    {biometricChatError}
-                  </p>
-                )}
-                <div className="flex flex-col gap-2 pt-1">
-                  <button
-                    type="button"
-                    disabled={biometricChatBusy}
-                    aria-label="فتح المحادثة بالبصمة أو التعرف على الوجه"
-                    onClick={() => void handleUnlockChatWithBiometric()}
-                    className="w-full min-h-[42px] px-5 py-2 rounded-xl bg-[var(--wa-accent)] text-white text-xs font-bold hover:brightness-95 disabled:opacity-60 flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <ScanFace className="w-4 h-4" aria-hidden="true" />
-                    <span>{biometricChatBusy ? 'جاري التحقق...' : 'فتح بالبصمة أو الوجه'}</span>
-                  </button>
-                  <div className="flex items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setBiometricChatError(null);
-                        setUsePinFallbackForChat(true);
-                      }}
-                      className="flex-1 py-2 rounded-lg bg-[#F0F2F5] dark:bg-[#111B21] text-xs font-semibold text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
-                    >
-                      استخدام رمز PIN
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPendingLockedChatId(null)}
-                      className="px-4 py-2 rounded-lg text-xs font-medium text-[#54656F] dark:text-[#AEBAC1] cursor-pointer"
-                    >
-                      إلغاء
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <form
-                onSubmit={handleVerifyChatPin}
-                className="w-full max-w-sm bg-white dark:bg-[#202C33] rounded-2xl p-6 shadow-2xl border border-[#E9EDEF] dark:border-[#374248] space-y-4 text-center"
-              >
-                <div className="w-12 h-12 rounded-full bg-amber-500/15 text-amber-500 flex items-center justify-center mx-auto">
-                  <Lock className="w-6 h-6" aria-hidden="true" />
-                </div>
-                <div>
-                  <h3 className="font-display text-lg font-bold text-[#111B21] dark:text-[#E9EDEF]">
-                    محادثة مقفلة برمز سري
-                  </h3>
-                  <p className="text-xs text-[#54656F] dark:text-[#8696A0] mt-1">
-                    أدخل رمز القفل المكون من ٤ أرقام لفتح المحادثة (الافتراضي: 1234)
-                  </p>
-                </div>
-                <input
-                  type="password"
-                  inputMode="numeric"
-                  autoFocus
-                  maxLength={4}
-                  value={pinModalInput}
-                  onChange={(e) => {
-                    setPinModalInput(e.target.value.replace(/\D/g, '').slice(0, 4));
-                    setPinModalError(null);
-                  }}
-                  aria-label="أدخل الرمز السري"
-                  className="w-full rounded-xl bg-[#F0F2F5] dark:bg-[#111B21] px-4 py-3 text-center font-mono-code text-lg tracking-[0.6em] text-[#111B21] dark:text-[#E9EDEF] focus:outline-none focus:ring-2 focus:ring-[var(--wa-accent)]"
-                />
-                {pinModalError && (
-                  <p role="alert" className="text-xs text-red-600 dark:text-red-400">
-                    {pinModalError}
-                  </p>
-                )}
-                {hasBiometricChat && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPinModalError(null);
-                      setUsePinFallbackForChat(false);
-                    }}
-                    className="w-full py-2 rounded-lg bg-[#F0F2F5] dark:bg-[#111B21] text-xs font-semibold text-[var(--wa-accent-strong)] dark:text-[var(--wa-accent)] flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <Fingerprint className="w-4 h-4" aria-hidden="true" />
-                    <span>الفتح بالبصمة أو الوجه</span>
-                  </button>
-                )}
-                <div className="flex items-center justify-end gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setPendingLockedChatId(null)}
-                    className="px-4 py-2 rounded-lg text-xs font-medium text-[#54656F] dark:text-[#AEBAC1] cursor-pointer"
-                  >
-                    إلغاء
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-5 py-2 rounded-lg bg-[var(--wa-accent)] text-white text-xs font-semibold hover:brightness-95 cursor-pointer"
-                  >
-                    فتح المحادثة
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        );
-      })()}
+      {/* Biometric / Touch PIN Unlock Modal for Locked Chats */}
+      {pendingLockedChatId && (
+        <LockedChatPinModal
+          hasBiometricConfigured={
+            omarSettings.lockMethod === 'biometric' && Boolean(omarSettings.biometricCredentialId)
+          }
+          usePinFallback={usePinFallbackForChat}
+          biometricDeviceLabel={omarSettings.biometricDeviceLabel}
+          biometricBusy={biometricChatBusy}
+          biometricError={biometricChatError}
+          pinInput={pinModalInput}
+          pinError={pinModalError}
+          onPinChange={(val) => {
+            setPinModalInput(val);
+            setPinModalError(null);
+          }}
+          onVerifyPin={verifyChatPinCode}
+          onUnlockBiometric={() => void handleUnlockChatWithBiometric()}
+          onSwitchToPinFallback={() => {
+            setBiometricChatError(null);
+            setUsePinFallbackForChat(true);
+          }}
+          onSwitchToBiometric={() => {
+            setPinModalError(null);
+            setUsePinFallbackForChat(false);
+          }}
+          onClose={() => setPendingLockedChatId(null)}
+        />
+      )}
 
       {/* Omar Broadcast Message Modal */}
       {showBroadcastModal && (
@@ -4003,11 +3922,21 @@ export default function App() {
         />
       )}
 
-      {/* Keyboard Shortcuts Help Modal */}
+      {/* Keyboard Shortcuts & Mobile Quick Commands Sheet */}
       <KeyboardShortcutsModal
         open={showShortcutsModal}
         onClose={() => setShowShortcutsModal(false)}
+        onExecuteShortcut={handleExecuteShortcut}
       />
+
+      {shouldShowPrivacyCurtain({
+        isEntered,
+        isAlreadyLocked: appLockedOnLaunch,
+        privacyBlurOnHide: omarSettings.privacyBlurOnHide,
+        lockOnBackground: omarSettings.lockOnBackground,
+        appLockOnLaunch: omarSettings.appLockOnLaunch,
+        isDocumentHidden
+      }) && <PrivacyBlurCurtain />}
 
       {/* Per-Chat Wallpaper Customization Modal */}
       {wallpaperPickerChatId && (() => {

@@ -2,16 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   HOTKEYS_CATALOG,
+  MOBILE_SLASH_COMMANDS,
   getNextChatId,
   isHotkeyMatch,
-  isApplePlatform
+  isApplePlatform,
+  matchMobileSlashCommands
 } from './hotkeys.ts';
 
-test('HOTKEYS_CATALOG contains primary desktop shortcuts with labels and keys', () => {
+test('HOTKEYS_CATALOG contains primary desktop and mobile shortcuts with labels and keys', () => {
   assert.ok(HOTKEYS_CATALOG.length >= 8);
   const newChat = HOTKEYS_CATALOG.find((h) => h.id === 'new-chat');
   assert.ok(newChat);
   assert.deepEqual(newChat?.keys, ['Ctrl', 'N']);
+  assert.equal(newChat?.slashCommand, '/new');
 
   const searchChats = HOTKEYS_CATALOG.find((h) => h.id === 'search-chats');
   assert.ok(searchChats);
@@ -40,13 +43,14 @@ test('getNextChatId navigates forward and backward cleanly with wrapping', () =>
   assert.equal(getNextChatId(rooms, 'room-2', 'prev'), 'room-1');
 });
 
-test('isHotkeyMatch accurately evaluates modifier keys and key values', () => {
+test('isHotkeyMatch evaluates modifier keys, e.key, and Arabic-layout e.code fallback', () => {
   const ctrlKEvent = {
     ctrlKey: true,
     metaKey: false,
     shiftKey: false,
     altKey: false,
-    key: 'k'
+    key: 'k',
+    code: 'KeyK'
   } as unknown as KeyboardEvent;
 
   assert.equal(isHotkeyMatch(ctrlKEvent, { ctrlOrMeta: true, key: 'k' }), true);
@@ -54,12 +58,25 @@ test('isHotkeyMatch accurately evaluates modifier keys and key values', () => {
   assert.equal(isHotkeyMatch(ctrlKEvent, { ctrlOrMeta: false, key: 'k' }), false);
   assert.equal(isHotkeyMatch(ctrlKEvent, { ctrlOrMeta: true, shift: true, key: 'k' }), false);
 
+  // Bilingual / Arabic keyboard layout where e.key is 'ن' but physical e.code is 'KeyN'
+  const arabicCtrlNEvent = {
+    ctrlKey: true,
+    metaKey: false,
+    shiftKey: false,
+    altKey: false,
+    key: 'ن',
+    code: 'KeyN'
+  } as unknown as KeyboardEvent;
+
+  assert.equal(isHotkeyMatch(arabicCtrlNEvent, { ctrlOrMeta: true, key: 'n' }), true);
+
   const metaEnterEvent = {
     ctrlKey: false,
     metaKey: true,
     shiftKey: false,
     altKey: false,
-    key: 'Enter'
+    key: 'Enter',
+    code: 'Enter'
   } as unknown as KeyboardEvent;
 
   assert.equal(isHotkeyMatch(metaEnterEvent, { ctrlOrMeta: true, key: 'Enter' }), true);
@@ -69,13 +86,29 @@ test('isHotkeyMatch accurately evaluates modifier keys and key values', () => {
     metaKey: false,
     shiftKey: false,
     altKey: true,
-    key: 'ArrowDown'
+    key: 'ArrowDown',
+    code: 'ArrowDown'
   } as unknown as KeyboardEvent;
 
   assert.equal(isHotkeyMatch(altArrowDownEvent, { alt: true, key: 'ArrowDown' }), true);
   assert.equal(isHotkeyMatch(altArrowDownEvent, { alt: false, key: 'ArrowDown' }), false);
 });
 
+test('matchMobileSlashCommands returns matching commands for / queries only', () => {
+  assert.equal(matchMobileSlashCommands('hello').length, 0);
+  assert.equal(matchMobileSlashCommands('/lock extra').length, 0);
+  assert.equal(matchMobileSlashCommands('/').length, MOBILE_SLASH_COMMANDS.length);
+
+  const lockMatches = matchMobileSlashCommands('/lo');
+  assert.equal(lockMatches.length, 1);
+  assert.equal(lockMatches[0].id, 'lock-app');
+
+  const arabicMatches = matchMobileSlashCommands('/قفل');
+  assert.equal(arabicMatches.length, 1);
+  assert.equal(arabicMatches[0].id, 'lock-app');
+});
+
 test('isApplePlatform returns a boolean without throwing in test environment', () => {
   assert.equal(typeof isApplePlatform(), 'boolean');
 });
+

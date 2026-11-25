@@ -38,7 +38,8 @@ import {
   ChevronDown,
   Languages,
   Palette,
-  Ban
+  Ban,
+  Command
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { HighlightText } from './HighlightText';
@@ -95,6 +96,7 @@ import {
   pickSupportedVoiceMimeType,
   type VoicePlaybackRate
 } from '../lib/voiceRecorder';
+import { matchMobileSlashCommands } from '../lib/hotkeys';
 import type {
   ChatRoom,
   DecryptedMessage,
@@ -139,6 +141,8 @@ interface ChatWindowProps {
   onBlockPeer?: () => Promise<void> | void;
   onUnblockPeer?: () => Promise<void> | void;
   contacts?: UserProfile[];
+  onOpenKeyboardShortcuts?: () => void;
+  onExecuteMobileShortcut?: (shortcutId: string) => void;
 }
 
 async function compressChatImageToDataUrl(file: File): Promise<string> {
@@ -343,11 +347,14 @@ export function ChatWindow({
   isPeerBlocked = false,
   onBlockPeer,
   onUnblockPeer,
-  contacts = []
+  contacts = [],
+  onOpenKeyboardShortcuts,
+  onExecuteMobileShortcut
 }: ChatWindowProps) {
   const [text, setText] = useState('');
   const [replyTo, setReplyTo] = useState<DecryptedMessage | null>(null);
   const [editingMsg, setEditingMsg] = useState<DecryptedMessage | null>(null);
+  const slashMatches = !editingMsg ? matchMobileSlashCommands(text) : [];
   const [forwardMsg, setForwardMsg] = useState<DecryptedMessage | null>(null);
   const [forwardingToId, setForwardingToId] = useState<string | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -1841,6 +1848,34 @@ export function ChatWindow({
                       <span>قفل المحادثة برمز</span>
                     </>
                   )}
+                </button>
+              )}
+              {onOpenKeyboardShortcuts && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onOpenKeyboardShortcuts();
+                    setShowMoreMenu(false);
+                  }}
+                  className="w-full px-4 py-2.5 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+                >
+                  <Command className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+                  <span>الأوامر والاختصارات السريعة</span>
+                </button>
+              )}
+              {onExecuteMobileShortcut && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowMoreMenu(false);
+                    onExecuteMobileShortcut('lock-app');
+                  }}
+                  className="w-full px-4 py-2.5 text-right flex items-center gap-2 hover:bg-[#F5F6F6] dark:hover:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] cursor-pointer"
+                >
+                  <Lock className="w-4 h-4 text-[var(--wa-accent)]" aria-hidden="true" />
+                  <span>قفل التطبيق الآن</span>
                 </button>
               )}
               <button
@@ -3413,10 +3448,68 @@ export function ChatWindow({
               <Plus className="w-5 h-5" aria-hidden="true" />
             </button>
 
+            {/* Mobile Slash Commands Popup */}
+            {slashMatches.length > 0 && (
+              <div
+                role="listbox"
+                aria-label="أوامر الاختصار السريعة"
+                className="absolute bottom-16 right-2 left-2 sm:left-auto sm:right-4 sm:w-80 z-40 rounded-2xl bg-white dark:bg-[#233138] shadow-2xl border border-[#E9EDEF] dark:border-[#374248] overflow-hidden"
+              >
+                <div className="px-3.5 py-2 border-b border-[#E9EDEF] dark:border-[#374248] bg-[#F8FAFB] dark:bg-[#182229] flex items-center justify-between text-[11px] font-bold text-[#54656F] dark:text-[#AEBAC1]">
+                  <span className="flex items-center gap-1.5">
+                    <Command className="w-3.5 h-3.5 text-[var(--wa-accent)]" aria-hidden="true" />
+                    <span>الأوامر السريعة للجوال</span>
+                  </span>
+                  <span dir="ltr" className="font-mono-code text-[10px]">
+                    /command
+                  </span>
+                </div>
+                <div className="max-h-56 overflow-y-auto divide-y divide-[#F0F2F5] dark:divide-[#2A3942]">
+                  {slashMatches.map((cmd) => (
+                    <button
+                      key={cmd.id}
+                      type="button"
+                      role="option"
+                      aria-selected={false}
+                      onClick={() => {
+                        setText('');
+                        onTypingChange?.(false);
+                        if (cmd.id === 'search-in-chat') {
+                          setShowInChatSearch(true);
+                          window.requestAnimationFrame(() => inChatSearchInputRef.current?.focus());
+                        } else if (cmd.id === 'voice-record') {
+                          void handleStartRecording();
+                        } else {
+                          onExecuteMobileShortcut?.(cmd.id);
+                        }
+                      }}
+                      className="w-full min-h-[46px] px-3.5 py-2 flex items-center justify-between gap-2.5 text-right hover:bg-[#F5F6F6] dark:hover:bg-[#182229] active:bg-[var(--wa-accent-soft)]/40 cursor-pointer transition-colors"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-[#111B21] dark:text-[#E9EDEF] truncate">
+                          {cmd.label}
+                        </p>
+                        <p className="text-[10px] text-[#54656F] dark:text-[#8696A0] truncate">
+                          {cmd.description}
+                        </p>
+                      </div>
+                      <code
+                        dir="ltr"
+                        className="px-2 py-0.5 rounded bg-[var(--wa-accent-soft)] text-[var(--wa-accent-strong)] font-mono-code text-[11px] font-bold shrink-0"
+                      >
+                        {cmd.command}
+                      </code>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="flex-1 min-w-0 bg-white dark:bg-[#2A3942] rounded-xl px-3 sm:px-3.5 py-2 flex items-center">
               <textarea
                 ref={textareaRef}
                 rows={1}
+                enterKeyHint={omarSettings.mobileEnterToSend === false ? 'enter' : 'send'}
                 value={text}
                 onChange={(e) => {
                   const val = e.target.value;
@@ -3425,6 +3518,12 @@ export function ChatWindow({
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Escape') {
+                    if (slashMatches.length > 0 && text.trim().startsWith('/')) {
+                      e.preventDefault();
+                      setText('');
+                      onTypingChange?.(false);
+                      return;
+                    }
                     if (editingMsg) {
                       e.preventDefault();
                       setEditingMsg(null);
@@ -3438,7 +3537,33 @@ export function ChatWindow({
                       return;
                     }
                   }
-                  if ((e.key === 'Enter' && !e.shiftKey) || ((e.ctrlKey || e.metaKey) && e.key === 'Enter')) {
+                  if (
+                    (e.key === 'Enter' && !e.shiftKey) ||
+                    ((e.ctrlKey || e.metaKey) && e.key === 'Enter')
+                  ) {
+                    if (slashMatches.length > 0) {
+                      const exact =
+                        slashMatches.find(
+                          (c) =>
+                            c.command.toLowerCase() === text.trim().toLowerCase() ||
+                            c.aliases.some((a) => a.toLowerCase() === text.trim().toLowerCase())
+                        ) || slashMatches[0];
+                      e.preventDefault();
+                      setText('');
+                      onTypingChange?.(false);
+                      if (exact.id === 'search-in-chat') {
+                        setShowInChatSearch(true);
+                        window.requestAnimationFrame(() => inChatSearchInputRef.current?.focus());
+                      } else if (exact.id === 'voice-record') {
+                        void handleStartRecording();
+                      } else {
+                        onExecuteMobileShortcut?.(exact.id);
+                      }
+                      return;
+                    }
+                    if (omarSettings.mobileEnterToSend === false && !e.ctrlKey && !e.metaKey) {
+                      return;
+                    }
                     e.preventDefault();
                     onTypingChange?.(false);
                     void handleSendText();
@@ -3449,7 +3574,7 @@ export function ChatWindow({
                     ? 'عدّل نص الرسالة ثم اضغط حفظ...'
                     : chat.type === 'community' && chat.adminOnlyPost
                       ? 'اكتب رسالة بث لمتابعي القناة...'
-                      : 'اكتب رسالة مشفرة...'
+                      : 'اكتب رسالة مشفرة أو / للأوامر السريعة...'
                 }
                 aria-label={editingMsg ? 'تعديل الرسالة' : 'اكتب رسالة'}
                 className="w-full bg-transparent text-sm text-[#111B21] dark:text-[#E9EDEF] placeholder:text-[#667781] dark:placeholder:text-[#8696A0] resize-none focus:outline-none max-h-28 leading-6"

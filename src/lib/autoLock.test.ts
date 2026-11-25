@@ -4,6 +4,8 @@ import {
   AUTO_LOCK_OPTIONS,
   formatAutoLockStatus,
   normalizeAutoLockMinutes,
+  shouldLockOnVisibilityHide,
+  shouldShowPrivacyCurtain,
   shouldTriggerAutoLock
 } from './autoLock.ts';
 
@@ -102,3 +104,74 @@ test('shouldTriggerAutoLock triggers only after inactivity duration and skips ac
     false
   );
 });
+
+test('shouldLockOnVisibilityHide respects mobile lockOnBackground and suppresses during calls or system pickers', () => {
+  assert.equal(
+    shouldLockOnVisibilityHide({
+      lockOnBackground: false,
+      isEntered: true,
+      isAlreadyLocked: false
+    }),
+    false
+  );
+  assert.equal(
+    shouldLockOnVisibilityHide({
+      lockOnBackground: true,
+      isEntered: true,
+      isAlreadyLocked: false
+    }),
+    true
+  );
+  assert.equal(
+    shouldLockOnVisibilityHide({
+      lockOnBackground: true,
+      isEntered: true,
+      isAlreadyLocked: false,
+      hasActiveCall: true
+    }),
+    false
+  );
+  assert.equal(
+    shouldLockOnVisibilityHide({
+      lockOnBackground: true,
+      isEntered: true,
+      isAlreadyLocked: false,
+      suppressSystemLock: true
+    }),
+    false
+  );
+});
+
+test('shouldShowPrivacyCurtain activates when app is hidden with app lock enabled', () => {
+  assert.equal(
+    shouldShowPrivacyCurtain({
+      isEntered: true,
+      isAlreadyLocked: false,
+      privacyBlurOnHide: true,
+      appLockOnLaunch: true,
+      isDocumentHidden: true
+    }),
+    true
+  );
+  assert.equal(
+    shouldShowPrivacyCurtain({
+      isEntered: true,
+      isAlreadyLocked: false,
+      privacyBlurOnHide: false,
+      appLockOnLaunch: true,
+      isDocumentHidden: true
+    }),
+    false
+  );
+  assert.equal(
+    shouldShowPrivacyCurtain({
+      isEntered: true,
+      isAlreadyLocked: true,
+      privacyBlurOnHide: true,
+      lockOnBackground: true,
+      isDocumentHidden: true
+    }),
+    false
+  );
+});
+
