@@ -216,6 +216,415 @@ export async function acquireCallMediaStream(
   }
 }
 
+export type CameraFacingMode = 'user' | 'environment';
+
+export interface VideoDeviceCandidate {
+  deviceId: string;
+  label: string;
+  kind?: string;
+}
+
+export interface CameraSwitchConstraintOptions {
+  facingMode?: CameraFacingMode;
+  deviceId?: string;
+  exactFacing?: boolean;
+  relaxedResolution?: boolean;
+}
+
+export function buildCameraSwitchConstraints(
+  presetId: CallQualityPreset = 'ultra',
+  options: CameraSwitchConstraintOptions = {}
+): MediaStreamConstraints {
+  const preset = CALL_QUALITY_PRESETS[presetId];
+  const facing = options.facingMode ?? 'user';
+
+  const targetConstraint: MediaTrackConstraints = options.deviceId
+    ? { deviceId: { exact: options.deviceId } }
+    : {
+        facingMode: options.exactFacing ? { exact: facing } : facing
+      };
+
+  if (options.relaxedResolution) {
+    return {
+      audio: false,
+      video: targetConstraint
+    };
+  }
+
+  return {
+    audio: false,
+    video: {
+      width: { ideal: preset.width, max: preset.width },
+      height: { ideal: preset.height, max: preset.height },
+      frameRate: { ideal: preset.frameRate, max: 60 },
+      ...targetConstraint
+    }
+  };
+}
+
+export function inferFacingModeFromLabel(label: string): CameraFacingMode | null {
+  if (!label) return null;
+  if (/\b(front|user|facetime|selfie)\b|أمامي|أمامية/i.test(label)) {
+    return 'user';
+  }
+  if (/\b(back|rear|environment|world)\b|خلفي|خلفية/i.test(label)) {
+    return 'environment';
+  }
+  return null;
+}
+
+function isSecondaryRearLensLabel(label: string): boolean {
+  return /\b(ultra[\s-]?wide|0\.5x|macro|telephoto|depth|tof|ir)\b/i.test(label);
+}
+
+export function pickNextVideoInputDevice(
+  devices: VideoDeviceCandidate[],
+  currentDeviceId: string | undefined,
+  targetFacing: CameraFacingMode
+): VideoDeviceCandidate | null {
+  const videoDevices = devices.filter(
+    (d) => Boolean(d.deviceId) && (!d.kind || d.kind === 'videoinput')
+  );
+  if (videoDevices.length === 0) return null;
+
+  const nonCurrent = currentDeviceId
+    ? videoDevices.filter((d) => d.deviceId !== currentDeviceId)
+    : videoDevices;
+
+  const matchingTarget = nonCurrent.filter(
+    (d) => inferFacingModeFromLabel(d.label) === targetFacing
+  );
+  if (matchingTarget.length > 0) {
+    const primaryLens = matchingTarget.find((d) => !isSecondaryRearLensLabel(d.label));
+    return primaryLens || matchingTarget[0];
+  }
+
+  if (videoDevices.length >= 2) {
+    const currentIndex = currentDeviceId
+      ? videoDevices.findIndex((d) => d.deviceId === currentDeviceId)
+      : -1;
+    return videoDevices[(currentIndex + 1) % videoDevices.length];
+  }
+
+  return null;
+}
+
+export function resolveTrackFacingMode(
+  track: { label?: string; getSettings?: () => MediaTrackSettings } | null | undefined,
+  fallbackFacing: CameraFacingMode
+): CameraFacingMode {
+  if (!track) return fallbackFacing;
+  try {
+    const settingsFacing = track.getSettings?.().facingMode;
+    if (settingsFacing === 'user' || settingsFacing === 'environment') {
+      return settingsFacing;
+    }
+  } catch {
+    // Ignore getSettings errors on mock/ended tracks
+  }
+  const inferred = inferFacingModeFromLabel(track.label || '');
+  return inferred ?? fallbackFacing;
+}
+
+export function findVideoSender(pc: RTCPeerConnection | null): RTCRtpSender | null {
+  if (!pc) return null;
+  const senderByTrack = pc.getSenders().find((s) => s.track?.kind === 'video');
+  if (senderByTrack) return senderByTrack;
+  const transceiver = pc
+    .getTransceivers?.()
+    .find(
+      (tr) =>
+        tr.sender?.track?.kind === 'video' || tr.receiver?.track?.kind === 'video'
+    );
+  return transceiver?.sender || null;
+}
+
+export interface SwitchCameraTrackOptions {
+  presetId?: CallQualityPreset;
+  targetFacing: CameraFacingMode;
+  previousFacing?: CameraFacingMode;
+  currentDeviceId?: string;
+  targetDeviceId?: string;
+  videoInputs?: VideoDeviceCandidate[];
+  onReleaseCurrentTrack?: () => void | Promise<void>;
+  mediaDevices?: Pick<MediaDevices, 'getUserMedia'> &
+    Partial<Pick<MediaDevices, 'enumerateDevices'>>;
+  releaseDelayMs?: number;
+}
+
+export interface SwitchCameraTrackResult {
+  track: MediaStreamTrack | null;
+  stream: MediaStream | null;
+  recoveryTrack: MediaStreamTrack | null;
+  recoveryStream: MediaStream | null;
+  resolvedFacing: CameraFacingMode;
+  resolvedDeviceId?: string;
+  releasedPreviousTrack: boolean;
+  errorCode:
+    | 'none'
+    | 'unsupported'
+    | 'permission-denied'
+    | 'single-camera'
+    | 'device-busy'
+    | 'unavailable';
+}
+
+function getErrorName(err: unknown): string {
+  if (err && typeof err === 'object' && 'name' in err) {
+    return String((err as { name?: unknown }).name || '');
+  }
+  return '';
+}
+
+function waitMs(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function acquireCameraVideoTrack(
+  options: SwitchCameraTrackOptions
+): Promise<SwitchCameraTrackResult> {
+  const {
+    presetId = 'ultra',
+    targetFacing,
+    previousFacing = targetFacing === 'user' ? 'environment' : 'user',
+    currentDeviceId,
+    targetDeviceId,
+    onReleaseCurrentTrack,
+    releaseDelayMs = 80
+  } = options;
+
+  const md =
+    options.mediaDevices ??
+    (typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined);
+
+  if (!md?.getUserMedia) {
+    return {
+      track: null,
+      stream: null,
+      recoveryTrack: null,
+      recoveryStream: null,
+      resolvedFacing: previousFacing,
+      releasedPreviousTrack: false,
+      errorCode: 'unsupported'
+    };
+  }
+
+  let videoInputs = options.videoInputs || [];
+  if (videoInputs.length === 0 && md.enumerateDevices) {
+    try {
+      const all = await md.enumerateDevices();
+      videoInputs = all
+        .filter((d) => d.kind === 'videoinput' && Boolean(d.deviceId))
+        .map((d) => ({ deviceId: d.deviceId, label: d.label, kind: d.kind }));
+    } catch {
+      // Ignore enumerateDevices errors
+    }
+  }
+
+  const candidateDevice = targetDeviceId
+    ? { deviceId: targetDeviceId, label: '' }
+    : pickNextVideoInputDevice(videoInputs, currentDeviceId, targetFacing);
+
+  const attemptList: MediaStreamConstraints[] = targetDeviceId
+    ? [
+        buildCameraSwitchConstraints(presetId, { deviceId: targetDeviceId }),
+        buildCameraSwitchConstraints(presetId, {
+          deviceId: targetDeviceId,
+          relaxedResolution: true
+        })
+      ]
+    : [
+        buildCameraSwitchConstraints(presetId, {
+          facingMode: targetFacing,
+          exactFacing: true
+        }),
+        buildCameraSwitchConstraints(presetId, {
+          facingMode: targetFacing,
+          exactFacing: true,
+          relaxedResolution: true
+        }),
+        ...(candidateDevice
+          ? [
+              buildCameraSwitchConstraints(presetId, {
+                deviceId: candidateDevice.deviceId
+              }),
+              buildCameraSwitchConstraints(presetId, {
+                deviceId: candidateDevice.deviceId,
+                relaxedResolution: true
+              })
+            ]
+          : [])
+      ];
+
+  let lastErrorName = '';
+  const tryConstraints = async (
+    constraints: MediaStreamConstraints,
+    allowSameDeviceIfFacingMatches = true
+  ): Promise<{ stream: MediaStream; track: MediaStreamTrack } | null> => {
+    try {
+      const stream = await md.getUserMedia(constraints);
+      stream.getAudioTracks().forEach((t) => t.stop());
+      const track = stream.getVideoTracks()[0];
+      if (!track) return null;
+
+      const settings = track.getSettings?.() || {};
+      const newDeviceId = settings.deviceId;
+      const resolvedFacing = resolveTrackFacingMode(track, targetFacing);
+
+      if (
+        !targetDeviceId &&
+        currentDeviceId &&
+        newDeviceId &&
+        newDeviceId === currentDeviceId &&
+        (!allowSameDeviceIfFacingMatches || resolvedFacing !== targetFacing)
+      ) {
+        track.stop();
+        return null;
+      }
+
+      return { stream, track };
+    } catch (err) {
+      lastErrorName = getErrorName(err);
+      return null;
+    }
+  };
+
+  for (const constraints of attemptList) {
+    const acquired = await tryConstraints(constraints, true);
+    if (acquired) {
+      const resolvedFacing = resolveTrackFacingMode(acquired.track, targetFacing);
+      const resolvedDeviceId =
+        acquired.track.getSettings?.().deviceId || candidateDevice?.deviceId;
+      return {
+        track: acquired.track,
+        stream: acquired.stream,
+        recoveryTrack: null,
+        recoveryStream: null,
+        resolvedFacing,
+        resolvedDeviceId,
+        releasedPreviousTrack: false,
+        errorCode: 'none'
+      };
+    }
+    if (lastErrorName === 'NotAllowedError' || lastErrorName === 'SecurityError') {
+      return {
+        track: null,
+        stream: null,
+        recoveryTrack: null,
+        recoveryStream: null,
+        resolvedFacing: previousFacing,
+        releasedPreviousTrack: false,
+        errorCode: 'permission-denied'
+      };
+    }
+  }
+
+  // If the device only exposes one camera and we aren't selecting a different explicit deviceId,
+  // avoid disrupting the active camera track.
+  if (!targetDeviceId && videoInputs.length === 1) {
+    return {
+      track: null,
+      stream: null,
+      recoveryTrack: null,
+      recoveryStream: null,
+      resolvedFacing: previousFacing,
+      releasedPreviousTrack: false,
+      errorCode: 'single-camera'
+    };
+  }
+
+  // Mobile hardware (iOS Safari / Android WebView) often requires releasing the active camera track
+  // before opening the opposite lens.
+  let releasedPreviousTrack = false;
+  if (onReleaseCurrentTrack) {
+    await onReleaseCurrentTrack();
+    releasedPreviousTrack = true;
+    await waitMs(releaseDelayMs);
+
+    const retryList: MediaStreamConstraints[] = [
+      ...attemptList,
+      ...(!targetDeviceId
+        ? [
+            buildCameraSwitchConstraints(presetId, {
+              facingMode: targetFacing,
+              exactFacing: false,
+              relaxedResolution: true
+            })
+          ]
+        : [])
+    ];
+
+    for (const constraints of retryList) {
+      const acquired = await tryConstraints(constraints, false);
+      if (acquired) {
+        const resolvedFacing = resolveTrackFacingMode(acquired.track, targetFacing);
+        const resolvedDeviceId =
+          acquired.track.getSettings?.().deviceId || candidateDevice?.deviceId;
+        return {
+          track: acquired.track,
+          stream: acquired.stream,
+          recoveryTrack: null,
+          recoveryStream: null,
+          resolvedFacing,
+          resolvedDeviceId,
+          releasedPreviousTrack: true,
+          errorCode: 'none'
+        };
+      }
+      if (lastErrorName === 'NotAllowedError' || lastErrorName === 'SecurityError') {
+        break;
+      }
+    }
+  }
+
+  // Attempt to restore the previous camera if we released it so the user is never left with black video
+  let recoveryStream: MediaStream | null = null;
+  let recoveryTrack: MediaStreamTrack | null = null;
+  if (releasedPreviousTrack) {
+    const recoveryConstraints = currentDeviceId
+      ? buildCameraSwitchConstraints(presetId, {
+          deviceId: currentDeviceId,
+          relaxedResolution: true
+        })
+      : buildCameraSwitchConstraints(presetId, {
+          facingMode: previousFacing,
+          exactFacing: false,
+          relaxedResolution: true
+        });
+    try {
+      const restored = await md.getUserMedia(recoveryConstraints);
+      restored.getAudioTracks().forEach((t) => t.stop());
+      const track = restored.getVideoTracks()[0];
+      if (track) {
+        recoveryStream = restored;
+        recoveryTrack = track;
+      }
+    } catch {
+      // Recovery failed too
+    }
+  }
+
+  const errorCode =
+    lastErrorName === 'NotAllowedError' || lastErrorName === 'SecurityError'
+      ? 'permission-denied'
+      : lastErrorName === 'NotReadableError' || lastErrorName === 'AbortError'
+        ? 'device-busy'
+        : videoInputs.length <= 1
+          ? 'single-camera'
+          : 'unavailable';
+
+  return {
+    track: null,
+    stream: null,
+    recoveryTrack,
+    recoveryStream,
+    resolvedFacing: previousFacing,
+    releasedPreviousTrack,
+    errorCode
+  };
+}
+
 /**
  * Enhances an SDP offer/answer string to prioritize Studio-grade Opus stereo audio
  * with FEC (forward error correction) and raise video target bandwidth.

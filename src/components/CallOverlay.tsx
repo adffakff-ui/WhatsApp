@@ -15,6 +15,7 @@ import {
   Sparkles,
   Square,
   SunMedium,
+  SwitchCamera,
   Video,
   VideoOff,
   Volume2,
@@ -43,14 +44,19 @@ import {
 } from '../lib/videoAutoExposure';
 import {
   acquireCallMediaStream,
+  acquireCameraVideoTrack,
   applySenderQualityPreset,
+  buildCameraSwitchConstraints,
   buildMediaConstraints,
   buildRtcConfiguration,
   CALL_QUALITY_PRESETS,
   enhanceSdpMediaQuality,
   extractTelemetryFromRtcStats,
+  findVideoSender,
   prioritizeOpusAudioCodec,
-  type CallTelemetryStats
+  resolveTrackFacingMode,
+  type CallTelemetryStats,
+  type CameraFacingMode
 } from '../lib/webrtcConfig';
 import {
   answerIncomingCallInFirestore,
@@ -117,8 +123,15 @@ export function CallOverlay({
   const [listeningBoost, setListeningBoost] = useState<ListeningBoostLevel>('clear');
   const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
   const [audioOutputs, setAudioOutputs] = useState<MediaDeviceInfo[]>([]);
+  const [videoInputs, setVideoInputs] = useState<MediaDeviceInfo[]>([]);
   const [selectedMicId, setSelectedMicId] = useState<string>('');
   const [selectedSpeakerId, setSelectedSpeakerId] = useState<string>('');
+  const [selectedCameraId, setSelectedCameraId] = useState<string>('');
+  const [isSwitchingCamera, setIsSwitchingCamera] = useState(false);
+  const [cameraSwitchNotice, setCameraSwitchNotice] = useState<{
+    text: string;
+    tone: 'info' | 'warn';
+  } | null>(null);
   const [sharedAudioClipName, setSharedAudioClipName] = useState<string | null>(null);
   const [audioTransferError, setAudioTransferError] = useState<string | null>(null);
   const [peerAudioState, setPeerAudioState] = useState<{
@@ -166,6 +179,9 @@ export function CallOverlay({
   const isVideoEnabledRef = useRef(activeCall.callType === 'video');
   const isSpeakerOnRef = useRef(true);
   const swapStreamsRef = useRef(false);
+  const facingModeRef = useRef<CameraFacingMode>('user');
+  const isSwitchingCameraRef = useRef(false);
+  const cameraNoticeTimerRef = useRef<number | null>(null);
   const startCalleeRef = useRef<(() => Promise<void>) | null>(null);
 
   useEffect(() => {
@@ -195,6 +211,22 @@ export function CallOverlay({
   useEffect(() => {
     swapStreamsRef.current = swapStreams;
   }, [swapStreams]);
+
+  useEffect(() => {
+    facingModeRef.current = facingMode;
+  }, [facingMode]);
+
+  const showCameraNotice = (text: string, tone: 'info' | 'warn' = 'info') => {
+    if (cameraNoticeTimerRef.current) {
+      window.clearTimeout(cameraNoticeTimerRef.current);
+      cameraNoticeTimerRef.current = null;
+    }
+    setCameraSwitchNotice({ text, tone });
+    cameraNoticeTimerRef.current = window.setTimeout(() => {
+      cameraNoticeTimerRef.current = null;
+      setCameraSwitchNotice(null);
+    }, 2600);
+  };
 
   const peerName =
     activeCall.direction === 'outgoing' ? activeCall.calleeName : activeCall.callerName;
@@ -228,6 +260,11 @@ export function CallOverlay({
       const devices = await navigator.mediaDevices.enumerateDevices();
       setAudioInputs(devices.filter((d) => d.kind === 'audioinput'));
       setAudioOutputs(devices.filter((d) => d.kind === 'audiooutput'));
+      setVideoInputs(devices.filter((d) => d.kind === 'videoinput'));
+      const activeCamId = localStreamRef.current?.getVideoTracks()[0]?.getSettings?.().deviceId;
+      if (activeCamId) {
+        setSelectedCameraId(activeCamId);
+      }
     } catch {
       // Ignore permission-restricted enumeration
     }
@@ -247,6 +284,10 @@ export function CallOverlay({
     navigator.mediaDevices?.addEventListener?.('devicechange', handleDeviceChange);
 
     return () => {
+      if (cameraNoticeTimerRef.current) {
+        window.clearTimeout(cameraNoticeTimerRef.current);
+        cameraNoticeTimerRef.current = null;
+      }
       navigator.mediaDevices?.removeEventListener?.('devicechange', handleDeviceChange);
       enhancer?.dispose();
       remoteEnhancerRef.current = null;
@@ -300,7 +341,7 @@ export function CallOverlay({
     }
   };
 
-  const attachVideoStreams = () => {
+  const attachVideoStreams = (forceRefreshLocal = false) => {
     const mainEl = remoteVideoRef.current;
     const pipEl = localVideoRef.current;
     const localStream = localStreamRef.current;
@@ -313,7 +354,10 @@ export function CallOverlay({
     const pipTarget = isSwapped ? remoteStream : localVidLive ? localStream : null;
 
     if (mainEl) {
-      if (mainEl.srcObject !== mainTarget) {
+      if (mainEl.srcObject !== mainTarget || (forceRefreshLocal && isSwapped)) {
+        if (forceRefreshLocal && isSwapped) {
+          mainEl.srcObject = null;
+        }
         mainEl.srcObject = mainTarget;
       }
       if (mainTarget) {
@@ -322,7 +366,10 @@ export function CallOverlay({
     }
 
     if (pipEl) {
-      if (pipEl.srcObject !== pipTarget) {
+      if (pipEl.srcObject !== pipTarget || (forceRefreshLocal && !isSwapped)) {
+        if (forceRefreshLocal && !isSwapped) {
+          pipEl.srcObject = null;
+        }
         pipEl.srcObject = pipTarget;
       }
       if (pipTarget) {
@@ -748,6 +795,16 @@ export function CallOverlay({
       if (acquired.stream) {
         localStreamRef.current = acquired.stream;
         rawMicTrackRef.current = acquired.stream.getAudioTracks()[0] || null;
+        const initialVideoTrack = acquired.stream.getVideoTracks()[0];
+        if (initialVideoTrack) {
+          const initialFacing = resolveTrackFacingMode(initialVideoTrack, facingModeRef.current);
+          facingModeRef.current = initialFacing;
+          setFacingMode(initialFacing);
+          const initialCamId = initialVideoTrack.getSettings?.().deviceId;
+          if (initialCamId) {
+            setSelectedCameraId(initialCamId);
+          }
+        }
         void refreshAudioDevices();
         const localHasVid = activeCall.callType === 'video' && acquired.hasVideo;
         hasLocalVideoRef.current = localHasVid;
@@ -1208,7 +1265,9 @@ export function CallOverlay({
     isVideoEnabledRef.current = next;
     setIsVideoEnabled(next);
 
-    const existingTracks = localStreamRef.current?.getVideoTracks() || [];
+    const existingTracks = (localStreamRef.current?.getVideoTracks() || []).filter(
+      (t) => t.readyState === 'live'
+    );
     if (existingTracks.length > 0) {
       existingTracks.forEach((t) => {
         t.enabled = next;
@@ -1219,24 +1278,47 @@ export function CallOverlay({
 
     if (next && navigator.mediaDevices?.getUserMedia && activeCall.callType === 'video') {
       try {
-        const camStream = await navigator.mediaDevices.getUserMedia(
-          buildMediaConstraints('video', qualityPreset, facingMode)
-        );
-        const camTrack = camStream.getVideoTracks()[0];
+        let camStream: MediaStream;
+        try {
+          camStream = await navigator.mediaDevices.getUserMedia(
+            buildCameraSwitchConstraints(qualityPreset, {
+              facingMode: facingModeRef.current,
+              deviceId: selectedCameraId || undefined
+            })
+          );
+        } catch {
+          camStream = await navigator.mediaDevices.getUserMedia(
+            buildCameraSwitchConstraints(qualityPreset, {
+              facingMode: facingModeRef.current,
+              relaxedResolution: true
+            })
+          );
+        }
         camStream.getAudioTracks().forEach((t) => t.stop());
+        const camTrack = camStream.getVideoTracks()[0];
         if (camTrack) {
           if (!localStreamRef.current) {
             localStreamRef.current = new MediaStream();
           }
+          localStreamRef.current.getVideoTracks().forEach((t) => {
+            t.stop();
+            localStreamRef.current?.removeTrack(t);
+          });
           localStreamRef.current.addTrack(camTrack);
-          const videoSender = pcRef.current
-            ?.getSenders()
-            .find((s) => s.track?.kind === 'video');
+
+          const videoSender = findVideoSender(pcRef.current);
           const videoTransceiver = pcRef.current
             ?.getTransceivers()
-            .find((tr) => tr.receiver.track?.kind === 'video');
+            .find((tr) => tr.receiver.track?.kind === 'video' || tr.sender === videoSender);
           if (videoSender) {
             await videoSender.replaceTrack(camTrack);
+            if (videoTransceiver) {
+              try {
+                videoTransceiver.direction = 'sendrecv';
+              } catch {
+                // ignore
+              }
+            }
           } else if (videoTransceiver) {
             await videoTransceiver.sender.replaceTrack(camTrack);
             try {
@@ -1247,45 +1329,177 @@ export function CallOverlay({
           } else if (pcRef.current) {
             pcRef.current.addTrack(camTrack, localStreamRef.current);
           }
+
+          if (pcRef.current) {
+            await applySenderQualityPreset(pcRef.current, qualityPreset);
+          }
+          const resolvedFacing = resolveTrackFacingMode(camTrack, facingModeRef.current);
+          facingModeRef.current = resolvedFacing;
+          setFacingMode(resolvedFacing);
+          const devId = camTrack.getSettings?.().deviceId;
+          if (devId) setSelectedCameraId(devId);
           hasLocalVideoRef.current = true;
           setHasLocalVideo(true);
           setStreamTick((t) => t + 1);
-          attachVideoStreams();
+          attachVideoStreams(true);
+          void refreshAudioDevices();
         }
       } catch {
         isVideoEnabledRef.current = false;
         setIsVideoEnabled(false);
+        showCameraNotice('تعذر فتح الكاميرا — تأكد من منح الصلاحية.', 'warn');
       }
     }
   };
 
-  const handleSwitchCamera = async () => {
-    const nextFacing = facingMode === 'user' ? 'environment' : 'user';
-    setFacingMode(nextFacing);
-    if (!navigator.mediaDevices?.getUserMedia || activeCall.callType !== 'video') return;
-    try {
-      const nextStream = await navigator.mediaDevices.getUserMedia(
-        buildMediaConstraints('video', qualityPreset, nextFacing)
+  const replaceLocalCameraTrack = async (nextTrack: MediaStreamTrack) => {
+    if (!localStreamRef.current) {
+      localStreamRef.current = new MediaStream();
+    }
+    localStreamRef.current.getVideoTracks().forEach((t) => {
+      if (t !== nextTrack) {
+        t.stop();
+        localStreamRef.current?.removeTrack(t);
+      }
+    });
+    nextTrack.enabled = isVideoEnabledRef.current;
+    if (!localStreamRef.current.getVideoTracks().includes(nextTrack)) {
+      localStreamRef.current.addTrack(nextTrack);
+    }
+
+    const sender = findVideoSender(pcRef.current);
+    if (sender) {
+      await sender.replaceTrack(nextTrack);
+      const tr = pcRef.current
+        ?.getTransceivers()
+        .find((t) => t.sender === sender || t.receiver.track?.kind === 'video');
+      if (tr && tr.direction === 'recvonly') {
+        try {
+          tr.direction = 'sendrecv';
+        } catch {
+          // ignore
+        }
+      }
+    } else if (pcRef.current) {
+      pcRef.current.addTrack(nextTrack, localStreamRef.current);
+    }
+    if (pcRef.current) {
+      await applySenderQualityPreset(pcRef.current, qualityPreset);
+    }
+  };
+
+  const handleSwitchCamera = async (explicitDeviceId?: string) => {
+    if (isSwitchingCameraRef.current) return;
+    if (activeCall.callType !== 'video' && !hasLocalVideoRef.current) return;
+
+    const previousFacing = facingModeRef.current;
+    const targetFacing: CameraFacingMode =
+      explicitDeviceId
+        ? (() => {
+            const dev = videoInputs.find((d) => d.deviceId === explicitDeviceId);
+            if (!dev) return previousFacing;
+            return /\b(front|user|facetime|selfie)\b|أمامي|أمامية/i.test(dev.label)
+              ? 'user'
+              : /\b(back|rear|environment|world)\b|خلفي|خلفية/i.test(dev.label)
+                ? 'environment'
+                : previousFacing;
+          })()
+        : previousFacing === 'user'
+          ? 'environment'
+          : 'user';
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      showCameraNotice('المتصفح الحالي لا يدعم تبديل الكاميرا.', 'warn');
+      return;
+    }
+
+    // If camera is currently paused/off, update preferred lens cleanly without powering the sensor yet
+    if (!isVideoEnabledRef.current && !explicitDeviceId) {
+      facingModeRef.current = targetFacing;
+      setFacingMode(targetFacing);
+      showCameraNotice(
+        targetFacing === 'environment'
+          ? 'ستُفتح الكاميرا الخلفية عند تشغيل الفيديو'
+          : 'ستُفتح الكاميرا الأمامية عند تشغيل الفيديو',
+        'info'
       );
-      const newVideoTrack = nextStream.getVideoTracks()[0];
-      if (!newVideoTrack) return;
-      const oldVideoTrack = localStreamRef.current?.getVideoTracks()[0];
-      if (oldVideoTrack) {
-        oldVideoTrack.stop();
-        localStreamRef.current?.removeTrack(oldVideoTrack);
+      return;
+    }
+
+    isSwitchingCameraRef.current = true;
+    setIsSwitchingCamera(true);
+
+    try {
+      const activeTrack = localStreamRef.current?.getVideoTracks()[0];
+      const currentDeviceId = activeTrack?.getSettings?.().deviceId || selectedCameraId || undefined;
+
+      const result = await acquireCameraVideoTrack({
+        presetId: qualityPreset,
+        targetFacing,
+        previousFacing,
+        currentDeviceId,
+        targetDeviceId: explicitDeviceId,
+        videoInputs: videoInputs.map((d) => ({
+          deviceId: d.deviceId,
+          label: d.label,
+          kind: d.kind
+        })),
+        onReleaseCurrentTrack: () => {
+          localStreamRef.current?.getVideoTracks().forEach((t) => {
+            t.stop();
+            localStreamRef.current?.removeTrack(t);
+          });
+        }
+      });
+
+      if (result.track) {
+        await replaceLocalCameraTrack(result.track);
+        facingModeRef.current = result.resolvedFacing;
+        setFacingMode(result.resolvedFacing);
+        if (result.resolvedDeviceId) {
+          setSelectedCameraId(result.resolvedDeviceId);
+        }
+        hasLocalVideoRef.current = true;
+        setHasLocalVideo(true);
+        setIsScreenSharing(false);
+        setStreamTick((t) => t + 1);
+        attachVideoStreams(true);
+        void refreshAudioDevices();
+        showCameraNotice(
+          result.resolvedFacing === 'environment'
+            ? 'تم التبديل إلى الكاميرا الخلفية'
+            : 'تم التبديل إلى الكاميرا الأمامية',
+          'info'
+        );
+        return;
       }
-      localStreamRef.current?.addTrack(newVideoTrack);
-      const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === 'video');
-      if (sender) {
-        await sender.replaceTrack(newVideoTrack);
+
+      if (result.recoveryTrack) {
+        await replaceLocalCameraTrack(result.recoveryTrack);
+        const recoveredFacing = resolveTrackFacingMode(result.recoveryTrack, previousFacing);
+        facingModeRef.current = recoveredFacing;
+        setFacingMode(recoveredFacing);
+        const recDevId = result.recoveryTrack.getSettings?.().deviceId;
+        if (recDevId) setSelectedCameraId(recDevId);
+        setStreamTick((t) => t + 1);
+        attachVideoStreams(true);
+      } else {
+        facingModeRef.current = result.resolvedFacing;
+        setFacingMode(result.resolvedFacing);
       }
-      nextStream.getAudioTracks().forEach((t) => t.stop());
-      hasLocalVideoRef.current = true;
-      setHasLocalVideo(true);
-      setStreamTick((t) => t + 1);
-      attachVideoStreams();
-    } catch {
-      // Rear/front switch unavailable
+
+      if (result.errorCode === 'single-camera') {
+        showCameraNotice('تتوفر كاميرا واحدة فقط على هذا الجهاز', 'warn');
+      } else if (result.errorCode === 'permission-denied') {
+        showCameraNotice('تم رفض صلاحية الوصول إلى الكاميرا', 'warn');
+      } else if (result.errorCode === 'device-busy') {
+        showCameraNotice('الكاميرا مشغولة حالياً — أعد المحاولة', 'warn');
+      } else {
+        showCameraNotice('تعذر التبديل إلى الكاميرا المطلوبة', 'warn');
+      }
+    } finally {
+      isSwitchingCameraRef.current = false;
+      setIsSwitchingCamera(false);
     }
   };
 
@@ -1301,24 +1515,32 @@ export function CallOverlay({
   const toggleScreenShare = async () => {
     if (isScreenSharing) {
       setIsScreenSharing(false);
-      if (navigator.mediaDevices?.getUserMedia && activeCall.callType === 'video') {
+      if (
+        typeof navigator.mediaDevices?.getUserMedia === 'function' &&
+        activeCall.callType === 'video'
+      ) {
         try {
-          const camStream = await navigator.mediaDevices.getUserMedia(
-            buildMediaConstraints('video', qualityPreset, facingMode)
-          );
-          const camTrack = camStream.getVideoTracks()[0];
-          const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === 'video');
-          if (camTrack && sender) await sender.replaceTrack(camTrack);
-          camStream.getAudioTracks().forEach((t) => t.stop());
-          if (camTrack) {
-            localStreamRef.current?.getVideoTracks().forEach((t) => {
-              t.stop();
-              localStreamRef.current?.removeTrack(t);
-            });
-            localStreamRef.current?.addTrack(camTrack);
+          const result = await acquireCameraVideoTrack({
+            presetId: qualityPreset,
+            targetFacing: facingModeRef.current,
+            previousFacing: facingModeRef.current,
+            targetDeviceId: selectedCameraId || undefined,
+            onReleaseCurrentTrack: () => {
+              localStreamRef.current?.getVideoTracks().forEach((t) => {
+                t.stop();
+                localStreamRef.current?.removeTrack(t);
+              });
+            }
+          });
+          if (result.track) {
+            await replaceLocalCameraTrack(result.track);
+            facingModeRef.current = result.resolvedFacing;
+            setFacingMode(result.resolvedFacing);
+            hasLocalVideoRef.current = true;
+            setHasLocalVideo(true);
+            setStreamTick((t) => t + 1);
+            attachVideoStreams(true);
           }
-          setStreamTick((t) => t + 1);
-          attachVideoStreams();
         } catch {
           // ignore
         }
@@ -1331,7 +1553,7 @@ export function CallOverlay({
         const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
         const screenTrack = displayStream.getVideoTracks()[0];
         if (!screenTrack) return;
-        const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === 'video');
+        const sender = findVideoSender(pcRef.current);
         if (sender) {
           await sender.replaceTrack(screenTrack);
         }
@@ -1347,7 +1569,7 @@ export function CallOverlay({
         setHasLocalVideo(true);
         setIsScreenSharing(true);
         setStreamTick((t) => t + 1);
-        attachVideoStreams();
+        attachVideoStreams(true);
         screenTrack.onended = () => {
           void toggleScreenShare();
         };
@@ -1364,7 +1586,7 @@ export function CallOverlay({
   const isMainShowingVideo = hasRemoteVideo || isMainShowingLocal;
   const showPipVideo = localVideoActive || (swapStreams && hasRemoteVideo);
   const mirrorMainVideo = isMainShowingLocal && !isScreenSharing && facingMode === 'user';
-  const mirrorPipVideo = !swapStreams && !isScreenSharing && facingMode === 'user';
+  const mirrorPipVideo = !isMainShowingLocal && !isScreenSharing && facingMode === 'user';
   const remoteExposureStyle =
     isAutoExposureEnabled && hasRemoteVideo
       ? {
@@ -1642,6 +1864,30 @@ export function CallOverlay({
               </div>
             )}
 
+            {activeCall.callType === 'video' && videoInputs.length > 1 && (
+              <div className="space-y-1">
+                <label className="block text-[11px] text-white/75">الكاميرا المستخدمة</label>
+                <select
+                  aria-label="اختيار الكاميرا"
+                  value={selectedCameraId}
+                  disabled={isSwitchingCamera}
+                  onChange={(e) => {
+                    const nextId = e.target.value;
+                    if (nextId) {
+                      void handleSwitchCamera(nextId);
+                    }
+                  }}
+                  className="w-full rounded-lg bg-[#1F2C33] border border-white/15 px-2.5 py-1.5 text-xs text-white focus:outline-none disabled:opacity-60"
+                >
+                  {videoInputs.map((dev, idx) => (
+                    <option key={dev.deviceId || idx} value={dev.deviceId}>
+                      {dev.label || `كاميرا ${idx + 1}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             {audioTransferError && (
               <p className="text-[11px] text-amber-300 font-medium">{audioTransferError}</p>
             )}
@@ -1729,6 +1975,43 @@ export function CallOverlay({
               </div>
             )}
 
+            {/* Camera Switch Status Notice */}
+            {cameraSwitchNotice && (
+              <div
+                role="status"
+                aria-live="polite"
+                className={`absolute top-3 left-1/2 -translate-x-1/2 z-20 px-3.5 py-1.5 rounded-full text-xs font-semibold backdrop-blur-md shadow-lg border whitespace-nowrap ${
+                  cameraSwitchNotice.tone === 'warn'
+                    ? 'bg-amber-500/90 text-black border-amber-300/60'
+                    : 'bg-black/70 text-white border-white/15'
+                }`}
+              >
+                {cameraSwitchNotice.text}
+              </div>
+            )}
+
+            {/* Quick Corner Camera Flip Control on Video Stage (44px mobile touch target) */}
+            {localVideoActive && !isScreenSharing && (
+              <button
+                type="button"
+                disabled={isSwitchingCamera}
+                onClick={() => void handleSwitchCamera()}
+                aria-label={
+                  facingMode === 'user'
+                    ? 'تدوير إلى الكاميرا الخلفية'
+                    : 'تدوير إلى الكاميرا الأمامية'
+                }
+                title={facingMode === 'user' ? 'تبديل للخلفية' : 'تبديل للأمامية'}
+                className="w-11 h-11 rounded-full bg-black/55 hover:bg-black/75 border border-white/20 backdrop-blur-md text-white flex items-center justify-center absolute top-3 left-3 z-20 transition-all cursor-pointer disabled:opacity-60"
+              >
+                {isSwitchingCamera ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" aria-hidden="true" />
+                ) : (
+                  <SwitchCamera className="w-5 h-5" aria-hidden="true" />
+                )}
+              </button>
+            )}
+
             {/* Corner Local Self-View Picture-in-Picture (Tap to swap when both videos active) */}
             {showPipVideo && (
               <button
@@ -1749,6 +2032,11 @@ export function CallOverlay({
                   style={swapStreams && hasRemoteVideo ? remoteExposureStyle : undefined}
                   className={`w-full h-full object-cover ${mirrorPipVideo ? '-scale-x-100' : ''}`}
                 />
+                {!isMainShowingLocal && !isScreenSharing && (
+                  <span className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded-md bg-black/65 text-[10px] font-semibold text-white/90 pointer-events-none">
+                    {facingMode === 'environment' ? 'خلفية' : 'أمامية'}
+                  </span>
+                )}
               </button>
             )}
 
@@ -1956,14 +2244,32 @@ export function CallOverlay({
             {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
           </button>
 
-          {activeCall.callType === 'video' && (
+          {(activeCall.callType === 'video' || hasLocalVideo) && (
             <button
               type="button"
-              aria-label="تبديل الكاميرا الأمامية والخلفية"
+              disabled={isSwitchingCamera}
+              aria-label={
+                facingMode === 'user'
+                  ? 'التبديل إلى الكاميرا الخلفية'
+                  : 'التبديل إلى الكاميرا الأمامية'
+              }
+              title={
+                facingMode === 'user'
+                  ? 'الكاميرا الأمامية نشطة — اضغط للتبديل للخلفية'
+                  : 'الكاميرا الخلفية نشطة — اضغط للتبديل للأمامية'
+              }
               onClick={() => void handleSwitchCamera()}
-              className="w-12 h-12 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center transition-colors cursor-pointer"
+              className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors cursor-pointer disabled:opacity-60 ${
+                facingMode === 'environment'
+                  ? 'bg-[#00A884] text-white hover:brightness-95'
+                  : 'bg-white/15 hover:bg-white/25'
+              }`}
             >
-              <RefreshCw className="w-5 h-5" aria-hidden="true" />
+              {isSwitchingCamera ? (
+                <RefreshCw className="w-5 h-5 animate-spin" aria-hidden="true" />
+              ) : (
+                <SwitchCamera className="w-5 h-5" aria-hidden="true" />
+              )}
             </button>
           )}
 
