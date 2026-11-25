@@ -80,6 +80,21 @@ import {
   type StickerDefinition
 } from '../lib/stickers';
 import { getLottieAnimationById, isValidLottieData } from '../lib/lottieStickers';
+import {
+  blobToAudioDataUrl,
+  computeAudioLevelPercent,
+  downsampleWaveform,
+  formatVoiceDownloadName,
+  formatVoiceSizeLabel,
+  getNextVoicePlaybackRate,
+  isVoiceRecordingSupported,
+  mapMicrophoneErrorToArabic,
+  MAX_VOICE_DATA_URL_CHARS,
+  MAX_VOICE_RECORDING_SECONDS,
+  normalizeVoiceWaveform,
+  pickSupportedVoiceMimeType,
+  type VoicePlaybackRate
+} from '../lib/voiceRecorder';
 import type {
   ChatRoom,
   DecryptedMessage,
@@ -349,9 +364,28 @@ export function ChatWindow({
   const [showPollModal, setShowPollModal] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '', '']);
-  const [isRecording, setIsRecording] = useState(false);
+  const [recordingState, setRecordingState] = useState<
+    'idle' | 'requesting' | 'recording' | 'paused' | 'preview'
+  >('idle');
   const [recordSeconds, setRecordSeconds] = useState(0);
-  const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
+  const [liveAudioLevels, setLiveAudioLevels] = useState<number[]>(() => Array(20).fill(22));
+  const [voicePreview, setVoicePreview] = useState<{
+    dataUrl: string;
+    durationSec: number;
+    waveform: number[];
+    sizeLabel: string;
+  } | null>(null);
+  const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
+  const [previewProgress, setPreviewProgress] = useState(0);
+  const [voiceRecordError, setVoiceRecordError] = useState<string | null>(null);
+  const [isSendingVoice, setIsSendingVoice] = useState(false);
+  const [voicePlayback, setVoicePlayback] = useState<{
+    msgId: string;
+    currentTime: number;
+    duration: number;
+    isPlaying: boolean;
+    playbackRate: VoicePlaybackRate;
+  } | null>(null);
   const [showInChatSearch, setShowInChatSearch] = useState(false);
   const [inChatSearchQuery, setInChatSearchQuery] = useState('');
   const [inChatFilterType, setInChatFilterType] = useState<MessageSearchFilter>('all');
@@ -397,7 +431,92 @@ export function ChatWindow({
   const recordChunksRef = useRef<BlobPart[]>([]);
   const recordStreamRef = useRef<MediaStream | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const recordTimerRef = useRef<number | null>(null);
+  const levelTimerRef = useRef<number | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const capturedLevelsRef = useRef<number[]>([]);
+  const recordingStartTsRef = useRef<number>(0);
+  const accumulatedRecordMsRef = useRef<number>(0);
+  const recordingMimeRef = useRef<string>('audio/webm');
+  const maxDurationLockRef = useRef<boolean>(false);
+  const fallbackPlayTimerRef = useRef<number | null>(null);
+  const fallbackPlayIntervalRef = useRef<number | null>(null);
+
+  const stopLiveMetering = () => {
+    if (levelTimerRef.current !== null) {
+      window.clearInterval(levelTimerRef.current);
+      levelTimerRef.current = null;
+    }
+  };
+
+  const closeAudioContext = () => {
+    analyserRef.current = null;
+    if (audioContextRef.current) {
+      try {
+        void audioContextRef.current.close();
+      } catch {
+        // Ignore close error
+      }
+      audioContextRef.current = null;
+    }
+  };
+
+  const stopPreviewAudio = () => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    setIsPreviewPlaying(false);
+    setPreviewProgress(0);
+  };
+
+  const stopActiveVoicePlayback = () => {
+    if (fallbackPlayTimerRef.current !== null) {
+      window.clearTimeout(fallbackPlayTimerRef.current);
+      fallbackPlayTimerRef.current = null;
+    }
+    if (fallbackPlayIntervalRef.current !== null) {
+      window.clearInterval(fallbackPlayIntervalRef.current);
+      fallbackPlayIntervalRef.current = null;
+    }
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+      audioPlayerRef.current = null;
+    }
+    setVoicePlayback(null);
+  };
+
+  const releaseMicrophoneResources = () => {
+    if (recordTimerRef.current !== null) {
+      window.clearInterval(recordTimerRef.current);
+      recordTimerRef.current = null;
+    }
+    stopLiveMetering();
+    closeAudioContext();
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.ondataavailable = null;
+        mediaRecorderRef.current.onstop = null;
+        mediaRecorderRef.current.stop();
+      } catch {
+        // Ignore stop error on teardown
+      }
+    }
+    mediaRecorderRef.current = null;
+    recordChunksRef.current = [];
+    if (recordStreamRef.current) {
+      recordStreamRef.current.getTracks().forEach((t) => {
+        try {
+          t.stop();
+        } catch {
+          // Ignore track stop errors
+        }
+      });
+      recordStreamRef.current = null;
+    }
+  };
 
   const visibleMessages = chat
     ? filterExpiredDisappearingMessages(messages, chat.disappearingSeconds)
@@ -429,6 +548,15 @@ export function ChatWindow({
   }, [messages.length, chat?.id, highlightedMessageId]);
 
   useEffect(() => {
+    releaseMicrophoneResources();
+    stopPreviewAudio();
+    stopActiveVoicePlayback();
+    setRecordingState('idle');
+    setRecordSeconds(0);
+    setLiveAudioLevels(Array(20).fill(22));
+    setVoicePreview(null);
+    setVoiceRecordError(null);
+    setIsSendingVoice(false);
     setReplyTo(null);
     setEditingMsg(null);
     setText('');
@@ -448,6 +576,14 @@ export function ChatWindow({
     setSwipeDragState(null);
     swipeTrackerRef.current = null;
   }, [chat?.id]);
+
+  useEffect(() => {
+    return () => {
+      releaseMicrophoneResources();
+      stopPreviewAudio();
+      stopActiveVoicePlayback();
+    };
+  }, []);
 
   useEffect(() => {
     setActiveMatchIdx(inChatMatches.length > 0 ? inChatMatches.length - 1 : 0);
@@ -791,115 +927,377 @@ export function ChatWindow({
     }
   };
 
-  const handleStartRecording = async () => {
-    setIsRecording(true);
-    setRecordSeconds(0);
-    recordChunksRef.current = [];
-    recordTimerRef.current = window.setInterval(() => {
-      setRecordSeconds((s) => s + 1);
-    }, 1000);
-
-    try {
-      if (navigator.mediaDevices?.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        recordStreamRef.current = stream;
-        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-          ? 'audio/webm;codecs=opus'
-          : MediaRecorder.isTypeSupported('audio/webm')
-            ? 'audio/webm'
-            : undefined;
-        const recorder = mimeType
-          ? new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 24000 })
-          : new MediaRecorder(stream);
-        mediaRecorderRef.current = recorder;
-        recorder.ondataavailable = (ev) => {
-          if (ev.data && ev.data.size > 0) {
-            recordChunksRef.current.push(ev.data);
-          }
-        };
-        recorder.start(250);
-      }
-    } catch {
-      // Headless or mic-denied environment: timer still captures simulated voice note smoothly
-    }
+  const getElapsedRecordingSeconds = (): number => {
+    const activeDelta =
+      recordingStartTsRef.current > 0 ? Date.now() - recordingStartTsRef.current : 0;
+    const totalMs = accumulatedRecordMsRef.current + activeDelta;
+    return Math.max(1, Math.round(totalMs / 1000));
   };
 
-  const stopRecorderAndGetAudioUrl = (): Promise<string | undefined> => {
-    return new Promise((resolve) => {
+  const startLiveMeteringLoop = () => {
+    stopLiveMetering();
+    if (!analyserRef.current) return;
+    const analyser = analyserRef.current;
+    const dataArray = new Uint8Array(analyser.fftSize);
+    levelTimerRef.current = window.setInterval(() => {
+      try {
+        analyser.getByteTimeDomainData(dataArray);
+        const level = computeAudioLevelPercent(dataArray);
+        capturedLevelsRef.current.push(level);
+        setLiveAudioLevels((prev) => [...prev.slice(1), level]);
+      } catch {
+        // Ignore transient analyser read issues
+      }
+    }, 75);
+  };
+
+  const startElapsedClockLoop = () => {
+    if (recordTimerRef.current !== null) {
+      window.clearInterval(recordTimerRef.current);
+    }
+    recordTimerRef.current = window.setInterval(() => {
+      const totalMs =
+        accumulatedRecordMsRef.current +
+        (recordingStartTsRef.current > 0 ? Date.now() - recordingStartTsRef.current : 0);
+      const sec = Math.floor(totalMs / 1000);
+      setRecordSeconds(sec);
+      if (sec >= MAX_VOICE_RECORDING_SECONDS && !maxDurationLockRef.current) {
+        maxDurationLockRef.current = true;
+        void handleStopToPreviewRecording();
+      }
+    }, 180);
+  };
+
+  const stopRecorderAndBuildAudio = (): Promise<{
+    dataUrl: string;
+    durationSec: number;
+    waveform: number[];
+    sizeLabel: string;
+  }> => {
+    return new Promise((resolve, reject) => {
       const recorder = mediaRecorderRef.current;
       const stream = recordStreamRef.current;
-      if (!recorder || recorder.state === 'inactive') {
+      const durationSec = getElapsedRecordingSeconds();
+      const capturedWaveform = downsampleWaveform(capturedLevelsRef.current);
+
+      if (recordTimerRef.current !== null) {
+        window.clearInterval(recordTimerRef.current);
+        recordTimerRef.current = null;
+      }
+      stopLiveMetering();
+      closeAudioContext();
+
+      const finalizeChunks = async (chunks: BlobPart[], mime: string) => {
         stream?.getTracks().forEach((t) => t.stop());
         recordStreamRef.current = null;
         mediaRecorderRef.current = null;
-        resolve(undefined);
+        recordChunksRef.current = [];
+        capturedLevelsRef.current = [];
+        recordingStartTsRef.current = 0;
+        accumulatedRecordMsRef.current = 0;
+
+        if (chunks.length === 0) {
+          reject(new Error('لم يتم التقاط أي بيانات صوتية من الميكروفون.'));
+          return;
+        }
+        const blob = new Blob(chunks, { type: mime || 'audio/webm' });
+        if (blob.size < 64) {
+          reject(new Error('المقطع الصوتي قصير جداً. حاول التسجيل لثانية واحدة على الأقل.'));
+          return;
+        }
+        const dataUrl = await blobToAudioDataUrl(blob);
+        if (dataUrl.length > MAX_VOICE_DATA_URL_CHARS) {
+          reject(
+            new Error(
+              'حجم التسجيل الصوتي تجاوز الحد المسموح للتشفير السحابي. يُفضّل إرسال مقاطع حتى 90 ثانية.'
+            )
+          );
+          return;
+        }
+        resolve({
+          dataUrl,
+          durationSec,
+          waveform: capturedWaveform,
+          sizeLabel: formatVoiceSizeLabel(blob.size)
+        });
+      };
+
+      if (!recorder || recorder.state === 'inactive') {
+        const chunks = [...recordChunksRef.current];
+        const mime = recordingMimeRef.current;
+        void finalizeChunks(chunks, mime).catch(reject);
         return;
       }
 
       recorder.onstop = () => {
-        stream?.getTracks().forEach((t) => t.stop());
-        recordStreamRef.current = null;
-        mediaRecorderRef.current = null;
-        const chunks = recordChunksRef.current;
-        recordChunksRef.current = [];
-        if (chunks.length === 0) {
-          resolve(undefined);
-          return;
-        }
-        const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
-        if (blob.size > 28 * 1024) {
-          resolve(undefined);
-          return;
-        }
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const res = typeof reader.result === 'string' ? reader.result : undefined;
-          resolve(res && res.length <= 42000 ? res : undefined);
-        };
-        reader.onerror = () => resolve(undefined);
-        reader.readAsDataURL(blob);
+        const chunks = [...recordChunksRef.current];
+        const mime = recorder.mimeType || recordingMimeRef.current;
+        void finalizeChunks(chunks, mime).catch(reject);
       };
-      recorder.stop();
+      recorder.onerror = () => {
+        reject(new Error('حدث خطأ أثناء إنهاء التسجيل الصوتي.'));
+      };
+      try {
+        if (recorder.state === 'paused' && typeof recorder.resume === 'function') {
+          recorder.resume();
+        }
+        recorder.stop();
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error('تعذر إيقاف مسجل الصوت.'));
+      }
     });
+  };
+
+  const handleStartRecording = async () => {
+    if (recordingState !== 'idle' && recordingState !== 'preview') return;
+    setVoiceRecordError(null);
+    stopActiveVoicePlayback();
+    stopPreviewAudio();
+    setVoicePreview(null);
+
+    if (!isVoiceRecordingSupported()) {
+      setVoiceRecordError(
+        'المتصفح الحالي لا يدعم تسجيل الصوت عبر واجهة الميكروفون و MediaRecorder API.'
+      );
+      return;
+    }
+
+    setRecordingState('requesting');
+    recordChunksRef.current = [];
+    capturedLevelsRef.current = [];
+    accumulatedRecordMsRef.current = 0;
+    recordingStartTsRef.current = 0;
+    maxDurationLockRef.current = false;
+    setRecordSeconds(0);
+    setLiveAudioLevels(Array(20).fill(22));
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+      recordStreamRef.current = stream;
+
+      const preferredMime = pickSupportedVoiceMimeType();
+      let recorder: MediaRecorder;
+      try {
+        recorder = preferredMime
+          ? new MediaRecorder(stream, { mimeType: preferredMime, audioBitsPerSecond: 16000 })
+          : new MediaRecorder(stream, { audioBitsPerSecond: 16000 });
+      } catch {
+        recorder = preferredMime ? new MediaRecorder(stream, { mimeType: preferredMime }) : new MediaRecorder(stream);
+      }
+
+      recordingMimeRef.current = recorder.mimeType || preferredMime || 'audio/webm';
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) {
+          recordChunksRef.current.push(ev.data);
+        }
+      };
+
+      try {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        if (AudioCtx) {
+          const ctx = new AudioCtx();
+          const source = ctx.createMediaStreamSource(stream);
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 256;
+          analyser.smoothingTimeConstant = 0.65;
+          source.connect(analyser);
+          audioContextRef.current = ctx;
+          analyserRef.current = analyser;
+          startLiveMeteringLoop();
+        }
+      } catch {
+        // Analyser visualization is optional if WebAudio graph is restricted
+      }
+
+      recordingStartTsRef.current = Date.now();
+      recorder.start(250);
+      setRecordingState('recording');
+      startElapsedClockLoop();
+    } catch (err) {
+      releaseMicrophoneResources();
+      setRecordingState('idle');
+      setRecordSeconds(0);
+      setVoiceRecordError(mapMicrophoneErrorToArabic(err));
+    }
+  };
+
+  const handlePauseOrResumeRecording = () => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === 'inactive') return;
+
+    if (recordingState === 'recording') {
+      if (typeof recorder.pause === 'function') {
+        try {
+          recorder.pause();
+        } catch {
+          return;
+        }
+      }
+      if (recordingStartTsRef.current > 0) {
+        accumulatedRecordMsRef.current += Date.now() - recordingStartTsRef.current;
+        recordingStartTsRef.current = 0;
+      }
+      if (recordTimerRef.current !== null) {
+        window.clearInterval(recordTimerRef.current);
+        recordTimerRef.current = null;
+      }
+      stopLiveMetering();
+      setRecordingState('paused');
+    } else if (recordingState === 'paused') {
+      if (typeof recorder.resume === 'function') {
+        try {
+          recorder.resume();
+        } catch {
+          return;
+        }
+      }
+      recordingStartTsRef.current = Date.now();
+      setRecordingState('recording');
+      startLiveMeteringLoop();
+      startElapsedClockLoop();
+    }
+  };
+
+  const dispatchVoiceMessage = async (voiceData: {
+    dataUrl: string;
+    durationSec: number;
+    waveform: number[];
+  }) => {
+    const currentReply = replyTo;
+    setReplyTo(null);
+    await onSendMessage(
+      'voice',
+      {
+        text: `رسالة صوتية (${formatCallDuration(voiceData.durationSec)})`,
+        mediaUrl: voiceData.dataUrl,
+        voiceDurationSec: voiceData.durationSec,
+        voiceWaveform: voiceData.waveform,
+        ...(currentReply
+          ? {
+              replyToText: formatReplyPreviewText(currentReply),
+              replyToSender: currentReply.senderId === myUid ? 'أنت' : currentReply.senderName
+            }
+          : {})
+      },
+      currentReply?.id
+    );
+  };
+
+  const handleStopToPreviewRecording = async () => {
+    if (recordingState !== 'recording' && recordingState !== 'paused') return;
+    try {
+      const built = await stopRecorderAndBuildAudio();
+      setVoicePreview(built);
+      setRecordingState('preview');
+      setRecordSeconds(built.durationSec);
+    } catch (err) {
+      releaseMicrophoneResources();
+      setRecordingState('idle');
+      setRecordSeconds(0);
+      setVoiceRecordError(
+        err instanceof Error ? err.message : 'تعذر تحضير معاينة الرسالة الصوتية.'
+      );
+    }
   };
 
   const handleStopAndSendRecording = async () => {
-    if (recordTimerRef.current) {
-      window.clearInterval(recordTimerRef.current);
-      recordTimerRef.current = null;
+    if (isSendingVoice) return;
+    setIsSendingVoice(true);
+    try {
+      const built = await stopRecorderAndBuildAudio();
+      setRecordingState('idle');
+      setRecordSeconds(0);
+      setVoicePreview(null);
+      await dispatchVoiceMessage(built);
+    } catch (err) {
+      releaseMicrophoneResources();
+      setRecordingState('idle');
+      setRecordSeconds(0);
+      setVoiceRecordError(
+        err instanceof Error ? err.message : 'تعذر إرسال الرسالة الصوتية.'
+      );
+    } finally {
+      setIsSendingVoice(false);
     }
-    const dur = Math.max(2, recordSeconds);
-    const recordedAudioUrl = await stopRecorderAndGetAudioUrl();
-    setIsRecording(false);
+  };
+
+  const handleSendVoicePreview = async () => {
+    if (!voicePreview || isSendingVoice) return;
+    setIsSendingVoice(true);
+    stopPreviewAudio();
+    const pending = voicePreview;
+    setVoicePreview(null);
+    setRecordingState('idle');
     setRecordSeconds(0);
-    await onSendMessage('voice', {
-      text: `رسالة صوتية (${formatCallDuration(dur)})`,
-      ...(recordedAudioUrl ? { mediaUrl: recordedAudioUrl } : {}),
-      voiceDurationSec: dur,
-      voiceWaveform: [30, 55, 70, 40, 90, 65, 50, 80, 95, 60, 45, 75, 85, 40, 60, 35, 50, 70, 45, 30]
-    });
+    try {
+      await dispatchVoiceMessage(pending);
+    } catch (err) {
+      setVoiceRecordError(
+        err instanceof Error ? err.message : 'تعذر إرسال الرسالة الصوتية.'
+      );
+    } finally {
+      setIsSendingVoice(false);
+    }
   };
 
   const handleCancelRecording = () => {
-    if (recordTimerRef.current) {
-      window.clearInterval(recordTimerRef.current);
-      recordTimerRef.current = null;
-    }
-    recordChunksRef.current = [];
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.onstop = () => {
-        recordStreamRef.current?.getTracks().forEach((t) => t.stop());
-        recordStreamRef.current = null;
-        mediaRecorderRef.current = null;
-      };
-      mediaRecorderRef.current.stop();
-    } else {
-      recordStreamRef.current?.getTracks().forEach((t) => t.stop());
-      recordStreamRef.current = null;
-      mediaRecorderRef.current = null;
-    }
-    setIsRecording(false);
+    releaseMicrophoneResources();
+    stopPreviewAudio();
+    setVoicePreview(null);
+    setRecordingState('idle');
     setRecordSeconds(0);
+    setLiveAudioLevels(Array(20).fill(22));
+    setVoiceRecordError(null);
+  };
+
+  const togglePlayVoicePreview = () => {
+    if (!voicePreview) return;
+    if (isPreviewPlaying && previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      setIsPreviewPlaying(false);
+      return;
+    }
+    try {
+      if (previewAudioRef.current && previewAudioRef.current.src === voicePreview.dataUrl) {
+        void previewAudioRef.current.play();
+        setIsPreviewPlaying(true);
+        return;
+      }
+      const audio = new Audio(voicePreview.dataUrl);
+      previewAudioRef.current = audio;
+      audio.ontimeupdate = () => {
+        const dur =
+          Number.isFinite(audio.duration) && audio.duration > 0
+            ? audio.duration
+            : voicePreview.durationSec;
+        setPreviewProgress(dur > 0 ? Math.min(1, audio.currentTime / dur) : 0);
+      };
+      audio.onended = () => {
+        setIsPreviewPlaying(false);
+        setPreviewProgress(0);
+      };
+      audio.onerror = () => {
+        setIsPreviewPlaying(false);
+        setPreviewProgress(0);
+        setVoiceRecordError('تعذر تشغيل معاينة الصوت على هذا الجهاز.');
+      };
+      setIsPreviewPlaying(true);
+      void audio.play().catch(() => {
+        setIsPreviewPlaying(false);
+      });
+    } catch {
+      setIsPreviewPlaying(false);
+    }
   };
 
   const handleImagePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -980,56 +1378,139 @@ export function ChatWindow({
   };
 
   const togglePlayVoice = (msgId: string, durationSec: number, mediaUrl?: string) => {
-    if (audioPlayerRef.current) {
-      audioPlayerRef.current.pause();
-      audioPlayerRef.current = null;
-    }
-    if (playingVoiceId === msgId) {
-      setPlayingVoiceId(null);
+    stopPreviewAudio();
+    if (voicePlayback?.msgId === msgId && audioPlayerRef.current) {
+      if (voicePlayback.isPlaying) {
+        audioPlayerRef.current.pause();
+        setVoicePlayback((prev) => (prev ? { ...prev, isPlaying: false } : null));
+      } else {
+        void audioPlayerRef.current.play().catch(() => {});
+        setVoicePlayback((prev) => (prev ? { ...prev, isPlaying: true } : null));
+      }
       return;
     }
-    setPlayingVoiceId(msgId);
+
+    if (voicePlayback?.msgId === msgId && !audioPlayerRef.current) {
+      stopActiveVoicePlayback();
+      return;
+    }
+
+    stopActiveVoicePlayback();
+    const activeRate: VoicePlaybackRate = voicePlayback?.playbackRate || 1;
+
     if (mediaUrl && mediaUrl.startsWith('data:audio')) {
       try {
         const audio = new Audio(mediaUrl);
+        audio.playbackRate = activeRate;
         audioPlayerRef.current = audio;
+        setVoicePlayback({
+          msgId,
+          currentTime: 0,
+          duration: Math.max(1, durationSec),
+          isPlaying: true,
+          playbackRate: activeRate
+        });
+
+        audio.onloadedmetadata = () => {
+          if (Number.isFinite(audio.duration) && audio.duration > 0) {
+            setVoicePlayback((prev) =>
+              prev && prev.msgId === msgId ? { ...prev, duration: audio.duration } : prev
+            );
+          }
+        };
+        audio.ontimeupdate = () => {
+          const resolvedDur =
+            Number.isFinite(audio.duration) && audio.duration > 0
+              ? audio.duration
+              : Math.max(1, durationSec);
+          setVoicePlayback((prev) =>
+            prev && prev.msgId === msgId
+              ? { ...prev, currentTime: audio.currentTime, duration: resolvedDur }
+              : prev
+          );
+        };
         audio.onended = () => {
-          setPlayingVoiceId((curr) => (curr === msgId ? null : curr));
           audioPlayerRef.current = null;
+          setVoicePlayback((prev) => (prev && prev.msgId === msgId ? null : prev));
         };
         audio.onerror = () => {
-          setPlayingVoiceId((curr) => (curr === msgId ? null : curr));
           audioPlayerRef.current = null;
+          setVoicePlayback((prev) => (prev && prev.msgId === msgId ? null : prev));
         };
         void audio.play().catch(() => {
-          setPlayingVoiceId(null);
+          audioPlayerRef.current = null;
+          setVoicePlayback((prev) => (prev && prev.msgId === msgId ? null : prev));
         });
         return;
       } catch {
-        // Fallback below
+        // Fallback below for environments without Audio decode support
       }
     }
-    try {
-      const AudioCtx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (AudioCtx) {
-        const ctx = new AudioCtx();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.frequency.value = 520;
-        gain.gain.value = 0.03;
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.08);
+
+    const totalFallbackSec = Math.max(1, Math.min(durationSec, 10));
+    setVoicePlayback({
+      msgId,
+      currentTime: 0,
+      duration: totalFallbackSec,
+      isPlaying: true,
+      playbackRate: 1
+    });
+    const startedMs = Date.now();
+    fallbackPlayIntervalRef.current = window.setInterval(() => {
+      const elapsed = (Date.now() - startedMs) / 1000;
+      setVoicePlayback((prev) =>
+        prev && prev.msgId === msgId
+          ? { ...prev, currentTime: Math.min(totalFallbackSec, elapsed) }
+          : prev
+      );
+    }, 150);
+    fallbackPlayTimerRef.current = window.setTimeout(() => {
+      stopActiveVoicePlayback();
+    }, totalFallbackSec * 1000);
+  };
+
+  const seekVoiceMessage = (
+    msgId: string,
+    ratio: number,
+    durationSec: number,
+    mediaUrl?: string
+  ) => {
+    const clamped = Math.max(0, Math.min(1, ratio));
+    if (voicePlayback?.msgId !== msgId || !audioPlayerRef.current) {
+      if (mediaUrl && mediaUrl.startsWith('data:audio')) {
+        togglePlayVoice(msgId, durationSec, mediaUrl);
+        window.setTimeout(() => {
+          if (audioPlayerRef.current) {
+            const dur =
+              Number.isFinite(audioPlayerRef.current.duration) &&
+              audioPlayerRef.current.duration > 0
+                ? audioPlayerRef.current.duration
+                : durationSec;
+            audioPlayerRef.current.currentTime = clamped * dur;
+          }
+        }, 60);
       }
-    } catch {
-      // Ignore audio policy error in non-interactive headless browser
+      return;
     }
-    window.setTimeout(() => {
-      setPlayingVoiceId((curr) => (curr === msgId ? null : curr));
-    }, Math.min(durationSec, 8) * 1000);
+    const audio = audioPlayerRef.current;
+    const dur =
+      Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : durationSec;
+    const nextTime = clamped * dur;
+    audio.currentTime = nextTime;
+    setVoicePlayback((prev) =>
+      prev && prev.msgId === msgId ? { ...prev, currentTime: nextTime, duration: dur } : prev
+    );
+  };
+
+  const cycleVoicePlaybackRate = (msgId: string) => {
+    setVoicePlayback((prev) => {
+      if (!prev || prev.msgId !== msgId) return prev;
+      const nextRate = getNextVoicePlaybackRate(prev.playbackRate);
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.playbackRate = nextRate;
+      }
+      return { ...prev, playbackRate: nextRate };
+    });
   };
 
   const handleConfirmForward = async (targetChatId: string) => {
@@ -1870,44 +2351,124 @@ export function ChatWindow({
                       </p>
                     )}
                   </div>
-                ) : msg.type === 'voice' ? (
-                  <div className="flex items-center gap-3 min-w-[220px] py-1">
-                    <button
-                      type="button"
-                      aria-label={playingVoiceId === msg.id ? 'إيقاف الرسالة الصوتية' : 'تشغيل الرسالة الصوتية'}
-                      onClick={() =>
-                        togglePlayVoice(msg.id, msg.payload.voiceDurationSec || 10, msg.payload.mediaUrl)
-                      }
-                      className="w-9 h-9 rounded-full bg-[var(--wa-accent)] text-white flex items-center justify-center shrink-0 hover:brightness-95 transition-all cursor-pointer"
-                    >
-                      {playingVoiceId === msg.id ? (
-                        <Pause className="w-4 h-4" aria-hidden="true" />
-                      ) : (
-                        <Play className="w-4 h-4 mr-0.5" aria-hidden="true" />
-                      )}
-                    </button>
-                    <div className="flex-1 flex flex-col gap-1">
-                      <div className="flex items-center gap-[3px] h-6">
-                        {(msg.payload.voiceWaveform || [35, 65, 80, 45, 90, 50, 75, 40, 85, 55, 70, 35]).map(
-                          (h, idx) => (
-                            <span
-                              key={idx}
-                              style={{ height: `${Math.max(20, h)}%` }}
-                              className={`w-1 rounded-full transition-colors ${
-                                playingVoiceId === msg.id
-                                  ? 'bg-[var(--wa-accent)]'
-                                  : 'bg-[#8696A0]/60'
-                              }`}
-                            />
-                          )
+                ) : msg.type === 'voice' ? (() => {
+                  const isThisVoiceActive = voicePlayback?.msgId === msg.id;
+                  const isThisPlaying = Boolean(isThisVoiceActive && voicePlayback?.isPlaying);
+                  const baseDurationSec = Math.max(1, msg.payload.voiceDurationSec || 1);
+                  const totalDuration = isThisVoiceActive
+                    ? Math.max(1, voicePlayback?.duration || baseDurationSec)
+                    : baseDurationSec;
+                  const elapsedSec = isThisVoiceActive ? voicePlayback?.currentTime || 0 : 0;
+                  const progressRatio = isThisVoiceActive
+                    ? Math.max(0, Math.min(1, elapsedSec / totalDuration))
+                    : 0;
+                  const bars = normalizeVoiceWaveform(msg.payload.voiceWaveform);
+                  const hasRealAudio = Boolean(msg.payload.mediaUrl?.startsWith('data:audio'));
+
+                  return (
+                    <div className="flex items-center gap-2.5 min-w-[235px] sm:min-w-[265px] py-1">
+                      <button
+                        type="button"
+                        aria-label={isThisPlaying ? 'إيقاف الرسالة الصوتية' : 'تشغيل الرسالة الصوتية'}
+                        onClick={() =>
+                          togglePlayVoice(msg.id, baseDurationSec, msg.payload.mediaUrl)
+                        }
+                        className="w-11 h-11 rounded-full bg-[var(--wa-accent)] text-white flex items-center justify-center shrink-0 hover:brightness-95 active:scale-95 transition-all cursor-pointer shadow-xs"
+                      >
+                        {isThisPlaying ? (
+                          <Pause className="w-4 h-4 fill-current" aria-hidden="true" />
+                        ) : (
+                          <Play className="w-4 h-4 fill-current mr-0.5" aria-hidden="true" />
                         )}
+                      </button>
+                      <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+                        <div
+                          dir="ltr"
+                          role="slider"
+                          tabIndex={0}
+                          aria-label="شريط التقدم الصوتي"
+                          aria-valuemin={0}
+                          aria-valuemax={Math.round(totalDuration)}
+                          aria-valuenow={Math.round(elapsedSec)}
+                          onClick={(e) => {
+                            if (!hasRealAudio) return;
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const rel = Math.max(
+                              0,
+                              Math.min(1, (e.clientX - rect.left) / Math.max(1, rect.width))
+                            );
+                            seekVoiceMessage(msg.id, rel, baseDurationSec, msg.payload.mediaUrl);
+                          }}
+                          onKeyDown={(e) => {
+                            if (!hasRealAudio) return;
+                            if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+                              e.preventDefault();
+                              const stepSec = e.key === 'ArrowRight' ? 5 : -5;
+                              const nextRatio = Math.max(
+                                0,
+                                Math.min(1, (elapsedSec + stepSec) / Math.max(1, totalDuration))
+                              );
+                              seekVoiceMessage(msg.id, nextRatio, baseDurationSec, msg.payload.mediaUrl);
+                            }
+                          }}
+                          className={`flex items-center gap-[2.5px] h-7 select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--wa-accent)] rounded ${
+                            hasRealAudio ? 'cursor-pointer' : 'cursor-default'
+                          }`}
+                        >
+                          {bars.map((h, idx) => {
+                            const barRatio = (idx + 1) / bars.length;
+                            const isFilled = isThisVoiceActive && barRatio <= progressRatio;
+                            return (
+                              <span
+                                key={idx}
+                                style={{ height: `${Math.max(18, h)}%` }}
+                                className={`flex-1 min-w-[2.5px] max-w-[4px] rounded-full transition-colors duration-100 ${
+                                  isFilled
+                                    ? 'bg-[var(--wa-accent)]'
+                                    : isThisPlaying
+                                      ? 'bg-[var(--wa-accent)]/40'
+                                      : 'bg-[#8696A0]/55 dark:bg-[#8696A0]/45'
+                                }`}
+                              />
+                            );
+                          })}
+                        </div>
+                        <div className="flex items-center justify-between gap-2 text-[11px] font-mono-code tabular-nums text-[#54656F] dark:text-[#AEBAC1]">
+                          <span>
+                            {isThisVoiceActive
+                              ? `${formatCallDuration(elapsedSec)} / ${formatCallDuration(totalDuration)}`
+                              : formatCallDuration(baseDurationSec)}
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            {hasRealAudio && isThisVoiceActive && (
+                              <button
+                                type="button"
+                                aria-label="تغيير سرعة التشغيل"
+                                onClick={() => cycleVoicePlaybackRate(msg.id)}
+                                className="px-1.5 py-0.5 rounded bg-black/10 dark:bg-white/15 text-[10px] font-bold text-[#111B21] dark:text-[#E9EDEF] hover:brightness-95 cursor-pointer"
+                              >
+                                {voicePlayback?.playbackRate || 1}x
+                              </button>
+                            )}
+                            {hasRealAudio ? (
+                              <a
+                                href={msg.payload.mediaUrl}
+                                download={formatVoiceDownloadName(msg.createdAtMs, msg.payload.mediaUrl)}
+                                aria-label="تنزيل الرسالة الصوتية"
+                                title="تنزيل الرسالة الصوتية"
+                                className="p-1 rounded-full hover:bg-black/10 dark:hover:bg-white/10 text-[#54656F] dark:text-[#AEBAC1]"
+                              >
+                                <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                              </a>
+                            ) : (
+                              <span className="font-sans text-[10px] opacity-75">صوت قديم</span>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                      <span className="text-[11px] font-mono-code text-[#54656F] dark:text-[#AEBAC1]">
-                        {formatCallDuration(msg.payload.voiceDurationSec || 8)}
-                      </span>
                     </div>
-                  </div>
-                ) : msg.type === 'file' ? (
+                  );
+                })() : msg.type === 'file' ? (
                   <div className="flex items-center gap-3 p-2.5 rounded-lg bg-black/5 dark:bg-black/20 min-w-[220px]">
                     <div className="w-10 h-10 rounded-lg bg-[var(--wa-accent-soft)] text-[var(--wa-accent-strong)] flex items-center justify-center shrink-0">
                       <FileText className="w-5 h-5" aria-hidden="true" />
@@ -2614,33 +3175,189 @@ export function ChatWindow({
           className="hidden"
         />
 
-        {isRecording ? (
-          <div className="flex items-center justify-between gap-3 bg-white dark:bg-[#2A3942] rounded-xl px-4 h-11">
-            <div className="flex items-center gap-2.5 text-red-500 text-sm font-medium">
-              <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
-              <span>جاري تسجيل رسالة صوتية...</span>
-              <span className="font-mono-code text-[#111B21] dark:text-[#E9EDEF]">
-                {formatCallDuration(recordSeconds)}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
+        {voiceRecordError && (
+          <div
+            role="alert"
+            className="mb-2 px-3 py-2 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 flex items-center justify-between gap-2 text-xs text-red-700 dark:text-red-300"
+          >
+            <span className="flex-1 min-w-0 leading-relaxed">{voiceRecordError}</span>
+            <div className="flex items-center gap-1.5 shrink-0">
               <button
                 type="button"
-                aria-label="إلغاء التسجيل"
-                onClick={handleCancelRecording}
-                className="px-3 py-1.5 rounded-lg text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 cursor-pointer"
+                onClick={() => void handleStartRecording()}
+                className="px-2.5 py-1 rounded-lg bg-white dark:bg-[#111B21] border border-red-200 dark:border-red-800 text-[11px] font-bold hover:brightness-95 cursor-pointer"
               >
-                إلغاء
+                إعادة المحاولة
               </button>
               <button
                 type="button"
-                aria-label="إرسال الرسالة الصوتية"
-                onClick={() => void handleStopAndSendRecording()}
-                className="w-9 h-9 rounded-full bg-[var(--wa-accent)] text-white flex items-center justify-center hover:brightness-95 cursor-pointer"
+                aria-label="إغلاق تنبيه الميكروفون"
+                onClick={() => setVoiceRecordError(null)}
+                className="p-1 rounded-full hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {recordingState === 'requesting' ? (
+          <div className="flex items-center justify-between gap-3 bg-white dark:bg-[#2A3942] rounded-xl px-3.5 min-h-[46px] shadow-xs">
+            <div className="flex items-center gap-2.5 text-xs sm:text-sm font-medium text-[#54656F] dark:text-[#E9EDEF]">
+              <Mic className="w-4 h-4 text-[var(--wa-accent)] animate-pulse shrink-0" aria-hidden="true" />
+              <span>جاري تهيئة الميكروفون...</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleCancelRecording}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 cursor-pointer"
+            >
+              إلغاء
+            </button>
+          </div>
+        ) : recordingState === 'recording' || recordingState === 'paused' ? (
+          <div className="flex items-center justify-between gap-2 bg-white dark:bg-[#2A3942] rounded-xl px-2.5 sm:px-3.5 min-h-[48px] shadow-xs">
+            <button
+              type="button"
+              aria-label="إلغاء وحذف التسجيل"
+              title="حذف التسجيل"
+              onClick={handleCancelRecording}
+              className="w-10 h-10 rounded-full flex items-center justify-center text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 shrink-0 cursor-pointer"
+            >
+              <Trash2 className="w-4.5 h-4.5" aria-hidden="true" />
+            </button>
+
+            <div className="flex-1 min-w-0 flex items-center gap-2.5">
+              <div className="flex items-center gap-1.5 shrink-0">
+                {recordingState === 'recording' ? (
+                  <span
+                    aria-hidden="true"
+                    className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0"
+                  />
+                ) : (
+                  <Pause className="w-3.5 h-3.5 text-amber-500 shrink-0" aria-hidden="true" />
+                )}
+                <span className="font-mono-code tabular-nums text-xs sm:text-sm font-bold text-[#111B21] dark:text-[#E9EDEF]">
+                  {formatCallDuration(recordSeconds)}
+                </span>
+                {recordSeconds >= MAX_VOICE_RECORDING_SECONDS - 10 && (
+                  <span className="text-[10px] font-mono-code text-amber-600 dark:text-amber-400 hidden sm:inline">
+                    / {formatCallDuration(MAX_VOICE_RECORDING_SECONDS)}
+                  </span>
+                )}
+              </div>
+
+              <div
+                dir="ltr"
+                aria-hidden="true"
+                className="flex-1 min-w-0 flex items-center gap-[2px] h-7 overflow-hidden"
+              >
+                {liveAudioLevels.map((lvl, idx) => (
+                  <span
+                    key={idx}
+                    style={{ height: `${Math.max(18, Math.min(96, lvl))}%` }}
+                    className={`flex-1 min-w-[2px] max-w-[4px] rounded-full transition-all duration-75 ${
+                      recordingState === 'recording'
+                        ? 'bg-red-500/80 dark:bg-red-400/85'
+                        : 'bg-[#8696A0]/50'
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                aria-label={recordingState === 'recording' ? 'إيقاف التسجيل مؤقتاً' : 'استئناف التسجيل'}
+                title={recordingState === 'recording' ? 'إيقاف مؤقت' : 'استئناف'}
+                onClick={handlePauseOrResumeRecording}
+                className="w-10 h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#E9EDEF] hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
+              >
+                {recordingState === 'recording' ? (
+                  <Pause className="w-4.5 h-4.5" aria-hidden="true" />
+                ) : (
+                  <Mic className="w-4.5 h-4.5 text-red-500" aria-hidden="true" />
+                )}
+              </button>
+
+              <button
+                type="button"
+                aria-label="إيقاف ومعاينة قبل الإرسال"
+                title="معاينة قبل الإرسال"
+                onClick={() => void handleStopToPreviewRecording()}
+                className="w-10 h-10 rounded-full flex items-center justify-center bg-[#F0F2F5] dark:bg-[#182229] text-[#111B21] dark:text-[#E9EDEF] hover:brightness-95 cursor-pointer"
               >
                 <Square className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
               </button>
+
+              <button
+                type="button"
+                disabled={isSendingVoice}
+                aria-label="إرسال الرسالة الصوتية فوراً"
+                title="إرسال الصوت"
+                onClick={() => void handleStopAndSendRecording()}
+                className="w-10 h-10 rounded-full bg-[var(--wa-accent)] text-white flex items-center justify-center hover:brightness-95 disabled:opacity-60 cursor-pointer"
+              >
+                <SendHorizontal className="w-4.5 h-4.5 rotate-180" aria-hidden="true" />
+              </button>
             </div>
+          </div>
+        ) : recordingState === 'preview' && voicePreview ? (
+          <div className="flex items-center justify-between gap-2 bg-white dark:bg-[#2A3942] rounded-xl px-2.5 sm:px-3.5 min-h-[48px] shadow-xs">
+            <button
+              type="button"
+              aria-label="حذف المقطع الصوتي"
+              title="حذف"
+              onClick={handleCancelRecording}
+              className="w-10 h-10 rounded-full flex items-center justify-center text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 shrink-0 cursor-pointer"
+            >
+              <Trash2 className="w-4.5 h-4.5" aria-hidden="true" />
+            </button>
+
+            <button
+              type="button"
+              aria-label={isPreviewPlaying ? 'إيقاف المعاينة' : 'تشغيل المعاينة'}
+              onClick={togglePlayVoicePreview}
+              className="w-10 h-10 rounded-full bg-[#F0F2F5] dark:bg-[#182229] text-[var(--wa-accent-strong)] flex items-center justify-center shrink-0 hover:brightness-95 cursor-pointer"
+            >
+              {isPreviewPlaying ? (
+                <Pause className="w-4 h-4 fill-current" aria-hidden="true" />
+              ) : (
+                <Play className="w-4 h-4 fill-current mr-0.5" aria-hidden="true" />
+              )}
+            </button>
+
+            <div className="flex-1 min-w-0 flex items-center gap-2.5">
+              <div dir="ltr" className="flex-1 min-w-0 flex items-center gap-[2px] h-7">
+                {voicePreview.waveform.map((h, idx) => {
+                  const ratio = (idx + 1) / voicePreview.waveform.length;
+                  const played = isPreviewPlaying && ratio <= previewProgress;
+                  return (
+                    <span
+                      key={idx}
+                      style={{ height: `${Math.max(18, h)}%` }}
+                      className={`flex-1 min-w-[2px] max-w-[4px] rounded-full transition-colors ${
+                        played ? 'bg-[var(--wa-accent)]' : 'bg-[#8696A0]/55'
+                      }`}
+                    />
+                  );
+                })}
+              </div>
+              <span className="font-mono-code tabular-nums text-[11px] text-[#54656F] dark:text-[#AEBAC1] whitespace-nowrap shrink-0">
+                {formatCallDuration(voicePreview.durationSec)} · {voicePreview.sizeLabel}
+              </span>
+            </div>
+
+            <button
+              type="button"
+              disabled={isSendingVoice}
+              aria-label="إرسال الرسالة الصوتية"
+              onClick={() => void handleSendVoicePreview()}
+              className="w-10 h-10 rounded-full bg-[var(--wa-accent)] text-white flex items-center justify-center hover:brightness-95 disabled:opacity-60 shrink-0 cursor-pointer"
+            >
+              <SendHorizontal className="w-4.5 h-4.5 rotate-180" aria-hidden="true" />
+            </button>
           </div>
         ) : (
           <div className="flex items-end gap-1.5 sm:gap-2">
@@ -2760,8 +3477,9 @@ export function ChatWindow({
               <button
                 type="button"
                 aria-label="تسجيل رسالة صوتية"
+                title="تسجيل رسالة صوتية"
                 onClick={() => void handleStartRecording()}
-                className="w-10 h-10 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/10 shrink-0 cursor-pointer"
+                className="w-11 h-11 rounded-full flex items-center justify-center text-[#54656F] dark:text-[#AEBAC1] hover:bg-black/5 dark:hover:bg-white/10 shrink-0 cursor-pointer"
               >
                 <Mic className="w-5 h-5" aria-hidden="true" />
               </button>

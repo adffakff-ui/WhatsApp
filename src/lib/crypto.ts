@@ -771,7 +771,7 @@ export async function encryptPayload(plaintext: string, key: CryptoKey): Promise
 }
 
 export async function decryptPayload(ciphertext: string, iv: string, key: CryptoKey): Promise<string> {
-  if (!ciphertext || ciphertext.length > 100_000) throw new Error('النص المشفر غير صالح أو كبير جدًا.');
+  if (!ciphertext || ciphertext.length > 420_000) throw new Error('النص المشفر غير صالح أو كبير جدًا.');
   const cipherBytes = fromBase64(ciphertext);
   const ivBytes = fromBase64(iv);
   if (ivBytes.length !== 12 || cipherBytes.length < 16) throw new Error('غلاف AES-GCM غير صالح.');

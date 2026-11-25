@@ -35,8 +35,10 @@ import { AUTH_COUNTRIES, type AuthCountry } from '../lib/authCountries';
 import {
   compressAvatarFileToDataUrl,
   formatPhoneDisplay,
+  isEmbeddedAndroidWebView,
   mapFirebaseAuthErrorToArabic,
   normalizePhoneToE164,
+  sanitizeEmailInput,
   validateEmailAddress,
   validatePasswordStrength
 } from '../lib/authHelpers';
@@ -391,10 +393,13 @@ export function AuthScreen({
   const handleEmailFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     clearNotices();
-    const trimmedEmail = emailAddress.trim();
+    const trimmedEmail = sanitizeEmailInput(emailAddress);
+    if (trimmedEmail !== emailAddress) {
+      setEmailAddress(trimmedEmail);
+    }
 
     if (!validateEmailAddress(trimmedEmail)) {
-      setLocalError('يرجى إدخال بريد إلكتروني صحيح.');
+      setLocalError('يرجى إدخال بريد إلكتروني صحيح بدون مسافات.');
       return;
     }
 
@@ -1074,7 +1079,7 @@ export function AuthScreen({
 
                 {/* TAB 2: EMAIL & PASSWORD (LOGIN / REGISTER / RESET) */}
                 {methodTab === 'email' && (
-                  <form onSubmit={(e) => void handleEmailFormSubmit(e)} className="space-y-4">
+                  <form noValidate onSubmit={(e) => void handleEmailFormSubmit(e)} className="space-y-4">
                     <div className="flex flex-wrap items-center gap-2">
                       {[
                         { id: 'login' as EmailSubMode, label: 'تسجيل الدخول' },
@@ -1130,9 +1135,17 @@ export function AuthScreen({
                         id="auth-email-input"
                         type="email"
                         dir="ltr"
+                        inputMode="email"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        autoComplete="email"
+                        spellCheck={false}
                         required
                         value={emailAddress}
-                        onChange={(e) => setEmailAddress(e.target.value)}
+                        onChange={(e) => {
+                          clearNotices();
+                          setEmailAddress(sanitizeEmailInput(e.target.value));
+                        }}
                         placeholder="name@example.com"
                         className="w-full min-h-[46px] px-4 rounded-xl bg-[#F7F8FA] dark:bg-[#202C33] border border-[#E9EDEF] dark:border-[#2A3942] text-sm text-[#111B21] dark:text-[#E9EDEF] focus:outline-none focus:ring-2 focus:ring-[var(--wa-accent)]"
                       />
@@ -1270,6 +1283,12 @@ export function AuthScreen({
                         </ol>
                       </div>
                     </div>
+
+                    {isEmbeddedAndroidWebView() && (
+                      <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 text-xs text-amber-800 dark:text-amber-200 leading-relaxed">
+                        تنبيه: داخل تطبيق Android المثبّت، تمنع سياسة Google فتح نافذة Google OAuth في WebView المدمج. يُنصح بتسجيل الدخول عبر <strong>البريد الإلكتروني</strong> أو فتح التطبيق من متصفح Chrome.
+                      </div>
+                    )}
 
                     <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
                       <button

@@ -123,7 +123,7 @@
         "senderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "senderName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "type": { "type": "string", "enum": ["text", "image", "voice", "file", "poll", "system"] },
-        "ciphertext": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "ciphertext": { "type": "string", "minLength": 1, "maxLength": 393216 },
         "iv": { "type": "string", "minLength": 8, "maxLength": 64 },
         "algorithm": { "type": "string", "enum": ["AES-GCM-256"] },
         "senderPublicKeyJwk": { "type": "string", "minLength": 0, "maxLength": 1024 },

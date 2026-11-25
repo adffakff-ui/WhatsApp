@@ -219,7 +219,7 @@ service cloud.firestore {
         && isValidId(data.senderId)
         && data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80
         && data.type in ['text', 'image', 'voice', 'file', 'poll', 'system']
-        && data.ciphertext is string && data.ciphertext.size() >= 1 && data.ciphertext.size() <= 65536
+        && data.ciphertext is string && data.ciphertext.size() >= 1 && data.ciphertext.size() <= 393216
         && data.iv is string && data.iv.size() >= 8 && data.iv.size() <= 64
         && data.algorithm == 'AES-GCM-256'
         && (!('senderPublicKeyJwk' in data) || (data.senderPublicKeyJwk is string && data.senderPublicKeyJwk.size() <= 1024))

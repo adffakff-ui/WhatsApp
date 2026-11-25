@@ -7,15 +7,17 @@
     <WebView
         android:id="@+id/webview"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        android:background="@color/wasil_surface" />
 
     <ProgressBar
         android:id="@+id/loading_progress"
         style="?android:attr/progressBarStyleHorizontal"
         android:layout_width="match_parent"
-        android:layout_height="3dp"
+        android:layout_height="4dp"
         android:indeterminate="false"
         android:max="100"
+        android:progress="15"
         android:progressTint="@color/wasil_primary"
-        android:visibility="gone" />
+        android:visibility="visible" />
 </FrameLayout>

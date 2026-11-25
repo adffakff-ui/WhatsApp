@@ -22,7 +22,7 @@ import type { DecryptedMessage, MessagePayload, MessageType } from '../types/cha
 import { validatePublicKeyJwk } from '../types/publicKey';
 
 const GROUP_ENVELOPE_IV_MARKER = 'group-v2';
-const MAX_STORED_CIPHERTEXT_LENGTH = 60_000;
+const MAX_STORED_CIPHERTEXT_LENGTH = 393_216;
 const MAX_GROUP_MEMBERS = 50;
 const PRIVATE_IDENTITY_STORAGE_KEY = 'wasil_identity_keys_v1';
 

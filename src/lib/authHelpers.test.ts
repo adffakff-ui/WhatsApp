@@ -6,6 +6,7 @@ import {
   mapFirebaseAuthErrorToArabic,
   normalizePhoneToE164,
   parseWasilBackupJson,
+  sanitizeEmailInput,
   validateEmailAddress,
   validatePasswordStrength
 } from './authHelpers';
@@ -37,7 +38,9 @@ test('filterAuthCountries searches in Arabic, English, and dial code', () => {
 });
 
 test('validateEmailAddress & validatePasswordStrength work accurately', () => {
+  assert.equal(sanitizeEmailInput(' mahmod77953962@gmail.com\u200F\u00A0 '), 'mahmod77953962@gmail.com');
   assert.equal(validateEmailAddress('omar@wasil.app'), true);
+  assert.equal(validateEmailAddress('mahmod77953962@gmail.com '), true);
   assert.equal(validateEmailAddress('invalid-email'), false);
 
   const weak = validatePasswordStrength('123');
@@ -57,6 +60,12 @@ test('mapFirebaseAuthErrorToArabic translates Firebase auth error codes clearly'
   );
   assert.ok(
     mapFirebaseAuthErrorToArabic({ code: 'auth/invalid-verification-code' }).includes('رمز التحقق')
+  );
+  assert.ok(
+    mapFirebaseAuthErrorToArabic({ code: 'auth/unauthorized-domain' }).includes('Authorized domains')
+  );
+  assert.ok(
+    mapFirebaseAuthErrorToArabic({ code: 'auth/invalid-action-code' }).includes('صلاحية رابط التحقق')
   );
 });
 

@@ -72,9 +72,27 @@ export function formatPhoneDisplay(dialCode: string, nationalDigits: string): st
   return `${dialCode} ${groups.join(' ')}`;
 }
 
+/**
+ * Strips whitespace, non-breaking spaces, and invisible Unicode bidi/zero-width marks
+ * that mobile Arabic/autocomplete keyboards frequently inject around email addresses.
+ */
+export function sanitizeEmailInput(rawEmail: string): string {
+  return rawEmail.replace(/[\s\u00A0\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g, '');
+}
+
 export function validateEmailAddress(email: string): boolean {
-  const cleaned = email.trim();
+  const cleaned = sanitizeEmailInput(email);
   return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(cleaned);
+}
+
+/**
+ * Detects embedded Android WebView (`wv` token in User-Agent) where Google OAuth popups
+ * are disallowed by Google policy and Firebase Auth handler popups cannot communicate back.
+ */
+export function isEmbeddedAndroidWebView(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return /\bAndroid\b/i.test(ua) && /\bwv\b/i.test(ua);
 }
 
 export interface PasswordStrengthResult {
@@ -149,6 +167,29 @@ export function mapFirebaseAuthErrorToArabic(error: unknown): string {
   }
   if (combined.includes('auth/invalid-phone-number') || combined.includes('auth/missing-phone-number')) {
     return 'رقم الهاتف غير صالح. تأكد من اختيار رمز الدولة الصحيح وإدخال الرقم كاملاً.';
+  }
+  if (combined.includes('auth/unauthorized-domain')) {
+    const currentHost =
+      typeof window !== 'undefined' && window.location?.hostname
+        ? window.location.hostname
+        : 'النطاق الحالي';
+    return `النطاق (${currentHost}) غير مضاف ضمن النطاقات المصرح بها (Authorized domains) في Firebase Authentication. يمكنك تسجيل الدخول بالبريد الإلكتروني مباشرة، أو إضافة هذا النطاق في لوحة تحكم Firebase لتفعيل Google و Drive.`;
+  }
+  if (
+    combined.includes('auth/invalid-action-code') ||
+    combined.includes('auth/expired-action-code') ||
+    combined.includes('requested action is invalid')
+  ) {
+    return 'انتهت صلاحية رابط التحقق أو أن الطلب غير صالح. أعد طلب رابط جديد أو استخدم تسجيل الدخول بالبريد الإلكتروني.';
+  }
+  if (combined.includes('auth/cancelled-popup-request')) {
+    return 'تم إلغاء نافذة المصادقة بسبب طلب تسجيل دخول آخر قيد التنفيذ.';
+  }
+  if (combined.includes('auth/web-storage-unsupported')) {
+    return 'المتصفح الحالي يعطّل التخزين المحلي المطلوب للمصادقة. فعّل ملفات تعريف الارتباط أو افتح التطبيق في Chrome.';
+  }
+  if (combined.includes('auth/user-disabled')) {
+    return 'تم تعطيل هذا الحساب من قبل مسؤول المشروع في Firebase.';
   }
   if (combined.includes('auth/operation-not-allowed')) {
     return 'طريقة الدخول هذه غير مفعّلة في إعدادات مشروع Firebase حالياً. يمكنك الدخول عبر Google أو البريد الإلكتروني.';

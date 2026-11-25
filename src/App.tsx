@@ -26,7 +26,12 @@ import {
 import { auth, googleProvider } from './lib/firebase';
 import { uploadBackupToGoogleDrive, restoreBackupFromGoogleDrive } from './services/googleDriveBackup';
 import { BUNDLED_ASSETS } from './data/assets';
-import { mapFirebaseAuthErrorToArabic, parseWasilBackupJson } from './lib/authHelpers';
+import {
+  isEmbeddedAndroidWebView,
+  mapFirebaseAuthErrorToArabic,
+  parseWasilBackupJson,
+  sanitizeEmailInput
+} from './lib/authHelpers';
 import { verifyBiometricCredential } from './lib/webauthn';
 import {
   archivePreviousIdentityKey,
@@ -429,6 +434,10 @@ export default function App() {
     try {
       let accessToken = localStorage.getItem('google_access_token');
       if (!accessToken) {
+        if (isEmbeddedAndroidWebView()) {
+          showToast('لا يدعم Android WebView نافذة Google OAuth المنبثقة. افتح التطبيق عبر Chrome لاستيراد جهات الاتصال.');
+          return;
+        }
         const result = await signInWithPopup(auth, googleProvider);
         const credential = GoogleAuthProvider.credentialFromResult(result);
         if (credential?.accessToken) {
@@ -472,7 +481,7 @@ export default function App() {
       setRawGoogleContacts(parsed);
       setShowGoogleContactsPicker(true);
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'تعذر استيراد جهات الاتصال.');
+      showToast(mapFirebaseAuthErrorToArabic(err));
     }
   };
 
@@ -1100,6 +1109,13 @@ export default function App() {
   }, []);
 
   const handleGoogleSignIn = async (): Promise<boolean> => {
+    if (isEmbeddedAndroidWebView()) {
+      const webViewMsg =
+        'لا يمكن إتمام تسجيل الدخول بحساب Google داخل نافذة WebView المدمجة وفق سياسة Google. يرجى التسجيل عبر البريد الإلكتروني أو فتح التطبيق في Chrome.';
+      setAuthError(webViewMsg);
+      showToast(webViewMsg);
+      return false;
+    }
     setIsSigningIn(true);
     setAuthError(null);
     holdEntryForProfileStep.current = false;
@@ -1109,7 +1125,9 @@ export default function App() {
       setIsEntered(true);
       return true;
     } catch (err) {
-      setAuthError(mapFirebaseAuthErrorToArabic(err));
+      const arabicErr = mapFirebaseAuthErrorToArabic(err);
+      setAuthError(arabicErr);
+      showToast(arabicErr);
       return false;
     } finally {
       setIsSigningIn(false);
@@ -1120,8 +1138,9 @@ export default function App() {
     setIsSigningIn(true);
     setAuthError(null);
     holdEntryForProfileStep.current = false;
+    const cleanEmail = sanitizeEmailInput(email);
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      await signInWithEmailAndPassword(auth, cleanEmail, password);
       localStorage.setItem(STORAGE_KEYS.ENTERED, 'true');
       setIsEntered(true);
       return true;
@@ -1142,14 +1161,15 @@ export default function App() {
     setIsSigningIn(true);
     setAuthError(null);
     holdEntryForProfileStep.current = deferEntryForProfileSetup;
+    const cleanEmail = sanitizeEmailInput(email);
     try {
-      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
       void updateProfile(cred.user, { displayName }).catch(() => {});
       setCurrentUser((prev) => ({
         ...prev,
         uid: cred.user.uid,
         displayName,
-        email
+        email: cleanEmail
       }));
       void sendEmailVerification(cred.user).catch(() => {});
       if (!deferEntryForProfileSetup) {
@@ -2964,6 +2984,10 @@ export default function App() {
     try {
       let accessToken = localStorage.getItem('google_access_token');
       if (!accessToken) {
+        if (isEmbeddedAndroidWebView()) {
+          showToast('ربط Google Drive غير مدعوم داخل WebView المدمج. استخدم النسخ الاحتياطي السحابي أو تصدير JSON، أو افتح التطبيق من Chrome.');
+          return;
+        }
         const result = await signInWithPopup(auth, googleProvider);
         const credential = GoogleAuthProvider.credentialFromResult(result);
         if (credential?.accessToken) {
@@ -2987,7 +3011,7 @@ export default function App() {
       await uploadBackupToGoogleDrive(backupPayload, accessToken);
       showToast('تم رفع النسخة الاحتياطية المشفرة بـ AES إلى Google Drive بنجاح');
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'فشل النسخ الاحتياطي إلى Google Drive');
+      showToast(mapFirebaseAuthErrorToArabic(err));
     }
   };
 
@@ -2995,6 +3019,10 @@ export default function App() {
     try {
       let accessToken = localStorage.getItem('google_access_token');
       if (!accessToken) {
+        if (isEmbeddedAndroidWebView()) {
+          showToast('استعادة Google Drive غير مدعومة داخل WebView المدمج. استخدم الاستعادة من السحابة أو ملف JSON، أو افتح التطبيق من Chrome.');
+          return;
+        }
         const result = await signInWithPopup(auth, googleProvider);
         const credential = GoogleAuthProvider.credentialFromResult(result);
         if (credential?.accessToken) {
@@ -3033,7 +3061,7 @@ export default function App() {
       }
       showToast('تمت استعادة النسخة الاحتياطية المشفرة من Google Drive بنجاح');
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'فشل الاستعادة من Google Drive');
+      showToast(mapFirebaseAuthErrorToArabic(err));
     }
   };
 
